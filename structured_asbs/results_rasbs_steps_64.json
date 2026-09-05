@@ -1,0 +1,35 @@
+{
+  "config": {
+    "betas": "2",
+    "sigma": 1.0,
+    "steps": 64,
+    "batch": 600,
+    "epochs": 1000,
+    "lr": 0.001,
+    "n_samples": 100000,
+    "seed": 0,
+    "verbose": false,
+    "ckpt_dir": "",
+    "tag": "rasbs",
+    "out": "results_rasbs_steps_64.json",
+    "check_retraction": false
+  },
+  "target_min": 3.0,
+  "target_max": 8.0,
+  "spec_H": [
+    0.9999997615814209,
+    2.000000238418579,
+    4.999999523162842,
+    8.000000953674316
+  ],
+  "commit": "bb71d1496468658f4ff1c9995773968fd12706a8",
+  "betas": {
+    "2.0": {
+      "E_mean": 4.756890296936035,
+      "E_std": 1.3371071815490723,
+      "constraint": 3.8218837516978965e-07,
+      "oracle_calls": 600000,
+      "wall_s": 100.68281722068787
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "config": {
+    "cmd": "exact",
+    "L": 4,
+    "J": 1.0,
+    "tau": 2.0,
+    "gamma": 10.0,
+    "n_samples": 200000,
+    "out": "results_ising_exact.json",
+    "steps_sweep": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ]
+  },
+  "rows": [
+    {
+      "tag": "exact-control steps=32",
+      "TV": 0.13609878654008944,
+      "mean_energy": -7.608721731914245,
+      "exact_mean_energy": -9.245690641431985,
+      "energy_err": 1.6369689095177398,
+      "steps": 32,
+      "energy_hist_TV": 0.11441619067586946,
+      "mass_leak": 2.886579864025407e-15,
+      "sec": 0.12
+    },
+    {
+      "tag": "exact-control steps=64",
+      "TV": 0.06822619326560928,
+      "mean_energy": -8.441029276371143,
+      "exact_mean_energy": -9.245690641431985,
+      "energy_err": 0.8046613650608414,
+      "steps": 64,
+      "energy_hist_TV": 0.05528868095253418,
+      "mass_leak": 1.3322676295501878e-15,
+      "sec": 0.02
+    },
+    {
+      "tag": "exact-control steps=128",
+      "TV": 0.0338539994226902,
+      "mean_energy": -8.851051646350694,
+      "exact_mean_energy": -9.245690641431985,
+      "energy_err": 0.39463899508129074,
+      "steps": 128,
+      "energy_hist_TV": 0.026798098651596804,
+      "mass_leak": 4.218847493575595e-15,
+      "sec": 0.03
+    },
+    {
+      "tag": "exact-control steps=256",
+      "TV": 0.016813781296009623,
+      "mean_energy": -9.051046520778424,
+      "exact_mean_energy": -9.245690641431985,
+      "energy_err": 0.1946441206535603,
+      "steps": 256,
+      "energy_hist_TV": 0.0131271975209279,
+      "mass_leak": 7.438494264988549e-15,
+      "sec": 0.06
+    },
+    {
+      "tag": "exact-control steps=512",
+      "TV": 0.008370001414595426,
+      "mean_energy": -9.149182537087652,
+      "exact_mean_energy": -9.245690641431985,
+      "energy_err": 0.09650810434433232,
+      "steps": 512,
+      "energy_hist_TV": 0.006485297960526133,
+      "mass_leak": 4.440892098500626e-16,
+      "sec": 0.12
+    },
+    {
+      "tag": "exact-control steps=1024",
+      "TV": 0.0041743279625844135,
+      "mean_energy": -9.197669796385917,
+      "exact_mean_energy": -9.245690641431985,
+      "energy_err": 0.04802084504606796,
+      "steps": 1024,
+      "energy_hist_TV": 0.003221214895531782,
+      "mass_leak": 1.687538997430238e-14,
+      "sec": 0.23
+    }
+  ],
+  "violations": 0,
+  "empirical_TV": 0.051699400554745714,
+  "iid_TV_floor": 0.051065096839070165
+}

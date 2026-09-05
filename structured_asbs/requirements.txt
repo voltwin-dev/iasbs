@@ -1,0 +1,6 @@
+# Deliberately minimal, in the spirit of the R-ASBS repository: no Hydra,
+# no Lightning, no experiment framework.  Everything runs from plain scripts.
+torch>=2.5
+numpy>=2.0
+scipy>=1.11
+matplotlib>=3.8

@@ -1,0 +1,59 @@
+{
+  "config": {
+    "cmd": "exact",
+    "sigma": 1.4142135623730951,
+    "tau": 1.0,
+    "steps": 128,
+    "iters": 800,
+    "inner": 8,
+    "batch": 2048,
+    "mb": 4096,
+    "hidden": 256,
+    "lr": 0.001,
+    "seeds": 5,
+    "eval_every": 200,
+    "n_samples": 200000,
+    "mc": 4000,
+    "seed": 0,
+    "ema": 0.999,
+    "nbuf": 4,
+    "symmetrize": false,
+    "antithetic": false,
+    "ckpt_dir": "ckpt",
+    "tag": "sphere",
+    "out": "results_sphere_exact.json"
+  },
+  "sweep": {
+    "32": {
+      "north_mass": 0.498515,
+      "north_err": 0.001485000000000014,
+      "KS_z": 0.06552478516294924,
+      "constraint": 2.220446049250313e-16
+    },
+    "64": {
+      "north_mass": 0.499695,
+      "north_err": 0.0003049999999999997,
+      "KS_z": 0.03530063151583407,
+      "constraint": 2.220446049250313e-16
+    },
+    "128": {
+      "north_mass": 0.500165,
+      "north_err": 0.00016499999999997073,
+      "KS_z": 0.018448754848379406,
+      "constraint": 2.220446049250313e-16
+    },
+    "256": {
+      "north_mass": 0.49877,
+      "north_err": 0.0012300000000000089,
+      "KS_z": 0.01020657181041984,
+      "constraint": 2.220446049250313e-16
+    },
+    "512": {
+      "north_mass": 0.498605,
+      "north_err": 0.0013949999999999796,
+      "KS_z": 0.00634423466995937,
+      "constraint": 2.220446049250313e-16
+    }
+  },
+  "ks_floor": 0.001335241275447041
+}

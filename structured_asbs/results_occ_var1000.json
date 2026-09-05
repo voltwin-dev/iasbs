@@ -1,0 +1,65 @@
+{
+  "config": {
+    "cmd": "scalevar",
+    "m": 1000,
+    "N": 1000,
+    "d": 0.5,
+    "tau": 1.0,
+    "gamma": 4.0,
+    "steps": 128,
+    "iters": 1500,
+    "inner": 4,
+    "batch": 512,
+    "mb": 1024,
+    "buffer": 8,
+    "hidden": 256,
+    "lr": 0.001,
+    "loss": "bregman",
+    "estimator": "full",
+    "n_a": 1,
+    "eval_every": 100,
+    "n_samples": 20000,
+    "reps": 200,
+    "seed": 0,
+    "out": "results_occ_var1000.json"
+  },
+  "rows": [
+    {
+      "t": 0.25,
+      "uniform1": 23.233366714579127,
+      "uniform1_bias": 0.19103587256948293,
+      "occupancy1": 16.11286275940776,
+      "occupancy1_bias": 0.15255763501116015,
+      "occupancy4": 4.096038763948766,
+      "occupancy4_bias": 0.08170101787907964
+    },
+    {
+      "t": 0.5,
+      "uniform1": 16.76608809636638,
+      "uniform1_bias": 0.17219174677973492,
+      "occupancy1": 14.829105410803383,
+      "occupancy1_bias": 0.14913306238515792,
+      "occupancy4": 3.5733993410069314,
+      "occupancy4_bias": 0.07275588544723093
+    },
+    {
+      "t": 0.75,
+      "uniform1": 9.084651689019951,
+      "uniform1_bias": 0.11938275203368873,
+      "occupancy1": 7.91874067754692,
+      "occupancy1_bias": 0.10719335669861649,
+      "occupancy4": 1.4457619110914162,
+      "occupancy4_bias": 0.04713620980735879
+    },
+    {
+      "t": 0.9,
+      "uniform1": 2.5190208907521847,
+      "uniform1_bias": 0.06429731352367261,
+      "occupancy1": 1.6885663460357327,
+      "occupancy1_bias": 0.053039471247934594,
+      "occupancy4": 0.4653977807289794,
+      "occupancy4_bias": 0.02778717945440899
+    }
+  ],
+  "B3": true
+}

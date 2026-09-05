@@ -1,0 +1,14 @@
+# Trained controls: 227 MB of .pt, regenerable with `python <exp>.py train`.
+ckpt/
+*.pt
+
+# Run logs.
+*.log
+
+# Upstream R-ASBS clone, kept locally for reference only.
+# Frozen commit bb71d1496468658f4ff1c9995773968fd12706a8 of
+# github.com/mattiamosso/Hard-Constrained-Sampling-on-Embedded-Riemannian-Manifold-via-Adjoint-Schrodinger-Bridges
+rasbs_ref/
+
+__pycache__/
+*.pyc
