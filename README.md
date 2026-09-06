@@ -17,6 +17,7 @@ structured_asbs/          OUR method
   tests_math.py           standalone mathematical unit tests
   figures.py              all paper figures + the comparison table
   gallery.py              sample gallery -- the samples, not their metrics
+  remeasure.py            re-derives the Ising and sphere tables from ckpt/
   scripts/                the shell scripts that produced our json/ entries
   json/  ckpt/  fig/      artifacts (shared: the figures overlay both methods)
 
@@ -118,26 +119,119 @@ would not at a size where the reference is itself a sampler.
 | source `x_0` | fixed spin configuration (Dirac) |
 | reference | exact enumeration |
 | network | `SwapController`, hidden 512, **670,464** parameters |
-| integration steps | 128 |
-| iters × inner | 300 × 40 |
+| integration steps | 256 |
+| iters × inner | 3000 × 40 |
 | batch / minibatch | 2048 / 1024 |
 | lr | 3e-4 |
 | buffer | 8 |
+| loss | Poisson |
 | eval samples | 20,000 |
 | seeds | 1 |
 
 ### Results
 
+Everything in this section is recomputed from the saved checkpoints by
+`remeasure.py ising`. Two columns have to be kept apart, and earlier revisions
+of this file did not keep them apart:
+
+- the **exact control**, where the multiplier comes from enumeration rather
+  than from a network. This is not a sampler you could run at scale; it is the
+  ceiling that the learned controller is trying to reach, and it isolates
+  pure time-discretisation error.
+- the **learned controller**, which is the actual method.
+
+Because Ω can be enumerated, the law of the discretised controlled chain is
+propagated exactly rather than estimated from samples, so every divergence
+below is a closed-form number with no Monte-Carlo error in it at all.
+
+**Exact control, discretisation only.** Source `json/results_ising_exact.json`.
+
+| steps | TV vs π | E-hist TV | ⟨E⟩ | mass leak |
+|---:|---:|---:|---:|---:|
+| 32 | 0.13610 | 0.11442 | −7.6087 | 2.9e-15 |
+| 64 | 0.06823 | 0.05529 | −8.4410 | 1.3e-15 |
+| 128 | 0.03385 | 0.02680 | −8.8511 | 4.2e-15 |
+| 256 | 0.01681 | 0.01313 | −9.0510 | 7.4e-15 |
+| 512 | 0.00837 | 0.00649 | −9.1492 | 4.4e-16 |
+| 1024 | 0.00417 | 0.00322 | −9.1977 | 1.7e-14 |
+
+Exact ⟨E⟩ = −9.2457. TV halves every time the step count doubles — clean
+first-order convergence with no bias floor, which is the discrete analogue of
+what the Stiefel step ablation below shows on a manifold. Mass leak at 1e-14 is
+the statement that the jump chain never leaves Ω even numerically.
+
+**Learned controller.** Source `ckpt/ising_poisson256.pt` (256 steps, 3000
+iters, Poisson loss).
+
 | metric | exact | ours |
 |---|---:|---:|
-| TV vs exact law | 0 | **0.0517** (iid floor 0.0511) |
+| TV of the exact chain law vs π | 0 | **0.0416** |
+| KL(ours ‖ π) | 0 | **0.0056** |
+| KL(π ‖ ours) | 0 | **0.0055** |
+| Hellinger distance | 0 | **0.0372** |
+| χ²(ours ‖ π) | 0 | **0.0116** |
+| Rényi-2 divergence (nats) | 0 | **0.0115** |
+| importance-reweighting ESS fraction | 1 | **0.9885** |
+| max_x \|p(x)/π(x) − 1\| | 0 | **224.27** |
+| TV of the energy histogram | 0 | **0.0262** |
+| mean energy ⟨E⟩ | −9.2457 | **−8.9850** |
+| heat capacity Var(E)/τ² | 5.8843 | **6.0237** |
+| nearest-neighbour correlation ⟨sᵢsⱼ⟩ | 0.2889 | **0.2808** |
+| free energy −τ log Z | −22.6396 | (property of the target) |
+| TV of 20,000 drawn samples vs π | 0.1507 ± 0.0015 (iid floor) | **0.1627** |
 | constraint violations in 20,000 samples | 0 | **0** |
 
-The TV number sits essentially at the iid sampling floor: draw 20,000 genuinely
-exact samples and the empirical law is already 0.0511 away from the truth, so
-the residual is finite-sample error rather than a defect of the sampler. The
-combinatorial constraint is preserved exactly — zero violations across every
-run.
+Two of these rows deserve to be read carefully rather than skimmed.
+
+**The ESS fraction of 0.9885** is the honest summary: reweighting our samples
+onto the exact Gibbs law would cost about 1% of them. That is the number to
+quote if you want one number.
+
+**max |p/π − 1| = 224** is the number that looks alarming and is the reason it
+is printed. It is not a contradiction of the 1% figure — it is dominated by the
+rarest states in Ω, where π itself is ~1e-9, so a state that the controller
+over-weights by a factor of 200 still contributes ~1e-7 to the TV. The
+divergences that weight by mass (TV, KL, Hellinger, χ²) all agree that the bulk
+is close; the ratio statistic says the tails are not, and a sampler used for
+rare-event estimation would need to be judged on this column instead.
+
+The **empirical** TV of 0.1627 at 20,000 samples sits just above the 0.1507
+iid floor at that sample size: over a 12,870-state space, 20,000 draws cannot
+resolve the law any better than that regardless of how good the sampler is. The
+exact-chain-law TV of 0.0416 is the meaningful number, because it has no
+sampling noise in it. Note that a previous revision of this table reported
+"TV 0.0517 (iid floor 0.0511)" in the *ours* column: those are the exact
+control's 200,000-sample figures, not the learned controller's, and they are
+now shown in their own row above.
+
+**Loss and step-count ablation**, all measured the same way:
+
+| loss | steps | iters | TV | KL(ours ‖ π) | Hellinger | E-hist TV | ⟨E⟩ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| MSE | 128 | 1500 | 0.0509 | 0.0089 | 0.0468 | 0.0314 | −8.8851 |
+| Poisson | 128 | 1500 | 0.0496 | 0.0077 | 0.0437 | 0.0240 | −9.0545 |
+| Poisson | 256 | 3000 | **0.0416** | **0.0056** | **0.0372** | 0.0262 | −8.9850 |
+| exact | — | — | 0 | 0 | 0 | 0 | −9.2457 |
+
+The Poisson loss is the right one for a jump process — it is the negative
+log-likelihood of the observed jump counts, whereas the MSE loss treats a rate
+as if it were a mean — and it wins at matched budget, but only narrowly.
+
+**Learned vs exact log-multiplier**, compared at every one of the 12,870 states
+× 40 edges rather than on samples:
+
+| t | mean abs error | max abs error |
+|---:|---:|---:|
+| 0.000 | 0.0602 | 1.3681 |
+| 0.250 | 0.0276 | 0.4900 |
+| 0.500 | 0.0306 | 0.3095 |
+| 0.750 | 0.0478 | 0.4051 |
+| 0.996 | 0.1697 | 1.9224 |
+
+The error is largest at both ends, and much larger at t → 1. That is expected
+and is where the residual TV comes from: near the terminal time the exact
+multiplier develops the sharp state dependence that encodes the Gibbs weight,
+and that is the hardest part of the function to fit.
 
 `fig8_ising_configs` draws 50 raw 4×4 spin configurations from our sampler
 beside 50 drawn by exact enumeration; `fig2_discrete_correctness` carries the
@@ -156,6 +250,7 @@ metric panel.
 python fixed_ising.py verify         # gate A0
 python fixed_ising.py exact          # gate A0/A1/A2 with the exact control
 python fixed_ising.py train
+python remeasure.py ising            # every table in this section, from ckpt/
 ```
 
 ---
@@ -276,21 +371,84 @@ The R-ASBS column is quoted from their §4.1 text — "R–ASBS allocates 43.8% 
 its particles to the northern hemisphere" — not from a table, and not measured
 by us. We did not rerun their sphere sampler; see the limitation below.
 
-| metric | exact | R-ASBS (quoted, §4.1) | ours |
-|---|---:|---:|---:|
-| north mass | 0.500 | 0.438 (= 43.8%) | **0.4993 ± 0.0003** |
-| absolute north error | 0 | 0.062 | **0.0007 ± 0.0003** |
-| KS(x₃) | 0 | not reported | **0.0217 ± 0.0006** |
-| max norm residual | 0 | not reported | **2.2e-16** |
+All rows below are recomputed from the saved checkpoints by
+`remeasure.py sphere`. "Ours" is the antithetic variant, which is the one the
+repro command runs; the other two variants are in the ablation underneath. The
+iid column is the finite-sample floor, measured by drawing exact iid target
+samples of the same size and applying the identical estimator — anything at
+that level is sample noise, not sampler error.
 
-Five seeds. The norm residual is 2.2e-16 because the update is an exact
-geodesic step on S², not a projection: the constraint is preserved by
-construction rather than repaired after the fact.
+| metric | exact | R-ASBS (quoted, §4.1) | ours | iid floor at n = 200,000 |
+|---|---:|---:|---:|---:|
+| north mass | 0.5 | 0.438 (= 43.8%) | **0.5001 ± 0.0006** | 0.5002 ± 0.0008 |
+| absolute north error | 0 | 0.062 | **0.0006 ± 0.0003** | 0.0006 ± 0.0005 |
+| KS(x₃) | 0 | not reported | **0.0222 ± 0.0004** | 0.0018 ± 0.0004 |
+| Wasserstein-1 on x₃ | 0 | not reported | **0.01239 ± 0.00022** | 0.00118 ± 0.00073 |
+| KS(E) | 0 | not reported | **0.0434 ± 0.0004** | 0.0016 ± 0.0003 |
+| KS(azimuth) | 0 | not reported | **0.0026 ± 0.0010** | 0.0018 ± 0.0005 |
+| ⟨x₃²⟩ | 0.80771 | not reported | **0.78864 ± 0.00019** | 0.80778 ± 0.00033 |
+| ⟨x₃⁴⟩ | 0.68911 | not reported | **0.66303 ± 0.00021** | 0.68924 ± 0.00046 |
+| mean energy ⟨E⟩ | 1.15375 | not reported | **1.26816 ± 0.00112** | 1.15333 ± 0.00197 |
+| max norm residual | 0 | not reported | **2.2e-16** | — |
 
-`sphere.py` also carries an ablation of the symmetry handling — plain,
-antithetic and symmetrised variants — since the target is invariant under
-x₃ ↦ −x₃ and exploiting that exactly is cheaper than learning it.
-`fig4_sphere` plots the comparison.
+Five seeds; ± is the spread across them. The exact column is closed form: the
+z-marginal of π ∝ exp(6x₃²) is ∝ exp(6z²) on [−1, 1] with uniform azimuth, so
+⟨x₃²⟩, ⟨x₃⁴⟩ and ⟨E⟩ are one-dimensional integrals evaluated to machine
+precision.
+
+Reading these together says something the two headline numbers alone did not.
+**The symmetry is now exact** — north mass and azimuthal uniformity are both at
+the iid floor, so there is no residual pole preference and no residual
+azimuthal structure. **The radial profile is not** — KS(x₃) is 12× the floor,
+⟨x₃²⟩ is low by 0.019 and ⟨E⟩ is high by 0.114, all in the same direction: the
+sampler puts slightly too little mass at the poles. That is a discretisation
+bias, not a learning failure, and the step sweep below shows it decaying as the
+step count rises. Reporting only north mass would have hidden it entirely,
+which is exactly the failure mode this table exists to prevent.
+
+The norm residual is 2.2e-16 because the update is an exact geodesic step on
+S², not a projection: the constraint is preserved by construction rather than
+repaired after the fact. That figure is quoted from the metrics recorded at
+run time, since the checkpointed samples are stored in float32 and cannot
+resolve a float64 residual.
+
+**Exact control vs integration steps** — no learning at all, so this isolates
+the discretisation bias identified above:
+
+| steps | north mass | KS(x₃) | W1(x₃) | ⟨E⟩ |
+|---:|---:|---:|---:|---:|
+| 32 | 0.4985 | 0.0655 | 0.04373 | 1.54298 |
+| 64 | 0.4997 | 0.0353 | 0.02165 | 1.35101 |
+| 128 | 0.5002 | 0.0184 | 0.01048 | 1.24983 |
+| 256 | 0.4988 | 0.0102 | 0.00581 | 1.19964 |
+| 512 | 0.4986 | 0.0063 | 0.00409 | 1.17684 |
+| iid | 0.5001 | 0.0010 | 0.00031 | 1.15367 |
+
+Exact ⟨E⟩ = 1.15375. KS and W1 both halve per doubling of the step count and
+⟨E⟩ decreases monotonically toward the exact value with **no bias floor** — the
+same signature as the Ising step sweep, and the opposite of what the R-ASBS
+geometric surrogate does on Stiefel (see below). Our trained runs use 128
+steps, and their KS(x₃) of 0.0222 is close to the 0.0184 that the exact control
+achieves at the same step count: almost all of the residual is the integrator,
+not the network.
+
+**Symmetry handling.** The target is invariant under x₃ ↦ −x₃, and exploiting
+that exactly is cheaper than learning it.
+
+| variant | north mass | abs north error | KS(x₃) | W1(x₃) | ⟨E⟩ |
+|---|---:|---:|---:|---:|---:|
+| plain | 0.4969 ± 0.0275 | 0.0250 ± 0.0118 | 0.0382 ± 0.0080 | 0.04705 ± 0.01813 | 1.26793 ± 0.00234 |
+| antithetic | 0.5001 ± 0.0006 | 0.0006 ± 0.0003 | 0.0222 ± 0.0004 | 0.01239 ± 0.00022 | 1.26816 ± 0.00112 |
+| symmetrised | 0.5001 ± 0.0006 | 0.0006 ± 0.0002 | 0.0219 ± 0.0006 | 0.01229 ± 0.00020 | 1.26737 ± 0.00190 |
+| iid at n = 200,000 | 0.5002 ± 0.0008 | 0.0006 ± 0.0005 | 0.0018 ± 0.0004 | 0.00118 ± 0.00073 | 1.15333 ± 0.00197 |
+| exact | 0.5 | 0 | 0 | 0 | 1.15375 |
+
+The plain variant is not worse on average so much as *unreliable*: its per-seed
+north masses are 0.460, 0.474, 0.495, 0.528, 0.528, so the seed-to-seed spread
+(± 0.0275) is 45× the antithetic one and the mean of 0.4969 flatters it. Both
+antithetic and symmetrised fix this completely and are indistinguishable from
+each other; note that neither improves ⟨E⟩, because the pole imbalance and the
+radial bias are independent defects. `fig4_sphere` plots the comparison.
 
 **Figures.** `fig6_sphere_cloud` shows four S² clouds: the uncontrolled source,
 ours, exact iid target samples, and the residual between the last two.
@@ -320,6 +478,7 @@ in the residual.
 ```bash
 python sphere.py verify              # gate C0
 python sphere.py train --antithetic
+python remeasure.py sphere           # every table in this section, from ckpt/
 ```
 
 ---
