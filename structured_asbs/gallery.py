@@ -27,6 +27,7 @@ A panel whose checkpoint is missing is skipped with a printed notice.
 """
 
 import argparse
+import json
 import os
 
 import numpy as np
@@ -503,7 +504,128 @@ def figure9(args):
     _finish(fig, "fig9_occupation_raster")
 
 
-FIGS = {6: figure6, 7: figure7, 8: figure8, 9: figure9}
+# R-ASBS's own colormap, the ten anchor colours of asbs_sphere_sampler.m
+# interpolated to 256 levels.  Reproduced so that figure 10 is their picture
+# with our samples dropped into it, not our picture in their general style.
+_RASBS_ANCHOR = [(0.0504, 0.0298, 0.5280), (0.2546, 0.0139, 0.6154),
+                 (0.4176, 0.0006, 0.6584), (0.5627, 0.0515, 0.6415),
+                 (0.6928, 0.1651, 0.5645), (0.7982, 0.2802, 0.4695),
+                 (0.8814, 0.3925, 0.3832), (0.9492, 0.5178, 0.2957),
+                 (0.9883, 0.6523, 0.2114), (0.9946, 0.8228, 0.1439)]
+
+
+def _rasbs_cmap():
+    return LinearSegmentedColormap.from_list("rasbs_plasma", _RASBS_ANCHOR,
+                                             N=256)
+
+
+def _globe_panel(ax, X, title, sub, cmap, n_show=1500, seed=0):
+    """One panel of figure 10, drawn the way asbs_sphere_sampler.m draws it:
+    a high-resolution sphere shaded by E(x) = 6(1 - x_3^2) at FaceAlpha 0.45,
+    twelve black energy contours, and the samples as small black dots.
+
+    The contours are exact circles rather than a marching-squares contour3,
+    because E depends on x_3 alone, so a level set *is* a circle of constant
+    height.  Drawing them parametrically avoids the ragged polylines that
+    contouring a triangulated sphere would give.
+    """
+    u = np.linspace(0, 2 * np.pi, 240)
+    v = np.linspace(0, np.pi, 160)
+    sx = np.outer(np.cos(u), np.sin(v))
+    sy = np.outer(np.sin(u), np.sin(v))
+    sz = np.outer(np.ones_like(u), np.cos(v))
+    E = 6.0 * (1.0 - sz ** 2)
+
+    ax.plot_surface(sx, sy, sz, facecolors=cmap(E / 6.0), rstride=1, cstride=1,
+                    linewidth=0, antialiased=True, alpha=0.45, shade=False,
+                    zorder=1)
+
+    for lev in np.linspace(0.0, 6.0, 12)[1:-1]:
+        zc = np.sqrt(max(1.0 - lev / 6.0, 0.0))
+        for z0 in (zc, -zc):
+            r = np.sqrt(max(1.0 - z0 ** 2, 0.0))
+            ax.plot(r * np.cos(u), r * np.sin(u), np.full_like(u, z0),
+                    color="k", lw=0.5, alpha=0.35, zorder=2)
+
+    if len(X) > n_show:
+        idx = np.random.default_rng(seed).choice(len(X), n_show, replace=False)
+        X = X[idx]
+    ax.scatter(X[:, 0], X[:, 1], X[:, 2], s=5, c="k", depthshade=False,
+               linewidths=0, zorder=3)
+
+    ax.view_init(elev=25, azim=40)                 # MATLAB view(40, 25)
+    ax.set_box_aspect((1, 1, 1))
+    ax.set_xlim(-1, 1); ax.set_ylim(-1, 1); ax.set_zlim(-1, 1)
+    ax.set_xticks([-1, 0, 1]); ax.set_yticks([-1, 0, 1])
+    ax.set_zticks([-1, 0, 1])
+    ax.tick_params(labelsize=7, pad=-2)
+    ax.set_xlabel("$x_1$", fontsize=9, labelpad=-6)
+    ax.set_ylabel("$x_2$", fontsize=9, labelpad=-6)
+    ax.set_zlabel("$x_3$", fontsize=9, labelpad=-6)
+    ax.set_title(title, fontsize=11, pad=2)
+    ax.text2D(0.5, -0.06, sub, transform=ax.transAxes, ha="center",
+              va="top", fontsize=7.5, color="0.25")
+
+
+def figure10(args):
+    """R-ASBS's own sphere figure, with all three columns drawn identically.
+
+    Their `asbs_sphere_sampler.m` ends in a single shaded globe with 1500
+    black sample dots on it and the caption "Bi-Modal Distribution".  That is
+    the only sphere visualisation in their repository, and comparing our
+    flat-projection figure 6 against a screenshot of it would not be a
+    comparison at all.  So `rasbs_sphere_port.py` reruns their algorithm and
+    this panel draws their samples, ours and exact iid draws from the target
+    in the same axes, same colormap, same camera, same 1500-point subsample.
+    """
+    ours = load_ck("sphere_anti_seed0")
+    if ours is None:
+        return _missing(10, ["sphere_anti_seed0"])
+    fr = "json/samples_rasbs_sphere.npy"
+    if not os.path.exists(fr):
+        return _missing(10, [fr + "  (run rasbs_sphere_port.py)"])
+
+    Xo = ours["samples"].numpy().astype(np.float64)
+    Xr = np.load(fr)
+    Xe = _exact_s2(max(len(Xo), 200000), seed=0)
+    mo = ours["extra"]["metrics"]
+    try:
+        mr = json.load(open("json/results_rasbs_sphere.json"))
+    except Exception:
+        mr = {}
+
+    cmap = _rasbs_cmap()
+    fig = plt.figure(figsize=(13.2, 4.8))
+    axes = [fig.add_subplot(1, 3, i + 1, projection="3d") for i in range(3)]
+
+    def _nm(X):
+        return float((X[:, 2] > 0).mean())
+
+    _globe_panel(axes[0], Xr, "R-ASBS (rerun)",
+                 f"north mass {mr.get('north_mass', _nm(Xr)):.4f}, "
+                 f"KS($x_3$) = {mr.get('KS_z', float('nan')):.4f}\n"
+                 f"$|\\,\\|x\\|-1|$ = {mr.get('max_norm_resid', 0):.1e}, "
+                 f"uniform source", cmap)
+    _globe_panel(axes[1], Xo, "ours",
+                 f"north mass {mo['north_mass']:.4f}, "
+                 f"KS($x_3$) = {mo['KS_z']:.4f}\n"
+                 f"$|\\,\\|x\\|-1|$ = {mo['constraint']:.1e}, Dirac source",
+                 cmap)
+    _globe_panel(axes[2], Xe, "exact target",
+                 f"north mass {_nm(Xe):.4f} (analytic 0.5000)\n"
+                 f"iid inverse-CDF draws", cmap)
+
+    sm = plt.cm.ScalarMappable(cmap=cmap,
+                               norm=plt.Normalize(vmin=0.0, vmax=6.0))
+    cb = fig.colorbar(sm, ax=axes, fraction=0.018, pad=0.02)
+    cb.set_label("Energy $E(x)$", fontsize=10)
+    fig.suptitle("Figure 10 -- Bi-Modal Distribution on $S^2$, drawn the way "
+                 "R-ASBS draws it (1500 of each sample set shown)",
+                 fontsize=11, y=0.99)
+    _finish(fig, "fig10_sphere_rasbs_style")
+
+
+FIGS = {6: figure6, 7: figure7, 8: figure8, 9: figure9, 10: figure10}
 
 
 def main():

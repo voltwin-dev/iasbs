@@ -69,6 +69,68 @@ source, ambient Euler step followed by a QR retraction. Parameter counts are
 within 1% of ours (139,528 vs 140,560) and the budget-matched comparison equalises
 oracle calls at 600,000 exactly.
 
+**Scale, stated plainly.** Most of these state spaces are small; one is not.
+
+| | state space | size | scaled? |
+|---|---|---|---|
+| A: Ising | 4×4 lattice, magnetisation 0 | C(16, 8) = 12,870 | **no** — 4×4 only |
+| B: occupation | m particles on N sites | C(m+N−1, N−1) | **yes** — up to 10⁶⁰⁰ |
+| C: S² | 2-manifold in R³ | continuous, dim 2 | n/a |
+| D: St(4,2) | 4×2 orthonormal frames | continuous, dim 5 | n/a |
+
+The Ising experiment is only run on the 4×4 lattice, because that is the size
+at which the constrained distribution can be enumerated exactly and a TV
+distance against truth actually means something. That is the point of it, but
+it does mean we have no evidence about larger lattices.
+
+**The occupation process is the scale test, and it is run properly.** Same
+network (136,450 parameters) and the same code at every size; only the state
+space grows. `python occupation.py scale --m M --N M`:
+
+| m = N | constraint-set size | source KS(occ) | ours KS(occ) | ours KS(max) | W₁(max)/m | E ours | E exact | violations |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 32 | C(63, 31) ≈ 9.2e17 | 0.2054 | **0.0043** | 0.0305 | 0.0052 | 13.317 | 13.212 | **0** |
+| 128 | C(255, 127) ≈ 5.8e75 | 0.2054 | **0.0084** | 0.0796 | 0.0044 | 52.871 | 52.108 | **0** |
+| 1000 | C(1999, 999) ≈ 10⁶⁰⁰ | 0.2035 | **0.0102** | 0.2215 | 0.0014 | 412.32 | 405.57 | **0** |
+
+The "source" column is the uncontrolled reference process measured the same
+way, so the KS numbers are a 20× to 48× reduction rather than a small number
+quoted alone. The occupancy KS stays near 0.01 across four orders of magnitude
+of state-space size, the constraint `Σᵢ ηᵢ = m` is satisfied exactly at every
+size, and W₁ on the hardest statistic (the maximum occupancy) *improves* in
+relative terms as m grows, from 0.52% to 0.14% of m.
+
+What does degrade is `KS(max)`, the law of the single largest occupancy:
+0.031 → 0.080 → 0.222. That is the extreme-value statistic and it is the one
+we do worst on at m = 1000; it is reported here rather than left out of the
+scoreboard. Budgets differ across the three rows (m = 32 and 128 use 3000
+iterations, 128 steps, batch 512; m = 1000 uses 1500 iterations, 256 steps,
+batch 128), so the row-to-row comparison is not budget-matched and should not
+be read as a clean scaling law.
+
+S² is 2-dimensional and St(4,2) is 5-dimensional. Apart from the occupation
+sweep, nothing here is a high-dimensional benchmark by the standards of the
+sampling literature.
+
+**Which R-ASBS experiments we reproduced: two of six.**
+
+| their script | problem | ours |
+|---|---|---|
+| `asbs_sphere_sampler.m` | bimodal S², `E = 6(1 − x₃²)` | ✔ `sphere.py`, same energy, and their algorithm re-run by `rasbs_sphere_port.py` |
+| `alg2_stiefel.m` | St(4,2), `E = tr(XᵀHX)`, spec(H) = {1,2,5,8} | ✔ `stiefel.py`, same H and same β grid, and their algorithm re-run by `rasbs_port.py` |
+| `earthquake_sphere_ex.m` | earthquake epicentres on S² | ✘ not attempted |
+| `cosmic_ray_ex.m` | arrival directions on the hemisphere S²₊ | ✘ not attempted |
+| `alg2_robotics.m` | 10-DOF planar IK, loop closure + obstacles | ✘ not attempted |
+| `asbs_m_wahba_so3.m` | robust Wahba problem on SO(3) | ✘ not attempted |
+
+The two we did reproduce are the two synthetic benchmarks with a known target,
+which are the only ones where an error against ground truth can be computed at
+all. The four we did not are their applied and higher-dimensional cases, and
+`alg2_robotics.m` in particular is a harder problem than anything in this
+repository. Our Ising and occupation experiments have no R-ASBS counterpart in
+either direction: their method is formulated for embedded Riemannian manifolds
+and does not apply to discrete state spaces.
+
 **Wall-clock**, single A100, for the numbers quoted in this README: Experiment D
 trains in ~1130 s per β at 199 steps, ~2180 s at 398 and ~4380 s at 796, plus
 sampling and the MCMC reference. R-ASBS costs ~780 s per β at 512 steps and
@@ -112,7 +174,11 @@ exact enumeration:
 | fixed-magnetisation Ising | TV vs exact | 0 | **0.0517** (iid floor 0.0511) |
 | fixed-magnetisation Ising | constraint violations | 0 | **0** |
 | occupation, small | TV vs exact | 0 | **0.0199** (iid floor 0.0167) |
-| occupation, m = N = 1000 | KS(occupancy) | 0 | **0.0102** |
+| occupation, m = N = 32 | KS(occupancy) | 0 | **0.0043** (source 0.2054) |
+| occupation, m = N = 128 | KS(occupancy) | 0 | **0.0084** (source 0.2054) |
+| occupation, m = N = 1000 | KS(occupancy) | 0 | **0.0102** (source 0.2035) |
+| occupation, m = N = 1000 | KS(max occupancy) | 0 | 0.2215 (our worst statistic) |
+| occupation, m = N = 1000 | W₁(max) / m | 0 | **0.0014** |
 | occupation, all scales | constraint violations | 0 | **0** |
 
 Both discrete TV values sit essentially **at the iid sampling floor** — the
@@ -176,17 +242,21 @@ retraction, neither of which is a function of step size. Measured, not assumed:
 |---|---:|---:|---:|---:|---:|
 | R-ASBS, β = 50 | +0.272 | +0.255 | **+0.248** | — | — |
 | ours, β = 50 | +4.391 | — | — | **+0.010** | — |
-| R-ASBS, β = 100 | +0.235 | **+0.218** | (running) | — | — |
+| R-ASBS, β = 100 | +0.235 | **+0.218** | +0.221 | — | — |
 | ours, β = 100 | +5.290 | — | — | +0.746 | **+0.046** |
 
-So each column above is quoted at the finest grid we ran for it, and for
-R-ASBS that is the value their curve is converging to — spending 5× the steps
-buys them 0.024, and refining further will not help. Ours is quoted at the
-grid where the error stops being discretisation-dominated. The cost is real
-and is stated rather than hidden: our β ≥ 50 cells run 8–16× more integration
-steps than theirs and are warm-started from the β below, a recipe the rest of
-the column does not use. Full diagnostics, including what the β = 100 cell
-still gets wrong, are in the subsection below.
+Their β = 100 row is the cleanest statement of the point: 512 → 1024 makes it
+very slightly *worse* (+0.218 → +0.221), which is run-to-run noise on a
+quantity that has stopped moving. Their β = 50 row still creeps down, by 0.024
+over a 5× refinement, and Richardson extrapolation puts its limit near +0.24.
+Ours falls by 400× and 100× over the same kind of refinement, because ours is
+discretisation and theirs is not.
+
+So each column above is quoted at the finest useful grid we ran for it. The
+cost is real and is stated rather than hidden: our β ≥ 50 cells run 8–16× more
+integration steps than theirs and are warm-started from the β below, a recipe
+the rest of the column does not use. Full diagnostics, including what the
+β = 100 cell still gets wrong, are in the subsection below.
 
 Two observations that the curve alone does not show.
 
