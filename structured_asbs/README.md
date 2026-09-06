@@ -13,6 +13,7 @@ stiefel.py       Exp D  St(4,2)                        (matrix Killing readout)
 rasbs_port.py    faithful PyTorch port of R-ASBS alg2_stiefel.m
 tests_math.py    standalone mathematical unit tests
 figures.py       all paper figures + the comparison table
+json/            every results_*.json the figures and tables are built from
 ```
 
 ---
@@ -106,7 +107,7 @@ the rerun plateaus at 3.185 and stays there from β = 10³ to β = 10⁶.
 
 ```bash
 python rasbs_port.py --check-retraction        # GS == sign-corrected QR
-python rasbs_port.py --out results_rasbs_stiefel.json
+python rasbs_port.py --out json/results_rasbs_stiefel.json
 python stiefel.py ref --betas "0.001,0.01,0.1,0.5,1.3,2,5,7,10,20,50,100"
 ```
 

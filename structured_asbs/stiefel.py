@@ -979,7 +979,7 @@ def main():
     ap.add_argument("--refine", type=str, default="2,4,8,16")
     ap.add_argument("--ckpt-dir", type=str, default="")
     ap.add_argument("--tag", type=str, default="stiefel")
-    ap.add_argument("--out", type=str, default="results_stiefel.json")
+    ap.add_argument("--out", type=str, default="json/results_stiefel.json")
     args = ap.parse_args()
     if args.antithetic and args.frame:
         # The frame term -lambda tr(C^T X) is NOT invariant under

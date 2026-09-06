@@ -22,15 +22,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt          # noqa: E402
 
 OUT = "fig"
+JSONDIR = "json"
 CB = {"ours": "#0072B2", "ref": "#000000", "rasbs": "#D55E00",
       "alt1": "#009E73", "alt2": "#CC79A7", "alt3": "#E69F00"}
 
 
 def load(name):
-    if not os.path.exists(name):
-        return None
-    with open(name) as f:
-        return json.load(f)
+    """Result files live in json/; a bare filename in the cwd still works so
+    that a one-off rerun does not have to be moved before plotting."""
+    for path in (os.path.join(JSONDIR, name), name):
+        if os.path.exists(path):
+            with open(path) as f:
+                return json.load(f)
+    return None
 
 
 def _missing(fig, names):

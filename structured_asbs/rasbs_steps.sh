@@ -6,5 +6,5 @@ set -x
 PY=/root/miniconda3/envs/SML_env/bin/python
 for N in 32 64 128 256 512; do
   $PY -u rasbs_port.py --betas 2 --steps $N --epochs 1000 \
-      --n-samples 100000 --out results_rasbs_steps_$N.json
+      --n-samples 100000 --out json/results_rasbs_steps_$N.json
 done

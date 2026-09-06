@@ -259,7 +259,7 @@ def main():
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--ckpt-dir", type=str, default="")
     ap.add_argument("--tag", type=str, default="rasbs")
-    ap.add_argument("--out", type=str, default="results_rasbs_stiefel.json")
+    ap.add_argument("--out", type=str, default="json/results_rasbs_stiefel.json")
     ap.add_argument("--check-retraction", action="store_true")
     args = ap.parse_args()
     if args.check_retraction:

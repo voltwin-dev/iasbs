@@ -1111,7 +1111,7 @@ def main():
     ap.add_argument("--n-samples", type=int, default=20000)
     ap.add_argument("--reps", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", type=str, default="results_occupation.json")
+    ap.add_argument("--out", type=str, default="json/results_occupation.json")
     ap.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="")
     ap.add_argument("--tag", type=str, default="occ")
     args = ap.parse_args()

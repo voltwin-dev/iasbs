@@ -687,7 +687,7 @@ def main():
     ap.add_argument("--antithetic", action="store_true")
     ap.add_argument("--ckpt-dir", type=str, default="")
     ap.add_argument("--tag", type=str, default="sphere")
-    ap.add_argument("--out", type=str, default="results_sphere.json")
+    ap.add_argument("--out", type=str, default="json/results_sphere.json")
     args = ap.parse_args()
     return {"verify": run_verify, "exact": run_exact,
             "train": run_train}[args.cmd](args)

@@ -580,7 +580,7 @@ def main():
         p.add_argument("--tau", type=float, default=2.0)
         p.add_argument("--gamma", type=float, default=10.0)
         p.add_argument("--n-samples", dest="n_samples", type=int, default=200000)
-        p.add_argument("--out", type=str, default=f"results_ising_{name}.json")
+        p.add_argument("--out", type=str, default=f"json/results_ising_{name}.json")
         p.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="")
         p.add_argument("--tag", type=str, default=f"ising_{name}")
         if name == "exact":
