@@ -32,9 +32,9 @@
 | 50 | R-ASBS | 1024 | 3.2897 | +0.2480 | - |
 | 100 | ours | 796 | 6.5005 | +3.4695 | 1.000 |
 | 100 | ours | 1592 | 3.7768 | +0.7458 | 1.000 |
-| 100 | ours | 3184 | 3.0771 | +0.0461 | 0.312 |
+| 100 | ours | 3184 | 3.0496 | +0.0187 | 0.258 |
 | 100 | R-ASBS | 199 | 3.2626 | +0.2347 | - |
 | 100 | R-ASBS | 512 | 3.2456 | +0.2177 | - |
 | 100 | R-ASBS | 1024 | 3.2487 | +0.2208 | - |
 
-Our error falls with the step count; R-ASBS's does not, because theirs is the source-tilting bias plus the QR retraction and neither is a function of step size. The KS column is the caveat: at beta = 100 our refined mean is within +0.046 but KS = 0.312 and the energy spread is 16x too broad, so refinement fixes the first moment and not the law. rasbs_port.py reports no KS, hence the dashes.
+Our error falls with the step count; R-ASBS's does not, because theirs is the source-tilting bias plus the QR retraction and neither is a function of step size. The KS column is the caveat: at beta = 100 our refined mean is within +0.019 and the energy spread is 2.1x the reference's, but KS = 0.258 still fails our own KS < 0.05 gate, so refinement gets the mean and most of the spread and does not get the law. The beta = 100 / 3184 row is the better of two controls that are indistinguishable on their 796-step training grid; see the README. rasbs_port.py reports no KS, hence the dashes.

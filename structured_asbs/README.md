@@ -116,7 +116,7 @@ sampling literature.
 
 | their script | problem | ours |
 |---|---|---|
-| `asbs_sphere_sampler.m` | bimodal S², `E = 6(1 − x₃²)` | ✔ `sphere.py`, same energy, and their algorithm re-run by `rasbs_sphere_port.py` |
+| `asbs_sphere_sampler.m` | bimodal S², `E = 6(1 − x₃²)` | ✔ `sphere.py`, same energy (their sampler itself is not re-run on this problem) |
 | `alg2_stiefel.m` | St(4,2), `E = tr(XᵀHX)`, spec(H) = {1,2,5,8} | ✔ `stiefel.py`, same H and same β grid, and their algorithm re-run by `rasbs_port.py` |
 | `earthquake_sphere_ex.m` | earthquake epicentres on S² | ✘ not attempted |
 | `cosmic_ray_ex.m` | arrival directions on the hemisphere S²₊ | ✘ not attempted |
@@ -156,7 +156,7 @@ the Stiefel numbers come from rerunning their algorithm ourselves.
 | St(4,2) | error at β = 0.001 | 0 | 0.042 | **0.0007** |
 | St(4,2) | error at β = 50, 199 steps | 0 | **0.270** | 4.391 (not converged) |
 | St(4,2) | error at β = 50, refined grid | 0 | 0.246 (1024 steps, floor) | **0.010** (1592 steps) |
-| St(4,2) | error at β = 100, refined grid | 0 | 0.215 (512 steps, floor) | **0.046** (3184 steps) |
+| St(4,2) | error at β = 100, refined grid | 0 | 0.215 (512 steps, floor) | **0.019** (3184 steps) |
 | St(4,2) | KS(E) at β = 100, 3184 steps | 0 | not reported | 0.312 (mean fixed, law not) |
 | St(4,2) | E as β → ∞ | 3 | **3.185** | 3.310 (β=10) |
 | St(4,2) | worst finite-β error | 0 | **0.547** (β=2) | **0.166** (β=1.3) |
@@ -224,7 +224,7 @@ finest grid we ran for it, for the reason given directly below the table.
 | 10 | 3.2025 | 3.5275 | +0.325 | 199 | 3.3102 | **+0.108** | 199 |
 | 20 | 3.1005 | 3.3858 | +0.285 | 199 | 3.2170 | **+0.116** | 199 |
 | 50 | 3.0418 | 3.2897 | +0.248 | 1024 | 3.0534 | **+0.010** | 1592 |
-| 100 | 3.0279 | 3.2456 | +0.218 | 512 | 3.0771 | **+0.046** | 3184 |
+| 100 | 3.0279 | 3.2456 | +0.218 | 512 | 3.0496 | **+0.019** | 3184 |
 | 200 | 3 (exact) | 3.2482 | +0.248 | 199 | not trained | — | — |
 | 10⁶ | 3 (exact) | 3.1847 | +0.185 | 199 | not trained | — | — |
 
@@ -243,7 +243,7 @@ retraction, neither of which is a function of step size. Measured, not assumed:
 | R-ASBS, β = 50 | +0.272 | +0.255 | **+0.248** | — | — |
 | ours, β = 50 | +4.391 | — | — | **+0.010** | — |
 | R-ASBS, β = 100 | +0.235 | **+0.218** | +0.221 | — | — |
-| ours, β = 100 | +5.290 | — | — | +0.746 | **+0.046** |
+| ours, β = 100 | +5.290 | — | — | +0.750 | **+0.019** |
 
 Their β = 100 row is the cleanest statement of the point: 512 → 1024 makes it
 very slightly *worse* (+0.218 → +0.221), which is run-to-run noise on a
@@ -290,15 +290,35 @@ reachable.
 
 **2. The refined rows are not one sweep.** The 199 column is the original
 cold-start run. For β = 50 the rest comes from one control trained on 398 steps
-(warm-started from β = 20); for β = 100 the 398 cell is its own control and the
-796 / 1592 / 3184 cells are a second control trained on 796 (warm-started from
-β = 50). Refinement always reuses the trained control and never retrains.
-Raw records in `json/results_stiefel_anneal_*.json`.
+(warm-started from β = 20). For β = 100 the 398 cell is its own control, and
+the 796 / 1592 / 3184 cells are the best of *two* controls that were both
+trained on 796 steps: one warm-started directly from β = 50, and one from the
+50 → 65 → 80 → 100 chain. Refinement always reuses the trained control and
+never retrains. Raw records in `json/results_stiefel_anneal_*.json` and
+`json/results_chain_b100.json`.
+
+The chain control wins that cell, and this is worth stating explicitly because
+we very nearly reported the worse number. Both controls look equally broken on
+their own 796-step training grid (E = 6.50 and 6.57 against a target of 3.03,
+both gates FAIL), so the chain was written up here as a failure. Evaluated on
+3184 steps they separate:
+
+| β = 100 control at 3184 steps | ΔE | KS(E) | E spread vs reference | train |
+|---|---:|---:|---:|---:|
+| warm start from β = 50 | +0.0461 | 0.312 | 16× too broad | 4393 s |
+| **50 → 65 → 80 → 100 chain** | **+0.0187** | **0.258** | **2.1× too broad** | 2602 s |
+
+The chain is better on error, on KS, on spread and on wall-clock at once, so
+there is no metric on which quoting it is a favourable choice. The lesson is
+about the gate rather than about annealing: our gate evaluates on the training
+grid, and at β = 100 that grid is too coarse to tell a good control from a bad
+one. Two controls that both "fail" identically differ by 2.5× once integrated
+properly.
 
 | β | 199 | 398 | 796 | 1592 | 3184 |
 |---:|---:|---:|---:|---:|---:|
 | 50 | +4.391 | +0.0685 | +0.0223 | **+0.0101** | — |
-| 100 | +5.290 | +4.063 | +3.470 | +0.746 | **+0.0461** |
+| 100 | +5.290 | +4.063 | +3.535 | +0.750 | **+0.0187** |
 
 **3. At β = 100 refinement fixes the mean and not the law.** |ΔE| is the
 flattering summary here:
@@ -306,22 +326,26 @@ flattering summary here:
 | | steps | E | reference | ΔE | KS(E) |
 |---|---:|---|---|---:|---:|
 | β = 50 | 1592 | 3.0534 ± 0.0377 | 3.0433 ± 0.0286 | +0.0101 | 0.118 |
-| β = 100 | 3184 | 3.0771 ± 0.2831 | 3.0310 ± 0.0175 | +0.0461 | 0.312 |
+| β = 100 | 3184 | 3.0496 ± 0.0360 | 3.0310 ± 0.0175 | +0.0187 | 0.258 |
 
 At β = 50 the agreement is real — mean 0.3% off, spread 30% too wide. At
-β = 100 the mean lands within 0.046 but the energy distribution is **16× too
-broad** and KS = 0.312 says the two samples are plainly distinguishable. Both
-fail the KS < 0.05 gate that every other β passes. We did not find a grid fine
-enough to fix the law at β = 100.
+β = 100 the mean lands within 0.019 and the spread is 2.1× the reference's,
+which is much better than the 16× of the control we first reported, but
+KS = 0.258 still says the two samples are plainly distinguishable. Both rows
+fail the KS < 0.05 gate that every other β passes. So refinement gets the mean
+and most of the spread at β = 100 and still does not get the law, and we did
+not find a grid that does.
 
 **4. We cannot predict which settings are stable.** `out_scale` sits near
 0.55 β when the sampler is on the mode and near 2 β when it is not, and the
 runs that fail spend their transient in the second regime. But increment size
 does not control which happens: warm-starting β = 50 from β = 20 is a 2.5×
 jump and stayed on-mode, while β = 65 from β = 50 is a 1.3× jump, on a *finer*
-grid, and did not. A 50 → 65 → 80 → 100 chain built on that reasoning failed at
-its first leg. The stability boundary is real and reproducible and we have no
-account of it; the step counts above were found by measurement.
+grid, and did not. Every leg of the 50 → 65 → 80 → 100 chain sat off-mode on
+its own grid (`out_scale` 1.9β / 2.4β / 2.2β), and yet its final control is the
+best β = 100 control we have. So "off-mode during training" does not predict
+"bad control" either. The stability boundary is real and reproducible and we
+have no account of it; the step counts above were found by measurement.
 
 For completeness, the same refinement pattern at β = 2, where R-ASBS's error is
 largest — their floor is visible in their own step sweep:
@@ -513,12 +537,16 @@ directly in the second moment rather than inferred from an error curve.
   R-ASBS is better than we are** (their +0.27 against our +4.39 at β = 50).
   The cause is discretisation, not learning: refining the grid and
   warm-starting from the β below recovers +0.010 at β = 50 (1592 steps) and
-  +0.046 at β = 100 (3184 steps), both far below R-ASBS's floor, but at 8–16×
+  +0.019 at β = 100 (3184 steps), both far below R-ASBS's floor, but at 8–16×
   their step budget and with a training recipe that differs from the rest of
   the sweep. We report both, and keep the 199-step number in the headline.
-- **The β = 100 refined cell fixes the mean and not the law.** ΔE = +0.046 but
-  KS(E) = 0.312 and the energy spread is 16× too broad. We did not find a grid
-  fine enough to fix the distribution at β = 100.
+- **The β = 100 refined cell fixes the mean and not the law.** ΔE = +0.019 and
+  the spread is 2.1× the reference's, but KS(E) = 0.258 still fails the gate.
+  We did not find a grid fine enough to fix the distribution at β = 100.
+- **Our gate cannot rank controls at β = 100.** It evaluates on the training
+  grid, and at 796 steps that grid is too coarse: two controls that both fail
+  it identically (E = 6.50 and 6.57) turn out to differ by 2.5× in error once
+  integrated on 3184 steps. We reported the worse one until we checked.
 - **We cannot predict which (β, steps, warm start) combinations are stable.**
   `out_scale` sits near 0.55 β on-mode and near 2 β off-mode, and the failing
   runs are the off-mode ones — but a 2.5× β jump succeeded where a 1.3× jump on

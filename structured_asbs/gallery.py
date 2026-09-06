@@ -568,60 +568,37 @@ def _globe_panel(ax, X, title, sub, cmap, n_show=1500, seed=0):
 
 
 def figure10(args):
-    """R-ASBS's own sphere figure, with all three columns drawn identically.
+    """Our S^2 samples, drawn exactly the way R-ASBS draws theirs.
 
-    Their `asbs_sphere_sampler.m` ends in a single shaded globe with 1500
-    black sample dots on it and the caption "Bi-Modal Distribution".  That is
-    the only sphere visualisation in their repository, and comparing our
-    flat-projection figure 6 against a screenshot of it would not be a
-    comparison at all.  So `rasbs_sphere_port.py` reruns their algorithm and
-    this panel draws their samples, ours and exact iid draws from the target
-    in the same axes, same colormap, same camera, same 1500-point subsample.
+    Their `asbs_sphere_sampler.m` ends in one shaded globe: the surface is
+    coloured by E(x) = 6(1 - x_3^2) at FaceAlpha 0.45, 12 black contour lines
+    are laid over it, 1500 samples are scattered as small black dots, the
+    camera is view(40, 25), the colour limits are [0, 6] and the title is
+    "Bi-Modal Distribution".  This panel reproduces that render for our
+    sampler so the two figures can be put side by side without any
+    re-styling.  Nothing is recomputed here: the samples come straight from
+    the `sphere_anti_seed0` checkpoint.
     """
     ours = load_ck("sphere_anti_seed0")
     if ours is None:
         return _missing(10, ["sphere_anti_seed0"])
-    fr = "json/samples_rasbs_sphere.npy"
-    if not os.path.exists(fr):
-        return _missing(10, [fr + "  (run rasbs_sphere_port.py)"])
 
     Xo = ours["samples"].numpy().astype(np.float64)
-    Xr = np.load(fr)
-    Xe = _exact_s2(max(len(Xo), 200000), seed=0)
     mo = ours["extra"]["metrics"]
-    try:
-        mr = json.load(open("json/results_rasbs_sphere.json"))
-    except Exception:
-        mr = {}
-
     cmap = _rasbs_cmap()
-    fig = plt.figure(figsize=(13.2, 4.8))
-    axes = [fig.add_subplot(1, 3, i + 1, projection="3d") for i in range(3)]
 
-    def _nm(X):
-        return float((X[:, 2] > 0).mean())
-
-    _globe_panel(axes[0], Xr, "R-ASBS (rerun)",
-                 f"north mass {mr.get('north_mass', _nm(Xr)):.4f}, "
-                 f"KS($x_3$) = {mr.get('KS_z', float('nan')):.4f}\n"
-                 f"$|\\,\\|x\\|-1|$ = {mr.get('max_norm_resid', 0):.1e}, "
-                 f"uniform source", cmap)
-    _globe_panel(axes[1], Xo, "ours",
-                 f"north mass {mo['north_mass']:.4f}, "
-                 f"KS($x_3$) = {mo['KS_z']:.4f}\n"
-                 f"$|\\,\\|x\\|-1|$ = {mo['constraint']:.1e}, Dirac source",
-                 cmap)
-    _globe_panel(axes[2], Xe, "exact target",
-                 f"north mass {_nm(Xe):.4f} (analytic 0.5000)\n"
-                 f"iid inverse-CDF draws", cmap)
+    fig = plt.figure(figsize=(6.4, 6.0))
+    ax = fig.add_subplot(111, projection="3d")
+    _globe_panel(ax, Xo, "Bi-Modal Distribution",
+                 f"ours, Dirac source -- north mass {mo['north_mass']:.4f}, "
+                 f"KS($x_3$) = {mo['KS_z']:.4f}, "
+                 f"$|\\,\\|x\\|-1|$ = {mo['constraint']:.1e}", cmap)
 
     sm = plt.cm.ScalarMappable(cmap=cmap,
                                norm=plt.Normalize(vmin=0.0, vmax=6.0))
-    cb = fig.colorbar(sm, ax=axes, fraction=0.018, pad=0.02)
+    cb = fig.colorbar(sm, ax=ax, fraction=0.028, pad=0.04)
     cb.set_label("Energy $E(x)$", fontsize=10)
-    fig.suptitle("Figure 10 -- Bi-Modal Distribution on $S^2$, drawn the way "
-                 "R-ASBS draws it (1500 of each sample set shown)",
-                 fontsize=11, y=0.99)
+    fig.subplots_adjust(top=0.94, bottom=0.03, left=0.02, right=0.90)
     _finish(fig, "fig10_sphere_rasbs_style")
 
 
