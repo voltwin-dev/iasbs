@@ -13,6 +13,7 @@ stiefel.py       Exp D  St(4,2)                        (matrix Killing readout)
 rasbs_port.py    faithful PyTorch port of R-ASBS alg2_stiefel.m
 tests_math.py    standalone mathematical unit tests
 figures.py       all paper figures + the comparison table
+gallery.py       sample gallery -- the samples themselves, not their metrics
 json/            every results_*.json the figures and tables are built from
 ```
 
@@ -182,6 +183,7 @@ python occupation.py verify          # gate B0
 python sphere.py verify              # gate C0
 python stiefel.py verify             # gate D0
 python figures.py                    # all figures -> fig/
+python gallery.py                    # sample gallery -> fig/
 ```
 
 Each script exposes `verify` (correctness gates), `train`, and a sweep mode.
@@ -191,6 +193,63 @@ Gate `D0` includes the mandatory first-moment test for the spin clock. On
 St(4,2) each SU(2) ≅ S³ factor of Spin(4) runs at heat time s = r/2, not r;
 the test checks `E[X_r | X_0] = e^{−3r} X_0` and separates the two conventions
 by a factor of ~160 at r = 0.25, so a wrong clock cannot pass silently.
+
+---
+
+## The sample gallery
+
+`figures.py` plots metrics. `gallery.py` plots the samples themselves, as the
+objects they actually are, beside the exact or MCMC reference drawn the same
+way. The claim these panels support is "you cannot tell the two columns
+apart", and that is a claim the eye should adjudicate.
+
+| | contents |
+|---|---|
+| `fig6_sphere_cloud` | S² clouds: the uncontrolled source, ours, exact iid target, and the residual |
+| `fig7_stiefel_frames` | 96 raw St(4,2) frames per sampler, plus the second moment E[XXᵀ] |
+| `fig8_ising_configs` | 50 raw 4×4 spin configurations, ours beside exact enumeration |
+| `fig9_occupation_raster` | raw occupancy vectors at m = N = 1000, plus per-box marginals |
+
+Three things the gallery had to get right, because getting them wrong would
+have flattered us:
+
+**The S² reference is not `sphere_reference`.** That checkpoint holds the
+*uncontrolled* process — the bridge's source, KS(x₃) = 0.324 — not the target.
+Comparing against it measures the transport, not the error. Figure 6 draws
+exact iid target samples by inverse-CDF instead (the density is ∝ exp(6x₃²)
+with uniform azimuth, so this is exact), and against that reference 99% of the
+1800 equal-area bins fall within ±3σ with max |z| = 4.3: at 200,000 samples a
+side there is no resolvable structure left in the residual.
+
+**Checkpointed samples are float32.** The orthogonality residual recomputed
+from disk is therefore float32 round-off, ~1e-7 — not the 3.8e-14 that
+`stiefel.py` measures in float64 at generation time. No panel draws that
+residual; it would be an artefact of the storage format, and it would happen
+to look like R-ASBS's 3.4e-07.
+
+**`stiefel.py` and `rasbs_port.py` do not use the same basis.** Ours works in
+the eigenbasis of H (H = diag(1, 2, 5, 8)); theirs works in R-ASBS's ambient
+Z₂×Z₂ basis. Figure 7 rotates their samples into the common eigenbasis before
+comparing anything. Without that rotation the two second moments look like
+each other's answers.
+
+### What figure 7 shows
+
+Once both are in the same basis, the diagonal of E[XXᵀ] at β = 2 reads:
+
+| axis (eigenvalue of H) | 1 | 2 | 5 | 8 | ‖·−target‖_F | E |
+|---|---:|---:|---:|---:|---:|---:|
+| target (MCMC) | 0.893 | 0.859 | 0.166 | 0.081 | 0 | 4.093 |
+| ours | 0.879 | 0.845 | 0.180 | 0.096 | **0.028** | 4.233 |
+| R-ASBS | 0.834 | 0.793 | 0.254 | 0.119 | 0.132 | 4.644 |
+| Haar (their source) | 0.500 | 0.500 | 0.500 | 0.500 | 0.755 | 8.000 |
+
+Haar is the null hypothesis: it is what a sampler returns if it inherits its
+source instead of transporting it. Measured along that axis, R-ASBS sits
+**17% of the way back to Haar** and ours sits **4%** — a 4.7× difference in a
+quantity that has nothing to do with the scalar energy we have been reporting.
+This is the source-tilting bias of §"The R-ASBS Stiefel comparison", visible
+directly in the second moment rather than inferred from an error curve.
 
 ---
 
