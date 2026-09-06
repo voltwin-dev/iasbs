@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # beta=100, third attempt.  The 398-step annealed run diverged *away* from a
 # good warm start (E climbed 3.1 -> 7.7 by iteration 250), and the measured
 # out_scale says why: it settled at 2.27e+02, so h*score = 226/398 = 0.57 per
@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 # spend.  No `set -e`: a failed gate exits nonzero and that is expected here.
 PY=/root/miniconda3/envs/SML_env/bin/python
 export CUDA_VISIBLE_DEVICES=1
-$PY -u stiefel.py train --betas 100 \
+$PY -u structured_asbs/stiefel.py train --betas 100 \
     --sigma 1.4142135623730951 --nq 64 --iters 1500 --inner 8 \
     --batch 2048 --mb 16384 --hidden 256 --lr 0.001 --ema 0.9995 --nbuf 4 \
     --seeds 1 --eval-every 250 --n-samples 100000 --mc-moment 200000 \

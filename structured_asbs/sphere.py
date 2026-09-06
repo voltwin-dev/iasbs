@@ -68,6 +68,10 @@ import torch
 from scipy.integrate import cumulative_trapezoid
 from scipy.special import eval_legendre
 
+# common.py and the shared json/ ckpt/ fig/ directories live at the
+# repository root, one level up from this script.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import common as C
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -665,6 +669,7 @@ def run_train(args):
 
 
 def main():
+    C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["verify", "exact", "train"])
     ap.add_argument("--sigma", type=float, default=math.sqrt(2.0))
@@ -685,7 +690,9 @@ def main():
     ap.add_argument("--nbuf", type=int, default=4)
     ap.add_argument("--symmetrize", action="store_true")
     ap.add_argument("--antithetic", action="store_true")
-    ap.add_argument("--ckpt-dir", type=str, default="")
+    # Default "ckpt", never "": a run whose checkpoint is not
+    # written cannot be re-measured later and must be repeated in full.
+    ap.add_argument("--ckpt-dir", type=str, default="ckpt")
     ap.add_argument("--tag", type=str, default="sphere")
     ap.add_argument("--out", type=str, default="json/results_sphere.json")
     args = ap.parse_args()

@@ -35,6 +35,14 @@ import time
 import numpy as np
 import torch
 
+# common.py and the shared json/ ckpt/ fig/ directories live at the
+# repository root, one level up from this script.  Only save_ckpt and the
+# root-resolution helpers are borrowed -- none of the R-ASBS maths below
+# touches our own utilities.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import common as C
+
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 H_RASBS = [[4.0, 0.5, 2.5, 1.0],
@@ -232,13 +240,6 @@ def run(args):
               f"+- {m['E_std']:.4f}   |X^TX-I|={m['constraint']:.2e}   "
               f"({m['wall_s']:.0f}s, {oracle} oracle calls)", flush=True)
         if args.ckpt_dir:
-            # common.py lives with our own experiments; this file is the only
-            # thing in rasbs/ and borrows just save_ckpt from it.
-            import os
-            import sys
-            sys.path.insert(0, os.path.join(os.path.dirname(
-                os.path.abspath(__file__)), "..", "structured_asbs"))
-            import common as C
             C.save_ckpt(args.ckpt_dir, f"{args.tag}_b{beta:g}",
                         net=netU, samples=X1.cpu(),
                         extra={"metrics": m, "beta": beta,
@@ -253,6 +254,7 @@ def run(args):
 
 
 def main():
+    C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("--betas", type=str, default="")
     ap.add_argument("--sigma", type=float, default=1.0)
@@ -263,7 +265,9 @@ def main():
     ap.add_argument("--n-samples", type=int, default=5000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--verbose", action="store_true")
-    ap.add_argument("--ckpt-dir", type=str, default="")
+    # Default "ckpt", never "": a run whose checkpoint is not
+    # written cannot be re-measured later and must be repeated in full.
+    ap.add_argument("--ckpt-dir", type=str, default="ckpt")
     ap.add_argument("--tag", type=str, default="rasbs")
     ap.add_argument("--out", type=str, default="json/results_rasbs_stiefel.json")
     ap.add_argument("--check-retraction", action="store_true")

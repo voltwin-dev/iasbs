@@ -17,11 +17,40 @@ from __future__ import annotations
 
 import itertools
 import math
+import os
+import sys
 
 import numpy as np
 import torch
 from scipy.linalg import expm
 from scipy.special import eval_legendre
+
+# ----------------------------------------------------------------------------
+# 3.0  Repository layout
+# ----------------------------------------------------------------------------
+# ``common.py`` sits at the repository root, next to the three shared data
+# directories.  Every experiment writes to ``json/``, ``ckpt/`` and ``fig/``
+# using bare relative paths, so a run only lands in the right place if the
+# process is rooted here.  ``use_repo_root()`` makes that true regardless of
+# where the script was invoked from.
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def use_repo_root():
+    """chdir to the repository root so ``json/``, ``ckpt/`` and ``fig/`` resolve.
+
+    Call this once at the top of a script's ``main()`` -- never at import time,
+    so that importing ``common`` from a notebook or a test runner has no side
+    effect on the caller's working directory.
+    """
+    os.chdir(ROOT)
+
+
+def add_root_to_path():
+    """Put the repository root on ``sys.path`` so ``import common`` works."""
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+
 
 # ----------------------------------------------------------------------------
 # 3.1  Time and noise clocks

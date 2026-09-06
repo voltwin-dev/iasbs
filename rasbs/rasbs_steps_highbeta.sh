@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")/../structured_asbs"   # json/ and ckpt/ live there
+cd "$(dirname "$0")/.."   # repo root: json/, ckpt/ and fig/ live here
 # Fairness control for the high-beta write-up.
 #
 # Our beta = 50 / 100 error shrinks under grid refinement (4.39 -> 0.010 at
@@ -12,9 +12,14 @@ cd "$(dirname "$0")/../structured_asbs"   # json/ and ckpt/ live there
 # repository is supposed to avoid.  So: measure it.
 #
 # 100k samples to match the main run, at 199 / 512 / 1024 steps.
+#
+# --ckpt-dir/--tag are mandatory here, not optional: the first version of this
+# script omitted them, so the six controls were discarded at exit and the sweep
+# had to be re-run from scratch to answer a follow-up question.
 PY=/root/miniconda3/envs/SML_env/bin/python
 export CUDA_VISIBLE_DEVICES=0
 for N in 199 512 1024; do
-  $PY -u ../rasbs/rasbs_port.py --betas 50,100 --steps $N --epochs 1000 \
-      --n-samples 100000 --out json/results_rasbs_highbeta_steps_$N.json
+  $PY -u rasbs/rasbs_port.py --betas 50,100 --steps $N --epochs 1000 \
+      --n-samples 100000 --ckpt-dir ckpt --tag rasbs_hb_steps$N \
+      --out json/results_rasbs_highbeta_steps_$N.json
 done

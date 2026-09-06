@@ -1,6 +1,6 @@
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 set -x
-P="conda run -n SML_env python -u occupation.py"
+P="conda run -n SML_env python -u structured_asbs/occupation.py"
 echo "### scale m=N=32"
 $P scale --m 32  --iters 3000 --eval-every 500 --n-samples 20000 --out json/results_occ_s32.json
 echo "### scale m=N=128"

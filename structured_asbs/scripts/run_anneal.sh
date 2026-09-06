@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # The two remaining hypotheses for the beta >= 50 failure, tested together.
 #
 #   (C) time discretisation: the score is O(beta) and the Euler step was 1/199,
@@ -26,11 +26,11 @@ COMMON="--sigma 1.4142135623730951 --nq 64 --iters 1500 --inner 8 \
     --tag stiefel_anneal"
 
 echo "########## beta=50, warm start from the beta=20 control ##########"
-$PY -u stiefel.py train --betas 50 $COMMON \
+$PY -u structured_asbs/stiefel.py train --betas 50 $COMMON \
     --init-from ckpt/stiefel_fill_b20_seed0.pt \
     --out json/results_stiefel_anneal_b50.json
 
 echo "########## beta=100, warm start from the beta=50 control ##########"
-$PY -u stiefel.py train --betas 100 $COMMON \
+$PY -u structured_asbs/stiefel.py train --betas 100 $COMMON \
     --init-from ckpt/stiefel_anneal_b50_seed0.pt \
     --out json/results_stiefel_anneal_b100.json

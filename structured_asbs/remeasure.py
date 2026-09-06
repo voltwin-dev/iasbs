@@ -31,6 +31,10 @@ import sys
 import numpy as np
 import torch
 
+# common.py and the shared json/ ckpt/ fig/ directories live at the
+# repository root, one level up from this script.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import common as C
 
 DEV = "cpu"
@@ -358,6 +362,7 @@ def print_sphere():
 
 
 def main():
+    C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["ising", "sphere", "all"])
     ap.add_argument("--tag", default="ising_poisson256")

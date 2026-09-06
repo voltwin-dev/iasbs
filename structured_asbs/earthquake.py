@@ -71,6 +71,10 @@ import time
 import numpy as np
 import torch
 
+# common.py and the shared json/ ckpt/ fig/ directories live at the
+# repository root, one level up from this script.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import common as C
 import sphere as S
 
@@ -611,6 +615,7 @@ def run_train(args):
 
 # ----------------------------------------------------------------------------
 def main():
+    C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["verify", "exact", "train"])
     ap.add_argument("--data", type=str, default="")

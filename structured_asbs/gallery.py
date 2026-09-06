@@ -30,6 +30,12 @@ import argparse
 import json
 import os
 
+# common.py and the shared json/ ckpt/ fig/ directories live at the
+# repository root, one level up from this script.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import common as C
+
 import numpy as np
 import torch
 
@@ -129,7 +135,6 @@ def _exact_s2(n, seed=0):
     process (KS(x_3) = 0.32), not the target, and comparing against it would
     measure the transport rather than the error.
     """
-    import common as C
     grid, cdf = C.exact_s2_z_cdf_grid(num=200001)
     rng = np.random.default_rng(seed)
     z = np.interp(rng.random(n), cdf, grid)
@@ -606,6 +611,7 @@ FIGS = {6: figure6, 7: figure7, 8: figure8, 9: figure9, 10: figure10}
 
 
 def main():
+    C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", type=int, default=None, choices=sorted(FIGS))
     ap.add_argument("--beta", type=float, default=2,

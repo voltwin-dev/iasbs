@@ -15,6 +15,12 @@ import argparse
 import json
 import os
 
+# common.py and the shared json/ ckpt/ fig/ directories live at the
+# repository root, one level up from this script.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import common as C
+
 import numpy as np
 
 import matplotlib
@@ -538,6 +544,7 @@ def table_stiefel():
 
 
 def main():
+    C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", type=str, default="")
     ap.add_argument("--out", type=str, default="fig")

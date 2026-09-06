@@ -61,6 +61,10 @@ import numpy as np
 import scipy.linalg
 import torch
 
+# common.py and the shared json/ ckpt/ fig/ directories live at the
+# repository root, one level up from this script.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import common as C
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1087,6 +1091,7 @@ def run_scalevar(args):
 
 
 def main():
+    C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["verify", "exact", "var", "train",
                                     "scale", "scalevar"])
@@ -1112,7 +1117,9 @@ def main():
     ap.add_argument("--reps", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=str, default="json/results_occupation.json")
-    ap.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="")
+    # Default "ckpt", never "": a run whose checkpoint is not
+    # written cannot be re-measured later and must be repeated in full.
+    ap.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="ckpt")
     ap.add_argument("--tag", type=str, default="occ")
     args = ap.parse_args()
     if args.N <= 0:

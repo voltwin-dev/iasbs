@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # beta=100 leg of the annealing chain, warm-started from the beta=50 control
 # that run_anneal.sh just produced (dE = 0.0685 at 398 steps).  Split out
 # because run_train exits nonzero on a failed gate, which killed the original
 # two-leg script after beta=50.  No `set -e` here for the same reason.
 PY=/root/miniconda3/envs/SML_env/bin/python
 export CUDA_VISIBLE_DEVICES=1
-$PY -u stiefel.py train --betas 100 \
+$PY -u structured_asbs/stiefel.py train --betas 100 \
     --sigma 1.4142135623730951 --nq 64 --iters 1500 --inner 8 \
     --batch 2048 --mb 16384 --hidden 256 --lr 0.001 --ema 0.9995 --nbuf 4 \
     --seeds 1 --eval-every 250 --n-samples 100000 --mc-moment 200000 \

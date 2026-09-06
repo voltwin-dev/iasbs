@@ -21,6 +21,10 @@ import numpy as np
 import torch
 from scipy.linalg import expm
 
+# common.py and the shared json/ ckpt/ fig/ directories live at the
+# repository root, one level up from this script.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import common as C
 
 torch.set_default_dtype(torch.float64)
@@ -533,6 +537,7 @@ def test_stiefel_spin_clock(fast=False):
 
 
 def main():
+    C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("--fast", action="store_true")
     args = ap.parse_args()

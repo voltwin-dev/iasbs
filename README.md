@@ -8,8 +8,10 @@ Our method and the baseline live in separate directories, so that no reader has
 to take on trust which code produced which column.
 
 ```
+common.py                 shared kernels, quadrature, Stiefel/S^3 helpers, ckpt IO
+json/  ckpt/  fig/        artifacts, shared by both methods
+
 structured_asbs/          OUR method
-  common.py               shared kernels, quadrature, Stiefel/S^3 helpers, ckpt IO
   fixed_ising.py          Exp A  fixed-magnetisation Ising   (bijective discrete)
   occupation.py           Exp B  occupation process      (non-bijective discrete)
   sphere.py               Exp C  S^2                       (scalar Killing readout)
@@ -19,7 +21,6 @@ structured_asbs/          OUR method
   gallery.py              sample gallery -- the samples, not their metrics
   remeasure.py            re-derives the Ising and sphere tables from ckpt/
   scripts/                the shell scripts that produced our json/ entries
-  json/  ckpt/  fig/      artifacts (shared: the figures overlay both methods)
 
 rasbs/                    THE BASELINE, kept apart from our code
   rasbs_port.py           faithful PyTorch port of R-ASBS alg2_stiefel.m
@@ -28,11 +29,16 @@ rasbs/                    THE BASELINE, kept apart from our code
   regen_f64.sh            float64 rerun at beta = 2
 ```
 
-`json/`, `ckpt/` and `fig/` are deliberately **not** split. Most figures plot
+Code is split by *whose method it is*; artifacts are not. Most figures plot
 ours and theirs on the same axes, and the file names (`results_rasbs_*` vs the
-rest) already say which is which; two artifact trees would buy nothing and cost
-a second search path in every loader. Every script in `rasbs/` `cd`s into
-`structured_asbs/` first, so those paths are identical either way.
+rest) already say which is which, so two artifact trees would buy nothing and
+cost a second search path in every loader. `json/`, `ckpt/` and `fig/`
+therefore sit at the root next to `common.py`, above both method directories
+rather than inside either.
+
+Every entry point calls `common.use_repo_root()` before parsing arguments, so
+the bare relative paths (`json/results_*.json`, `ckpt/`, `fig/`) resolve to
+these root directories no matter which directory the script was launched from.
 
 Four benchmarks, in order of increasing structure: two discrete state spaces
 where the answer can be enumerated exactly, then two manifolds where it cannot.
@@ -64,12 +70,12 @@ column: no counterpart experiment exists in their paper or their repository.
 Checkpoints under `ckpt/` are not committed (1.4 GB); the `json/results_*.json`
 files are, and every table here is built from them.
 
-All commands below are run from `structured_asbs/`.
+All commands below are run from the repository root.
 
 ```bash
-python tests_math.py                 # mathematical unit tests
-python figures.py                    # all figures -> fig/
-python gallery.py                    # sample gallery -> fig/
+python structured_asbs/tests_math.py   # mathematical unit tests
+python structured_asbs/figures.py      # all figures -> fig/
+python structured_asbs/gallery.py      # sample gallery -> fig/
 ```
 
 `figures.py` plots metrics. `gallery.py` plots the samples themselves, as the
@@ -168,10 +174,10 @@ metric panel.
   state spaces. The comparison here is against exact enumeration instead.
 
 ```bash
-python fixed_ising.py verify         # gate A0
-python fixed_ising.py exact          # gate A0/A1/A2 with the exact control
-python fixed_ising.py train
-python remeasure.py ising            # every table in this section, from ckpt/
+python structured_asbs/fixed_ising.py verify         # gate A0
+python structured_asbs/fixed_ising.py exact          # gate A0/A1/A2 with the exact control
+python structured_asbs/fixed_ising.py train
+python structured_asbs/remeasure.py ising            # every table in this section, from ckpt/
 ```
 
 ---
@@ -221,7 +227,7 @@ floor, so the residual is finite-sample error rather than sampler bias.
 ### Scaling to 10⁶⁰⁰ states
 
 Same network (136,450 parameters) and the same code at every size; only the
-state space grows. `python occupation.py scale --m M --N M`:
+state space grows. `python structured_asbs/occupation.py scale --m M --N M`:
 
 | m = N | constraint-set size | source KS(occ) | ours KS(occ) | ours KS(max) | W₁(max)/m | E ours | E exact | violations |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|
@@ -250,9 +256,9 @@ occupancy vectors at m = N = 1000 with their per-box marginals.
 - **No R-ASBS counterpart**, for the same reason as the Ising lattice.
 
 ```bash
-python occupation.py verify                  # gate B0
-python occupation.py train
-python occupation.py scale --m 1000 --N 1000
+python structured_asbs/occupation.py verify                  # gate B0
+python structured_asbs/occupation.py train
+python structured_asbs/occupation.py scale --m 1000 --N 1000
 ```
 
 ---
@@ -358,9 +364,9 @@ in the residual.
   here. The Stiefel section is where their algorithm is actually rerun.
 
 ```bash
-python sphere.py verify              # gate C0
-python sphere.py train --antithetic
-python remeasure.py sphere           # every table in this section, from ckpt/
+python structured_asbs/sphere.py verify              # gate C0
+python structured_asbs/sphere.py train --antithetic
+python structured_asbs/remeasure.py sphere           # every table in this section, from ckpt/
 ```
 
 ---
@@ -561,15 +567,18 @@ refreshes the pre-change β = 2 pair.
   high-dimensional one.
 
 ```bash
-python ../rasbs/rasbs_port.py --check-retraction   # GS == sign-corrected QR
-python ../rasbs/rasbs_port.py --out json/results_rasbs_stiefel.json
-python stiefel.py ref --betas "0.001,0.01,0.1,0.5,1.3,2,5,7,10,20,50,100"
-python stiefel.py verify                       # gate D0, incl. spin-clock test
-bash ../rasbs/rasbs_steps.sh                   # their beta=2 step ablation
-bash ../rasbs/rasbs_steps_highbeta.sh          # their beta=50/100 step ablation
-bash ../rasbs/regen_f64.sh                     # float64 rerun at beta=2
+python rasbs/rasbs_port.py --check-retraction   # GS == sign-corrected QR
+python rasbs/rasbs_port.py --out json/results_rasbs_stiefel.json
+python structured_asbs/stiefel.py ref --betas "0.001,0.01,0.1,0.5,1.3,2,5,7,10,20,50,100"
+python structured_asbs/stiefel.py verify                       # gate D0, incl. spin-clock test
+bash rasbs/rasbs_steps.sh                   # their beta=2 step ablation
+bash rasbs/rasbs_steps_highbeta.sh          # their beta=50/100 step ablation
+bash rasbs/regen_f64.sh                     # float64 rerun at beta=2
 ```
 
-`rasbs/rasbs_steps.sh` and `rasbs/rasbs_steps_highbeta.sh` do not pass `--ckpt-dir`, so
-those eleven R-ASBS runs leave `json/` entries but no checkpoint; every other
-run in this repository writes one.
+Every run in this repository writes a checkpoint. `--ckpt-dir` now defaults to
+`ckpt` in every entry point rather than to the empty string, and the two step
+ablations above pass it explicitly. Both were originally written without it,
+which silently discarded the eleven controls they trained; the numbers in this
+section survived only because they were already in `json/`. The default was
+changed so that the omission cannot recur.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # Rerun the two betas that diverged (50, 100) with the scale-free label
 # parametrisation of ScoreNet.  Every other flag is byte-identical to the
 # stiefel_fill run recorded in json/results_stiefel_fill.json, so the before /
@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 set -e
 PY=/root/miniconda3/envs/SML_env/bin/python
 export CUDA_VISIBLE_DEVICES=1
-$PY -u stiefel.py train --betas 50,100 \
+$PY -u structured_asbs/stiefel.py train --betas 50,100 \
     --sigma 1.4142135623730951 --steps 199 --nq 64 --iters 1500 --inner 8 \
     --batch 2048 --mb 16384 --hidden 256 --lr 0.001 --ema 0.9995 --nbuf 4 \
     --seeds 1 --eval-every 500 --n-samples 100000 --mc-moment 200000 \

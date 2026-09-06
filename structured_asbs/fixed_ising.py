@@ -53,6 +53,10 @@ import numpy as np
 import torch
 from scipy.special import gammaln
 
+# common.py and the shared json/ ckpt/ fig/ directories live at the
+# repository root, one level up from this script.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import common as C
 
 torch.set_default_dtype(torch.float64)
@@ -658,6 +662,7 @@ def run_train(args):
 
 
 def main():
+    C.use_repo_root()
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -669,7 +674,9 @@ def main():
         p.add_argument("--gamma", type=float, default=10.0)
         p.add_argument("--n-samples", dest="n_samples", type=int, default=200000)
         p.add_argument("--out", type=str, default=f"json/results_ising_{name}.json")
-        p.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="")
+        # Default "ckpt", never "": a run whose checkpoint is not
+        # written cannot be re-measured later and must be repeated in full.
+        p.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="ckpt")
         p.add_argument("--tag", type=str, default=f"ising_{name}")
         if name == "exact":
             p.add_argument("--steps-sweep", dest="steps_sweep", type=int,
