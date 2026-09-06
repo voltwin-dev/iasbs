@@ -232,6 +232,12 @@ def run(args):
               f"+- {m['E_std']:.4f}   |X^TX-I|={m['constraint']:.2e}   "
               f"({m['wall_s']:.0f}s, {oracle} oracle calls)", flush=True)
         if args.ckpt_dir:
+            # common.py lives with our own experiments; this file is the only
+            # thing in rasbs/ and borrows just save_ckpt from it.
+            import os
+            import sys
+            sys.path.insert(0, os.path.join(os.path.dirname(
+                os.path.abspath(__file__)), "..", "structured_asbs"))
             import common as C
             C.save_ckpt(args.ckpt_dir, f"{args.tag}_b{beta:g}",
                         net=netU, samples=X1.cpu(),

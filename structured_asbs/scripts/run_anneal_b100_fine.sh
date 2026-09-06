@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+cd "$(dirname "$0")/.."
 # beta=100, third attempt.  The 398-step annealed run diverged *away* from a
 # good warm start (E climbed 3.1 -> 7.7 by iteration 250), and the measured
 # out_scale says why: it settled at 2.27e+02, so h*score = 226/398 = 0.57 per

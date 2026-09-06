@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+cd "$(dirname "$0")/.."
 # Final attempt at a beta=100 control that is usable on a *coarse* grid.
 #
 # What we know now.  The 796-step run learned a control that is essentially

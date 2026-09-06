@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+cd "$(dirname "$0")/.."
 # beta=100 leg of the annealing chain, warm-started from the beta=50 control
 # that run_anneal.sh just produced (dE = 0.0685 at 398 steps).  Split out
 # because run_train exits nonzero on a failed gate, which killed the original

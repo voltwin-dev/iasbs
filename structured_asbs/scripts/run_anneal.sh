@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+cd "$(dirname "$0")/.."
 # The two remaining hypotheses for the beta >= 50 failure, tested together.
 #
 #   (C) time discretisation: the score is O(beta) and the Euler step was 1/199,

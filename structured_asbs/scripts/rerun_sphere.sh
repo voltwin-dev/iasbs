@@ -1,4 +1,5 @@
 #!/bin/bash
+cd "$(dirname "$0")/.."
 set -x
 PY=/root/miniconda3/envs/SML_env/bin/python
 CK=ckpt

@@ -1,4 +1,5 @@
 #!/bin/bash
+cd "$(dirname "$0")/.."
 # Re-run every headline experiment with --ckpt-dir so the learned control and
 # the raw terminal samples are on disk for figure generation.
 set -x

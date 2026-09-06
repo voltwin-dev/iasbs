@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+cd "$(dirname "$0")/.."
 # Rerun the two betas that diverged (50, 100) with the scale-free label
 # parametrisation of ScoreNet.  Every other flag is byte-identical to the
 # stiefel_fill run recorded in json/results_stiefel_fill.json, so the before /

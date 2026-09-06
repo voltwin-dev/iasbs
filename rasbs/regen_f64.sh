@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+cd "$(dirname "$0")/../structured_asbs"   # json/ and ckpt/ live there
 # Regenerate the beta = 2 checkpoints in float64 so figure 7 can draw the
 # orthogonality residual from disk instead of skipping it.  Same configuration
 # and seed as the runs that produced the headline numbers; only the storage
@@ -7,7 +8,7 @@ set -e
 PY=/root/miniconda3/envs/SML_env/bin/python
 export CUDA_VISIBLE_DEVICES=1
 
-$PY -u rasbs_port.py --betas 2 --tag rasbs --ckpt-dir ckpt \
+$PY -u ../rasbs/rasbs_port.py --betas 2 --tag rasbs --ckpt-dir ckpt \
     --out json/results_rasbs_b2_f64.json
 
 $PY -u stiefel.py train --betas 2 \

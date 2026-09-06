@@ -1,3 +1,4 @@
+cd "$(dirname "$0")/.."
 set -x
 P="conda run -n SML_env python -u occupation.py"
 echo "### scale m=N=32"

@@ -1,3 +1,4 @@
+cd "$(dirname "$0")/.."
 set -x
 P="conda run -n SML_env python -u occupation.py train --iters 1500 --eval-every 250 --n-samples 20000"
 echo "### full-sum label, bregman"

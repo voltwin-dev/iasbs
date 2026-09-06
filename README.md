@@ -4,18 +4,34 @@ Experimental package for the paper. One standalone script per experiment, one
 small shared utility file, no framework machinery — the layout deliberately
 follows the R-ASBS repository's style.
 
+Our method and the baseline live in separate directories, so that no reader has
+to take on trust which code produced which column.
+
 ```
-common.py        shared kernels, quadrature, Stiefel/S^3 helpers, checkpoint IO
-fixed_ising.py   Exp A  fixed-magnetisation Ising      (bijective discrete)
-occupation.py    Exp B  occupation process             (non-bijective discrete)
-sphere.py        Exp C  S^2                            (scalar Killing readout)
-stiefel.py       Exp D  St(4,2)                        (matrix Killing readout)
-rasbs_port.py    faithful PyTorch port of R-ASBS alg2_stiefel.m
-tests_math.py    standalone mathematical unit tests
-figures.py       all paper figures + the comparison table
-gallery.py       sample gallery -- the samples themselves, not their metrics
-json/            every results_*.json the figures and tables are built from
+structured_asbs/          OUR method
+  common.py               shared kernels, quadrature, Stiefel/S^3 helpers, ckpt IO
+  fixed_ising.py          Exp A  fixed-magnetisation Ising   (bijective discrete)
+  occupation.py           Exp B  occupation process      (non-bijective discrete)
+  sphere.py               Exp C  S^2                       (scalar Killing readout)
+  stiefel.py              Exp D  St(4,2)                   (matrix Killing readout)
+  tests_math.py           standalone mathematical unit tests
+  figures.py              all paper figures + the comparison table
+  gallery.py              sample gallery -- the samples, not their metrics
+  scripts/                the shell scripts that produced our json/ entries
+  json/  ckpt/  fig/      artifacts (shared: the figures overlay both methods)
+
+rasbs/                    THE BASELINE, kept apart from our code
+  rasbs_port.py           faithful PyTorch port of R-ASBS alg2_stiefel.m
+  rasbs_steps.sh          their beta = 2 step ablation
+  rasbs_steps_highbeta.sh their beta = 50/100 step ablation
+  regen_f64.sh            float64 rerun at beta = 2
 ```
+
+`json/`, `ckpt/` and `fig/` are deliberately **not** split. Most figures plot
+ours and theirs on the same axes, and the file names (`results_rasbs_*` vs the
+rest) already say which is which; two artifact trees would buy nothing and cost
+a second search path in every loader. Every script in `rasbs/` `cd`s into
+`structured_asbs/` first, so those paths are identical either way.
 
 Four benchmarks, in order of increasing structure: two discrete state spaces
 where the answer can be enumerated exactly, then two manifolds where it cannot.
@@ -45,9 +61,9 @@ rerunning their algorithm. Nothing is inferred.
 |---|---|---|
 | north mass 0.438, error 0.062 | Sphere | **quoted** — arXiv:2608.25838v1 §4.1 states "R–ASBS allocates 43.8% of its particles to the northern hemisphere"; we round it to 0.438. It is prose, not a table |
 | Langevin MCMC 86% single-basin | Sphere | **quoted** — same paragraph |
-| the 14-row β energy table, `\|X'X-I\|` = 3.4e-07, `\|E[XX']-target\|` = 0.132 | Stiefel | `rasbs_port.py` → `json/results_rasbs_stiefel.json`, `json/results_rasbs_b2_f64.json` |
-| β = 2 step ablation, `N` = 32…512 | Stiefel | `rasbs_steps.sh` → `json/results_rasbs_steps_{32,64,128,256,512}.json` |
-| β = 50/100 step ablation, `N` = 199/512/1024 | Stiefel | `rasbs_steps_highbeta.sh` → `json/results_rasbs_highbeta_steps_{199,512,1024}.json` |
+| the 14-row β energy table, `\|X'X-I\|` = 3.4e-07, `\|E[XX']-target\|` = 0.132 | Stiefel | `rasbs/rasbs_port.py` → `json/results_rasbs_stiefel.json`, `json/results_rasbs_b2_f64.json` |
+| β = 2 step ablation, `N` = 32…512 | Stiefel | `rasbs/rasbs_steps.sh` → `json/results_rasbs_steps_{32,64,128,256,512}.json` |
+| β = 50/100 step ablation, `N` = 199/512/1024 | Stiefel | `rasbs/rasbs_steps_highbeta.sh` → `json/results_rasbs_highbeta_steps_{199,512,1024}.json` |
 | geometric-surrogate floor ≈ 0.46 | Stiefel | Richardson extrapolation in `1/N` of the two rows above — derived here, not measured directly, and labelled as such in the text |
 
 `rasbs_port.py` is pinned to upstream commit `bb71d14` (2026-08-28); the
@@ -60,6 +76,8 @@ experiment exists in their paper or their repository.
 
 Checkpoints under `ckpt/` are not committed (they are 1.4 GB); the
 `json/results_*.json` files are, and every table here is built from them.
+
+All commands below are run from `structured_asbs/`.
 
 ```bash
 python tests_math.py                 # mathematical unit tests
@@ -399,7 +417,7 @@ PLAN §9.3 predicts exactly this but warns *do not claim such a floor before
 measuring it*. Measured at β = 2, where their bias peaks, everything except the
 step count held fixed:
 
-R-ASBS row from `rasbs_steps.sh` → `json/results_rasbs_steps_*.json`; our row
+R-ASBS row from `rasbs/rasbs_steps.sh` → `json/results_rasbs_steps_*.json`; our row
 from `stiefel.py`'s `--sweep` → `json/results_stiefel_sweep.json`.
 
 | N_steps | 32 | 64 | 128 | 256 | 512 |
@@ -417,7 +435,7 @@ is O(1) per step at β = 100 on a 199-point grid, and our sampler falls apart
 there — that is the honest matched-grid number and R-ASBS beats us by an order
 of magnitude:
 
-R-ASBS rows from `rasbs_steps_highbeta.sh` →
+R-ASBS rows from `rasbs/rasbs_steps_highbeta.sh` →
 `json/results_rasbs_highbeta_steps_*.json`; our rows from
 `json/results_stiefel_anneal_b{50,100}.json` and
 `results_stiefel_anneal_b100_fine.json`.
@@ -501,15 +519,15 @@ refreshes the pre-change β = 2 pair.
   high-dimensional one.
 
 ```bash
-python rasbs_port.py --check-retraction        # GS == sign-corrected QR
-python rasbs_port.py --out json/results_rasbs_stiefel.json
+python ../rasbs/rasbs_port.py --check-retraction   # GS == sign-corrected QR
+python ../rasbs/rasbs_port.py --out json/results_rasbs_stiefel.json
 python stiefel.py ref --betas "0.001,0.01,0.1,0.5,1.3,2,5,7,10,20,50,100"
 python stiefel.py verify                       # gate D0, incl. spin-clock test
-bash rasbs_steps.sh                            # their beta=2 step ablation
-bash rasbs_steps_highbeta.sh                   # their beta=50/100 step ablation
-bash regen_f64.sh                              # float64 rerun at beta=2
+bash ../rasbs/rasbs_steps.sh                   # their beta=2 step ablation
+bash ../rasbs/rasbs_steps_highbeta.sh          # their beta=50/100 step ablation
+bash ../rasbs/regen_f64.sh                     # float64 rerun at beta=2
 ```
 
-`rasbs_steps.sh` and `rasbs_steps_highbeta.sh` do not pass `--ckpt-dir`, so
+`rasbs/rasbs_steps.sh` and `rasbs/rasbs_steps_highbeta.sh` do not pass `--ckpt-dir`, so
 those eleven R-ASBS runs leave `json/` entries but no checkpoint; every other
 run in this repository writes one.

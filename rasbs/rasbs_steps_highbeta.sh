@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+cd "$(dirname "$0")/../structured_asbs"   # json/ and ckpt/ live there
 # Fairness control for the high-beta write-up.
 #
 # Our beta = 50 / 100 error shrinks under grid refinement (4.39 -> 0.010 at
@@ -14,6 +15,6 @@
 PY=/root/miniconda3/envs/SML_env/bin/python
 export CUDA_VISIBLE_DEVICES=0
 for N in 199 512 1024; do
-  $PY -u rasbs_port.py --betas 50,100 --steps $N --epochs 1000 \
+  $PY -u ../rasbs/rasbs_port.py --betas 50,100 --steps $N --epochs 1000 \
       --n-samples 100000 --out json/results_rasbs_highbeta_steps_$N.json
 done
