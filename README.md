@@ -16,6 +16,7 @@ structured_asbs/          OUR method
   occupation.py           Exp B  occupation process      (non-bijective discrete)
   sphere.py               Exp C  S^2                       (scalar Killing readout)
   stiefel.py              Exp D  St(4,2)                   (matrix Killing readout)
+  earthquake.py           Exp E  S^2, real data            (vMF mixture, 3343 modes)
   tests_math.py           standalone mathematical unit tests
   figures.py              all paper figures + the comparison table
   gallery.py              sample gallery -- the samples, not their metrics
@@ -40,10 +41,13 @@ Every entry point calls `common.use_repo_root()` before parsing arguments, so
 the bare relative paths (`json/results_*.json`, `ckpt/`, `fig/`) resolve to
 these root directories no matter which directory the script was launched from.
 
-Four benchmarks, in order of increasing structure: two discrete state spaces
-where the answer can be enumerated exactly, then two manifolds where it cannot.
+Five benchmarks, in order of increasing structure: two discrete state spaces
+where the answer can be enumerated exactly, then two manifolds where it cannot,
+then one real dataset on S² whose target happens to be exactly solvable anyway.
 Each section below carries its own configuration, results, figures, limitations
-and reproduction commands. Every number is what the committed
+and reproduction commands. **The earthquake experiment fails two of its own
+gates**; it is reported in full rather than dropped. Every number is what the
+committed
 `json/results_*.json` files were produced with, and each of those files also
 carries its own full `config` block, so any number here traces back to the
 flags that made it.
@@ -443,6 +447,125 @@ in the residual.
 python structured_asbs/sphere.py verify              # gate C0
 python structured_asbs/sphere.py train --antithetic
 python structured_asbs/remeasure.py sphere           # every table in this section, from ckpt/
+```
+
+---
+
+## Earthquakes
+
+**Experiment E — S², real data, and the one experiment we do not pass.** The
+target is the epicentre distribution of the 4,776 magnitude ≥ 6.0 earthquakes in
+`rasbs_ref/query.csv`, the USGS query R-ASBS ship with their repository and use
+for their §4.2 figure. Each epicentre `mᵢ` becomes a von Mises–Fisher mode:
+
+```
+π(x) ∝ (1/N) Σᵢ exp(κ ⟨mᵢ, x⟩)
+```
+
+at `κ = 600`, so each mode has angular width ≈ κ^(−1/2) ≈ 2.4°. We fit on a
+random 70% (3,343 modes) and hold out the remaining 30% (1,433) to check that
+the sampler is reproducing a distribution rather than memorising a point set.
+
+The reason this target is worth the trouble is that it is **exactly solvable
+despite being real data.** Because `∫_{S²} exp(κ⟨m, x⟩) dx = 4π sinh(κ)/κ` does
+not depend on `m`, the normalising constant of every mode is the same, so π is
+*exactly* an equal-weight vMF(κ) mixture. Two things follow that a generic
+multimodal benchmark does not give you:
+
+- **iid reference samples are available in closed form** — pick a mode
+  uniformly, then draw from vMF(κ) by inverse CDF, `w = 1 + log(u + (1−u)
+  e^(−2κ))/κ`. So every metric below has a measured finite-sample floor, not a
+  guessed one.
+- **log Z is closed form**: `log(4π sinh κ / κ) = 595.4409474111932` at κ = 600.
+
+R-ASBS use the same dataset but report only a plot, so there is no number to
+quote; the R-ASBS column here is **pending** until `rasbs/rasbs_sphere_port.py`
+is written and run.
+
+| | configuration |
+|---|---|
+| script | `earthquake.py` |
+| target | equal-weight vMF mixture, `κ = 600`, 3,343 modes (70% split) |
+| data | `rasbs_ref/query.csv`, 4,776 quakes, M ≥ 6.0 |
+| source `x_0` | fixed point on S² (Dirac) |
+| network | multi-scale random-Fourier score net, hidden 512, **931,331** parameters |
+| κ schedule | annealed 150 → 300 → 450 → 600, one warm-started net + EMA |
+| integration steps | 512 |
+| iters × inner | 6000 × 16 |
+| batch / minibatch | 2048 / 4096 |
+| lr / EMA | 1e-3 / 0.999 |
+| drift clip | 200 |
+| eval samples | 100,000 |
+
+### Results
+
+| metric | ours | iid floor | ratio |
+|---|---:|---:|---:|
+| mean energy ⟨E⟩ (ref −594.7238) | **−594.8009** | −594.7307 | — |
+| ΔE | **−0.0771** | −0.0069 | 1.3e−4 relative |
+| KS(E) — **gate E1** | **0.10048** | 0.00327 | **31×** ✗ |
+| mode-histogram TV — **gate E2** | **0.50884** | 0.08910 | **5.7×** ✗ |
+| KS(angle to nearest mode) | **0.08048** | 0.00744 | 11× |
+| mode coverage (ref 0.9737) | **0.7679** | 0.9707 | — |
+| energy distance | **0.30171** | 0.00031 | 970× |
+| \|‖x‖−1\| — **gate E3** | **2.2e−16** | 2.2e−16 | ✓ |
+
+**E1 and E2 fail.** The mean energy is right to 1.3e−4 relative and the
+constraint is exact, but the *law* is not: the sampler reaches only 77% of the
+3,343 modes against the reference's 97%, and its mode histogram is half a
+TV unit away from uniform-over-modes.
+
+It is not overfitting. Evaluated against the 1,433 **held-out** modes the
+sampler never saw, KS(E) is 0.05457 and coverage 0.88625 — *better* than on the
+modes it trained on (0.10048 / 0.7679), with mode TV essentially unchanged at
+0.51013. A memoriser would show the opposite gap.
+
+The training trace says the failure is specific. Over the four κ stages, ΔE
+improved monotonically (5.47 → −0.07), KS(θ) improved monotonically
+(0.495 → 0.080), and mode TV **never improved at all** — it oscillated in
+0.34–0.55 for the entire run, best 0.339 at the κ = 300 stage, and drifted back
+to 0.509 by the end. Within the final κ = 600 block, mode TV went 0.481 → 0.509
+and coverage 0.825 → 0.767 while KS(θ) kept improving. So the sampler
+progressively sharpens onto the correct radial and angular *profile* around the
+modes it has, while quietly abandoning modes. Getting the profile right and the
+mode weights wrong is exactly the failure mode a mean-energy-only report would
+hide, which is why coverage and mode TV are gated.
+
+**What we have not measured, and therefore do not claim.** The decisive control
+was never run: `earthquake.py exact` — the same integrator with the score
+computed by quadrature instead of learned — has only been run at a reduced
+κ = 20, where it is clean first-order with no bias floor. Until it is run at
+κ = 600 we cannot say whether mode TV ≈ 0.51 is a 512-step discretisation floor
+that no controller could beat, or a genuine failure of the learned control.
+Two specific suspects, in order:
+
+1. `--max-drift 200` clips the drift, whose natural magnitude at κ = 600 is
+   O(κ). The clip value was chosen by analogy with R-ASBS's 30 and never tuned.
+   A clip below the true drift would systematically prevent transitions between
+   modes, which is the observed symptom.
+2. 512 steps may be too coarse for 2.4°-wide modes.
+
+Both are cheap to test (`exact --kappa 600 --sweep 64 128 256 512`, ~10 min, no
+network) and neither has been tested, so the section is reported as a failure
+with an open cause rather than a diagnosis.
+
+**Limitations.**
+
+- **Gates E1 and E2 fail**, as above. This is the one benchmark in the
+  repository where our sampler does not reach its own threshold.
+- **The exact-control baseline is missing at κ = 600**, so the failure is not
+  yet attributed to the learned control as opposed to the integrator.
+- **No R-ASBS column yet.** They use the same dataset but publish only a
+  figure, so a number requires porting their sphere algorithm; that port is not
+  written.
+- **Still S².** Real data, but a 2-dimensional manifold.
+
+```bash
+python structured_asbs/earthquake.py verify                    # sampler + log Z identities
+python structured_asbs/earthquake.py exact --kappa 20          # quadrature control, step sweep
+python structured_asbs/earthquake.py train --kappa 600 --anneal 150 300 450 600 \
+    --steps 512 --iters 6000 --tag earthquake_k600 \
+    --out json/results_earthquake_k600.json
 ```
 
 ---
