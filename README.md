@@ -155,7 +155,7 @@ against an iid floor of 0.0511.
 
 At matched budget the Poisson loss beats MSE but only narrowly (TV 0.0496 vs
 0.0509 at 128 steps); doubling to 256 steps and 3000 iters gives 0.0416. The
-learned log-multiplier, compared at all 12,870 states × 40 edges, has mean
+learned log-multiplier, compared at all 12,870 states × 32 edges, has mean
 absolute error 0.060 at t = 0, 0.028–0.048 in the middle and 0.170 at t → 1 —
 the terminal end, where the sharp state dependence encoding the Gibbs weight
 lives, is where the residual TV comes from.
@@ -164,11 +164,81 @@ lives, is where the residual TV comes from.
 beside 50 drawn by exact enumeration; `fig2_discrete_correctness` carries the
 metric panel.
 
+### Scaling the exact check: the 5×5 lattice
+
+The 4×4 lattice is small enough that "exact" costs nothing. The point of
+redoing it at 5×5 is that the constraint set grows from 12,870 states to
+**C(25, 12) = 5,200,300** — a factor of 404 — while everything above stays
+computable: the chain's law is still propagated by enumeration, so the TV
+column is still exact. Same target, `τ = 2`, magnetisation fixed at zero on a
+25-spin odd lattice (so k = 12 rather than 12.5), 50 edges, same network
+(hidden 512, 864,369 parameters), Poisson loss, `--iters 6000 --inner 40`.
+Source `ckpt/ising_t1_L5_s512.pt` and `json/results_ising_t1_L5*.json`;
+`remeasure.py ising5` regenerates the whole subsection.
+
+| metric | 4×4 (12,870) | 5×5 (5,200,300) |
+|---|---:|---:|
+| TV of the chain law vs π | 0.0416 | **0.0770** |
+| KL(ours ‖ π) | 0.0056 | **0.0193** |
+| Hellinger | 0.0372 | **0.0692** |
+| ESS fraction | 0.9885 | **0.9617** |
+| max_x \|p(x)/π(x) − 1\| | 224.3 | **62,240** |
+| TV of the energy histogram | 0.0262 | **0.0347** |
+| mean energy ⟨E⟩ (exact) | −8.9850 (−9.2457) | **−17.1348** (−17.6038) |
+| heat capacity (exact) | 6.0237 (5.8843) | **7.3246** (7.1195) |
+| ⟨sᵢsⱼ⟩ (exact) | 0.2808 (0.2889) | **0.3427** (0.3521) |
+| constraint violations / 200,000 | 0 | **0** |
+
+The constraint still holds structurally — 404× more states, still zero
+violations — and the bulk agreement degrades only about twofold. The tail does
+not: the max ratio goes up 280×, because π's smallest atom falls by roughly the
+same factor and the controller has no incentive to resolve it.
+
+**The interesting result is that more integration steps stop helping.** Running
+the exact control (multiplier from enumeration) gives TV 0.09849, 0.04823,
+0.02377, 0.01179 at 64/128/256/512 steps — still exactly first-order, still no
+bias floor, mass leak ≤ 5e-15. But the learned controller does not track it:
+
+| steps | iters | exact-control TV (the floor) | learned TV | ratio |
+|---:|---:|---:|---:|---:|
+| 256 | 3000 | 0.02377 | 0.0923 | 3.9× |
+| 512 | 6000 | 0.01179 | 0.0770 | **6.5×** |
+
+Doubling the grid halved the floor and moved the achieved TV by 17%. At 4×4 the
+same comparison is 0.0416 against a floor of 0.01681, a ratio of 2.5×, and
+refining the grid there *did* help. So the two lattices are limited by different
+things: at 4×4 the residual is mostly the integrator, at 5×5 it is mostly the
+controller. Adding steps at 5×5 is the wrong knob; capacity, iterations or a
+better terminal parametrisation is the right one.
+
+The multiplier error says where: mean absolute error over all 5,200,300 states ×
+50 edges is 0.088 at t = 0, 0.053–0.089 in the middle, and **0.310 (max 5.59)**
+at t → 1, against 0.170 (max 1.92) for the same quantity at 4×4. The terminal
+end is where the Gibbs weight's state dependence is sharpest, it is where the
+error concentrated at 4×4, and enlarging the state space made it worse rather
+than merely larger.
+
+One methodological note. The 200,000 stored samples give an empirical TV of
+0.3546 against an iid floor of 0.3231 ± 0.0008 — both numbers are dominated by
+having 26 states per sample, not by sampler quality, and the exact control
+scores 0.3298 on the same measure despite a true TV of 0.0118. That is exactly
+why this experiment propagates the law instead of estimating it: at this size a
+sample-based TV cannot distinguish a good sampler from a perfect one.
+
+We report the run as a gate **failure**: the A1 threshold of TV < 0.05 was
+inherited unchanged from 4×4 and the 5×5 run missed it at 0.0770. The gate was
+not re-tuned for a 404× larger state space, so this is a threshold that does not
+transfer, not a run that misbehaved. A2 (zero violations) passed.
+
 **Limitations.**
 
-- **Only the 4×4 lattice.** This is the size at which the constrained
-  distribution can be enumerated exactly, which is the entire reason for the
-  experiment — but it does mean we have no evidence about larger lattices.
+- **Two lattice sizes, both small.** 4×4 and 5×5 are the sizes at which the
+  constrained distribution can be enumerated exactly, which is the entire
+  reason for the experiment — but it does mean we have no evidence beyond
+  5.2 million states.
+- **The 5×5 controller is not converged.** The step ablation above shows the
+  error is learning-limited there, and we did not run the larger-capacity or
+  longer-schedule variants that would say how much of the 0.0770 is removable.
 - **No R-ASBS counterpart exists**, in either direction: their method is
   formulated for embedded Riemannian manifolds and does not apply to discrete
   state spaces. The comparison here is against exact enumeration instead.
@@ -178,6 +248,12 @@ python structured_asbs/fixed_ising.py verify         # gate A0
 python structured_asbs/fixed_ising.py exact          # gate A0/A1/A2 with the exact control
 python structured_asbs/fixed_ising.py train
 python structured_asbs/remeasure.py ising            # every table in this section, from ckpt/
+# 5x5: 5,200,300 states, still enumerated exactly
+python structured_asbs/fixed_ising.py exact --L 5 --steps-sweep 64 128 256 512 \
+    --tag ising_t1_L5_exact --out json/results_ising_t1_L5_exact.json
+python structured_asbs/fixed_ising.py train --L 5 --steps 512 --iters 6000 \
+    --hidden 512 --tag ising_t1_L5_s512 --out json/results_ising_t1_L5_s512.json
+python structured_asbs/remeasure.py ising5
 ```
 
 ---

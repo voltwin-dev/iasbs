@@ -133,7 +133,8 @@ def ising_report(tag):
     return out
 
 
-def print_ising(tag="ising_poisson256"):
+def print_ising(tag="ising_poisson256", exact_json="results_ising_exact.json",
+                variants=("ising_mse", "ising_poisson", "ising_poisson256")):
     import json
     m = ising_report(tag)
 
@@ -141,7 +142,7 @@ def print_ising(tag="ising_poisson256"):
     # multiplier taken from enumeration instead of learned.  It is the ceiling
     # the learned controller is trying to reach, and it must be labelled as
     # such rather than folded into the learned column.
-    with open(os.path.join("json", "results_ising_exact.json")) as f:
+    with open(os.path.join("json", exact_json)) as f:
         ex = json.load(f)
     print("\n### Ising, exact control vs integration steps\n")
     print("| steps | TV vs pi | E-hist TV | <E> | mass leak |")
@@ -185,7 +186,7 @@ def print_ising(tag="ising_poisson256"):
     print("| loss | steps | iters | TV | KL(ours ‖ pi) | Hellinger "
           "| E-hist TV | <E> |")
     print("|---|---:|---:|---:|---:|---:|---:|---:|")
-    for t in ["ising_mse", "ising_poisson", "ising_poisson256"]:
+    for t in variants:
         if not os.path.exists(os.path.join("ckpt", f"{t}.pt")):
             continue
         r = ising_report(t)
@@ -364,11 +365,18 @@ def print_sphere():
 def main():
     C.use_repo_root()
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["ising", "sphere", "all"])
-    ap.add_argument("--tag", default="ising_poisson256")
+    ap.add_argument("cmd", choices=["ising", "ising5", "sphere", "all"])
+    ap.add_argument("--tag", default="")
     a = ap.parse_args()
     if a.cmd in ("ising", "all"):
-        print_ising(a.tag)
+        print_ising(a.tag or "ising_poisson256")
+    if a.cmd in ("ising5", "all"):
+        # L = 5: same code path, 5,200,300 states instead of 12,870.  The two
+        # runs differ only in the integration grid (256 vs 512 steps), so the
+        # "loss and step count" table degenerates to a step-count table.
+        print_ising(a.tag or "ising_t1_L5_s512",
+                    exact_json="results_ising_t1_L5_exact.json",
+                    variants=("ising_t1_L5", "ising_t1_L5_s512"))
     if a.cmd in ("sphere", "all"):
         print_sphere()
     return 0
