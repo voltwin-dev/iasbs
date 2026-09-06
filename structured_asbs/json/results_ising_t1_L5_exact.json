@@ -1,0 +1,68 @@
+{
+  "config": {
+    "cmd": "exact",
+    "L": 5,
+    "J": 1.0,
+    "tau": 2.0,
+    "gamma": 10.0,
+    "n_samples": 200000,
+    "out": "json/results_ising_t1_L5_exact.json",
+    "ckpt_dir": "ckpt",
+    "tag": "ising_t1_L5_exact",
+    "steps_sweep": [
+      64,
+      128,
+      256,
+      512
+    ]
+  },
+  "rows": [
+    {
+      "tag": "exact-control steps=64",
+      "TV": 0.09848838510794808,
+      "mean_energy": -16.46982981641345,
+      "exact_mean_energy": -17.603820555033877,
+      "energy_err": 1.133990738620426,
+      "steps": 64,
+      "energy_hist_TV": 0.07835739962838077,
+      "mass_leak": 0.0,
+      "sec": 6.14
+    },
+    {
+      "tag": "exact-control steps=128",
+      "TV": 0.048234989092934895,
+      "mean_energy": -17.05832475232211,
+      "exact_mean_energy": -17.603820555033877,
+      "energy_err": 0.5454958027117662,
+      "steps": 128,
+      "energy_hist_TV": 0.03846832649091026,
+      "mass_leak": 1.1102230246251565e-15,
+      "sec": 12.15
+    },
+    {
+      "tag": "exact-control steps=256",
+      "TV": 0.02377227309807161,
+      "mean_energy": -17.33768767229418,
+      "exact_mean_energy": -17.603820555033877,
+      "energy_err": 0.26613288273969715,
+      "steps": 256,
+      "energy_hist_TV": 0.0189533219944237,
+      "mass_leak": 1.1102230246251565e-16,
+      "sec": 24.26
+    },
+    {
+      "tag": "exact-control steps=512",
+      "TV": 0.011785459719154394,
+      "mean_energy": -17.472626441510528,
+      "exact_mean_energy": -17.603820555033877,
+      "energy_err": 0.13119411352334964,
+      "steps": 512,
+      "energy_hist_TV": 0.009390429105450557,
+      "mass_leak": 4.6629367034256575e-15,
+      "sec": 48.52
+    }
+  ],
+  "violations": 0,
+  "empirical_TV": 0.3298450020178982,
+  "iid_TV_floor": 0.32544616909612245
+}

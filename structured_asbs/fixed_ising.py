@@ -51,6 +51,7 @@ import time
 
 import numpy as np
 import torch
+from scipy.special import gammaln
 
 import common as C
 
@@ -85,6 +86,8 @@ class FixedIsingSpace:
         lut = np.full(1 << n, -1, dtype=np.int64)
         lut[masks] = np.arange(M)
         self.masks = masks
+        self.pow2 = torch.tensor(pow2, device=device)
+        self.lut_t = torch.tensor(lut, device=device)
 
         # occupied / empty site indices per state
         occ = np.nonzero(S == 1)[1].reshape(M, k)
@@ -144,6 +147,52 @@ class FixedIsingSpace:
 
         # W[x, j] = sum_{x1 : d(x, x1) = j} f1(x1)   ->  phi_t(x) = sum_j k_j W
         self.W = self._distance_weight_matrix(self.f1)
+        self._bridge_tables()
+
+    def _bridge_tables(self):
+        """Occupancy classes for the reference bridge.
+
+        Split the sites by membership in (x_0, x_1): A = both, B = x_0 only,
+        C = x_1 only, D = neither.  A state holding (a, b, c, d) sites in the
+        four blocks has d(x_0, x) = k - a - b and d(x_1, x) = k - a - c, so the
+        bridge weight is constant on a class and the class has C(|A|, a)...
+        members.  Sampling a class and then a uniform subset of each block is
+        exact and costs O(class count) instead of O(|Omega|) per draw.
+        """
+        n, k = self.n, self.k
+        J = min(k, n - k)
+        lc = lambda N, r: (gammaln(N + 1.0) - gammaln(r + 1.0)
+                           - gammaln(N - r + 1.0))
+        rows = []
+        for m in range(J + 1):
+            sz = (k - m, m, m, n - k - m)
+            cur = [(a, b, c, k - a - b - c,
+                    sum(lc(sz[i], v) for i, v in
+                        enumerate((a, b, c, k - a - b - c))))
+                   for a in range(sz[0] + 1)
+                   for b in range(sz[1] + 1)
+                   for c in range(sz[2] + 1)
+                   if 0 <= k - a - b - c <= sz[3]]
+            rows.append(cur)
+        Lm = max(len(r) for r in rows)
+        A = np.zeros((J + 1, Lm, 4), dtype=np.int64)
+        Wt = np.full((J + 1, Lm), -np.inf)
+        D0 = np.zeros((J + 1, Lm), dtype=np.int64)
+        D1 = np.zeros((J + 1, Lm), dtype=np.int64)
+        for m, cur in enumerate(rows):
+            for i, (a, b, c, d, w) in enumerate(cur):
+                A[m, i] = (a, b, c, d)
+                Wt[m, i] = w
+                D0[m, i] = k - a - b
+                D1[m, i] = k - a - c
+        dev = self.device
+        self.br_abcd = torch.tensor(A, device=dev)
+        self.br_lmult = torch.tensor(Wt, device=dev)
+        self.br_d0 = torch.tensor(D0, device=dev)
+        self.br_d1 = torch.tensor(D1, device=dev)
+        self.br_size = torch.tensor(
+            np.array([[k - m, m, m, n - k - m] for m in range(J + 1)]),
+            device=dev)
 
     # -- helpers -------------------------------------------------------------
 
@@ -152,13 +201,26 @@ class FixedIsingSpace:
         J = min(k, self.n - k)
         # the (chunk, M) distance block is the largest temporary here; cap it so
         # that L = 5 (M = 5.2e6) does not ask for a 42 GB allocation.
-        chunk = max(1, min(chunk, int(1e9) // max(M, 1)))
+        # the (chunk, M) overlap block is the largest temporary here; cap it so
+        # that L = 5 (M = 5.2e6) does not ask for a 42 GB allocation.  Overlaps
+        # are integers <= n, so half precision carries them exactly, and the
+        # fused kernel reads the block once instead of once per distance.
+        # (a block of 384 rows lands on a pathological Inductor config -- 20x
+        # slower than 768 -- so keep the row count a multiple of 256.)
+        chunk = max(256, min(chunk, int(8e9) // max(M, 1)) // 256 * 256)
+        Sh = self.Sf.half()
+
+        @torch.compile(dynamic=False)
+        def block(c):                                           # (c, M) -> (c, J+1)
+            return torch.stack([((c == (k - j)).to(f.dtype) * f).sum(1)
+                                for j in range(J + 1)], 1)
+
         W = torch.zeros(M, J + 1, device=self.device, dtype=f.dtype)
-        Sf = self.Sf
         for a in range(0, M, chunk):
             b = min(a + chunk, M)
-            d = k - torch.round(Sf[a:b] @ Sf.T).long()          # (c, M)
-            W[a:b].scatter_add_(1, d, f.unsqueeze(0).expand(b - a, M))
+            W[a:b] = block(Sh[a:b] @ Sh.T)
+            if M > 1e6 and a % (chunk * 500) == 0:
+                print(f"  W {a}/{M}", flush=True)
         return W
 
     def kappa_table(self, gammas):
@@ -167,14 +229,17 @@ class FixedIsingSpace:
                            1e-300) for g in gammas]
         return torch.tensor(np.log(np.stack(rows)), device=self.device)
 
-    def phi_grid(self, ts):
-        """Exact phi_t(x) for every state and every t in ts.  (T, M)."""
+    def kappa_grid(self, ts):
+        """Reference kernel by distance for every t in ts.  (T, J+1)."""
         Gam = np.maximum(self.gamma * (1.0 - np.asarray(ts, dtype=np.float64)),
                          1e-12)
         kap = np.stack([np.maximum(C.binary_orbit_kernel(self.n, self.k, g),
                                    1e-300) for g in Gam])
-        K = torch.tensor(kap, device=self.device)             # (T, J+1)
-        return K @ self.W.T                                   # (T, M)
+        return torch.tensor(kap, device=self.device)          # (T, J+1)
+
+    def phi_grid(self, ts):
+        """Exact phi_t(x) for every state and every t in ts.  (T, M)."""
+        return self.kappa_grid(ts) @ self.W.T                 # (T, M)
 
     def energies_of(self, X):
         """E for an explicit batch of binary states.  X: (..., n)."""
@@ -247,14 +312,19 @@ class ExactControl:
     def __init__(self, space, steps):
         self.space = space
         ts = np.arange(steps) / steps
-        phi = space.phi_grid(ts)                               # (T, M)
-        self.logphi = torch.log(phi.clamp_min(1e-300))
+        # the (T, M) grid is 21 GB at L = 5, T = 512, so keep only the (T, J+1)
+        # kernel table and rebuild one row on demand (M x (J+1) flops).
+        self.K = space.kappa_grid(ts)                          # (T, J+1)
         self.ts = ts
         self.steps = steps
+        self._row_cache = (-1, None)
 
     def _row(self, t):
         s = min(int(round(t * self.steps)), self.steps - 1)
-        return self.logphi[s]
+        if self._row_cache[0] != s:
+            phi = self.K[s] @ self.space.W.T                   # (M,)
+            self._row_cache = (s, torch.log(phi.clamp_min(1e-300)))
+        return self._row_cache[1]
 
     def all_states(self, t):
         lp = self._row(t)
@@ -340,14 +410,29 @@ def terminal_labels(space, X1_idx):
 
 
 def sample_bridge(space, X1_idx, t_idx, log_kap0, log_kap1, generator=None):
-    """Exact reference-bridge sample X_t | x_0, X_1 by enumeration."""
-    d1 = (space.k
-          - torch.round(space.Sf @ space.Sf[X1_idx].T).long()).T   # (B, M)
-    lw = log_kap0[t_idx][:, space.dist0]                       # (B, M)
-    lw = lw + torch.gather(log_kap1[t_idx], 1, d1)
+    """Exact reference-bridge sample X_t | x_0, X_1 by occupancy class."""
+    B, n = X1_idx.shape[0], space.n
+    m = space.dist0[X1_idx]                                    # (B,)
+    lw = (space.br_lmult[m]
+          + torch.gather(log_kap0[t_idx], 1, space.br_d0[m])
+          + torch.gather(log_kap1[t_idx], 1, space.br_d1[m]))  # (B, Lm)
     lw = lw - lw.max(dim=1, keepdim=True).values
-    w = torch.exp(lw)
-    return torch.multinomial(w, 1, generator=generator).squeeze(1)
+    sel = torch.multinomial(torch.exp(lw), 1, generator=generator).squeeze(1)
+    cnt = space.br_abcd[m, sel]                                # (B, 4)
+    sizes = space.br_size[m]                                   # (B, 4)
+
+    # block label per site, then a random order that groups by block
+    blk = 2 * (1 - space.x0).unsqueeze(0) + (1 - space.S[X1_idx])
+    key = torch.rand(B, n, device=space.device, generator=generator)
+    order = torch.argsort(blk.to(key.dtype) * 2.0 + key, dim=1)
+    bs = torch.gather(blk, 1, order)
+    start = torch.cat([torch.zeros_like(sizes[:, :1]),
+                       sizes.cumsum(1)[:, :3]], dim=1)         # (B, 4)
+    pos = torch.arange(n, device=space.device).expand(B, n)
+    take = (pos - torch.gather(start, 1, bs)) < torch.gather(cnt, 1, bs)
+    x = torch.zeros(B, n, dtype=torch.int64, device=space.device)
+    x.scatter_(1, order, take.long())
+    return space.lut_t[(x * space.pow2).sum(dim=1)]
 
 
 # ============================================================================
@@ -542,7 +627,8 @@ def run_train(args):
             d = (le - ex).abs()
             errs.append((t, float(d.mean()), float(d.max())))
 
-    print("\n  learned vs exact log-multiplier (all 12870 states x 64 edges):")
+    print(f"\n  learned vs exact log-multiplier "
+          f"(all {space.M} states x {space.n_edges} edges):")
     for t, me, mx in errs:
         print(f"    t={t:.3f}   mean|a_learn - a_exact| = {me:.4f}   "
               f"max = {mx:.4f}")
