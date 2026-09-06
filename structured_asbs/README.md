@@ -36,6 +36,31 @@ following Adjoint Sampling; we never sample the source from a guessed
 distribution. This is the structural point of the method, and it is what the
 R-ASBS comparison in the Stiefel section turns on.
 
+### Where every R-ASBS number in this file comes from
+
+Two of them are quoted from the paper; all the rest we measured ourselves by
+rerunning their algorithm. Nothing is inferred.
+
+| R-ASBS number | section | source |
+|---|---|---|
+| north mass 0.438, error 0.062 | Sphere | **quoted** — arXiv:2608.25838v1 §4.1 states "R–ASBS allocates 43.8% of its particles to the northern hemisphere"; we round it to 0.438. It is prose, not a table |
+| Langevin MCMC 86% single-basin | Sphere | **quoted** — same paragraph |
+| the 14-row β energy table, `\|X'X-I\|` = 3.4e-07, `\|E[XX']-target\|` = 0.132 | Stiefel | `rasbs_port.py` → `json/results_rasbs_stiefel.json`, `json/results_rasbs_b2_f64.json` |
+| β = 2 step ablation, `N` = 32…512 | Stiefel | `rasbs_steps.sh` → `json/results_rasbs_steps_{32,64,128,256,512}.json` |
+| β = 50/100 step ablation, `N` = 199/512/1024 | Stiefel | `rasbs_steps_highbeta.sh` → `json/results_rasbs_highbeta_steps_{199,512,1024}.json` |
+| geometric-surrogate floor ≈ 0.46 | Stiefel | Richardson extrapolation in `1/N` of the two rows above — derived here, not measured directly, and labelled as such in the text |
+
+`rasbs_port.py` is pinned to upstream commit `bb71d14` (2026-08-28); the
+paper's own §4.1–4.3 report figures only, and its single results table
+(Table 2) is for the Wahba problem, which we do not attempt. That is why every
+comparison number below had to be regenerated rather than cited.
+
+The Ising and Occupation sections carry **no** R-ASBS column: no counterpart
+experiment exists in their paper or their repository.
+
+Checkpoints under `ckpt/` are not committed (they are 1.4 GB); the
+`json/results_*.json` files are, and every table here is built from them.
+
 ```bash
 python tests_math.py                 # mathematical unit tests
 python figures.py                    # all figures -> fig/
@@ -229,12 +254,13 @@ inverse-CDF sampling draws genuinely iid target points.
 
 ### Results
 
-The R-ASBS column is the number printed in their paper. We did not rerun their
-sphere sampler — see the limitation below.
+The R-ASBS column is quoted from their §4.1 text — "R–ASBS allocates 43.8% of
+its particles to the northern hemisphere" — not from a table, and not measured
+by us. We did not rerun their sphere sampler; see the limitation below.
 
-| metric | exact | R-ASBS (their paper) | ours |
+| metric | exact | R-ASBS (quoted, §4.1) | ours |
 |---|---:|---:|---:|
-| north mass | 0.500 | 0.438 | **0.4993 ± 0.0003** |
+| north mass | 0.500 | 0.438 (= 43.8%) | **0.4993 ± 0.0003** |
 | absolute north error | 0 | 0.062 | **0.0007 ± 0.0003** |
 | KS(x₃) | 0 | not reported | **0.0217 ± 0.0006** |
 | max norm residual | 0 | not reported | **2.2e-16** |
@@ -373,6 +399,9 @@ PLAN §9.3 predicts exactly this but warns *do not claim such a floor before
 measuring it*. Measured at β = 2, where their bias peaks, everything except the
 step count held fixed:
 
+R-ASBS row from `rasbs_steps.sh` → `json/results_rasbs_steps_*.json`; our row
+from `stiefel.py`'s `--sweep` → `json/results_stiefel_sweep.json`.
+
 | N_steps | 32 | 64 | 128 | 256 | 512 |
 |---|---:|---:|---:|---:|---:|
 | R-ASBS error | 0.805 | 0.661 | 0.601 | 0.526 | 0.493 |
@@ -387,6 +416,11 @@ At β ≥ 50 the same effect runs the other way first. The score is O(β), so `h
 is O(1) per step at β = 100 on a 199-point grid, and our sampler falls apart
 there — that is the honest matched-grid number and R-ASBS beats us by an order
 of magnitude:
+
+R-ASBS rows from `rasbs_steps_highbeta.sh` →
+`json/results_rasbs_highbeta_steps_*.json`; our rows from
+`json/results_stiefel_anneal_b{50,100}.json` and
+`results_stiefel_anneal_b100_fine.json`.
 
 | β | 199 | 398 | 512 | 796 | 1024 | 1592 | 3184 |
 |---:|---:|---:|---:|---:|---:|---:|---:|
@@ -471,4 +505,11 @@ python rasbs_port.py --check-retraction        # GS == sign-corrected QR
 python rasbs_port.py --out json/results_rasbs_stiefel.json
 python stiefel.py ref --betas "0.001,0.01,0.1,0.5,1.3,2,5,7,10,20,50,100"
 python stiefel.py verify                       # gate D0, incl. spin-clock test
+bash rasbs_steps.sh                            # their beta=2 step ablation
+bash rasbs_steps_highbeta.sh                   # their beta=50/100 step ablation
+bash regen_f64.sh                              # float64 rerun at beta=2
 ```
+
+`rasbs_steps.sh` and `rasbs_steps_highbeta.sh` do not pass `--ckpt-dir`, so
+those eleven R-ASBS runs leave `json/` entries but no checkpoint; every other
+run in this repository writes one.
