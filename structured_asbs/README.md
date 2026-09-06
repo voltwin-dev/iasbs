@@ -19,185 +19,34 @@ json/            every results_*.json the figures and tables are built from
 
 Four benchmarks, in order of increasing structure: two discrete state spaces
 where the answer can be enumerated exactly, then two manifolds where it cannot.
-Each has its own section below, carrying its own configuration, its own results
-and its own limitations.
+Each section below carries its own configuration, results, figures, limitations
+and reproduction commands. Every number is what the committed
+`json/results_*.json` files were produced with, and each of those files also
+carries its own full `config` block, so any number here traces back to the
+flags that made it.
 
----
+Run on a single NVIDIA A100 80GB (two available, used only to run independent
+experiments concurrently), PyTorch 2.5.1, CUDA 12.6, NumPy 2.4.6, conda
+environment `SML_env` (Python 3.11). Manifold state and all metrics are
+`float64`; the networks are `float32`.
 
-## Benchmarks
-
-Everything in this README is what the committed `json/results_*.json` files
-were produced with; each of those files also carries its own full `config`
-block, so any number here can be traced back to the flags that made it.
-
-**Hardware and software.** Single NVIDIA A100 80GB per run (two available, used
-only to run independent experiments concurrently). PyTorch 2.5.1, CUDA 12.6,
-NumPy 2.4.6, conda environment `SML_env` (Python 3.11). Manifold state and all
-metrics are `float64`; the networks are `float32`.
-
-**The source is a Dirac in every experiment.** This is the structural point of
-the method and it is what the whole R-ASBS comparison turns on, so it is worth
-stating plainly: we start from a *fixed point* `x_0` and learn a control that
-transports the reference process to the target, following Adjoint Sampling. We
-never sample the source from a guessed distribution. R-ASBS instead starts from
-**Haar**, which is only correct in the β → 0 limit — the correct initial law
-for the h-transform is `Haar · φ₀ / ⟨Haar, φ₀⟩`, and `φ₀` is not constant. That
-mismatch is the source-tilting bias measured in the Stiefel section.
-
-| | A: Ising | B: occupation | C: S² | D: St(4,2) |
-|---|---|---|---|---|
-| script | `fixed_ising.py` | `occupation.py` | `sphere.py` | `stiefel.py` |
-| state space | 4×4 periodic lattice, 16 spins, magnetisation fixed | 4 particles on 4 sites | unit sphere in R³ | 4×2 orthonormal frames |
-| target | `E = −J Σ_⟨ij⟩ s_i s_j`, `J = 1`, `τ = 2` | `π(η) ∝ Π_i Γ(η_i+d)/(η_i! Γ(d))`, `d = 0.5` | `E(x) = 6(1 − x₃²)`, `π ∝ exp(6x₃²)` | `E(X) = tr(XᵀHX)`, `H = diag(1,2,5,8)` |
-| temperature | `τ = 2` | `τ = 1` | `τ = 1` | `τ = 1/β`, β swept 1e-3 → 1e6 |
-| source `x_0` | fixed spin configuration | fixed occupancy | `(1, 0, 0)` | `E₀ = [e₁, e₂]` |
-| reference | exact enumeration | exact (matrix exponential) | exact inverse-CDF | MCMC, 2e5 chains × 3000 sweeps |
-| network | `SwapController`, hidden 512 | `OccController`, hidden 256 | `ScoreNet`, hidden 256 | `ScoreNet`, hidden 256 |
-| parameters | 670,464 | 139,536 | 136,963 | 139,528 |
-| integration steps | 128 | 128 | 128 | 199 |
-| iters × inner | 300 × 40 | 1500 × 4 | 4000 × 16 | 1500 × 8 |
-| batch / minibatch | 2048 / 1024 | 512 / 1024 | 8192 / 16384 | 2048 / 16384 |
-| lr | 3e-4 | 1e-3 | 1e-3 | 1e-3 |
-| EMA / buffer | — / 8 | — / 8 | 0.9995 / 4 | 0.9995 / 4 |
-| eval samples | 20,000 | 20,000 | 200,000 | 100,000 |
-| seeds | 1 | 1 | 5 | 1 |
-
-### Scale, stated plainly
-
-Most of these state spaces are small; one is not.
-
-| | state space | size | scaled? |
-|---|---|---|---|
-| A: Ising | 4×4 lattice, magnetisation 0 | C(16, 8) = 12,870 | **no** — 4×4 only |
-| B: occupation | m particles on N sites | C(m+N−1, N−1) | **yes** — up to 10⁶⁰⁰ |
-| C: S² | 2-manifold in R³ | continuous, dim 2 | n/a |
-| D: St(4,2) | 4×2 orthonormal frames | continuous, dim 5 | n/a |
-
-S² is 2-dimensional and St(4,2) is 5-dimensional. Apart from the occupation
-sweep, nothing here is a high-dimensional benchmark by the standards of the
-sampling literature. The occupation process is the one real scale test and it
-is run properly: same network, same code, only the state space grows.
-
-### Which R-ASBS experiments we reproduced: two of six
-
-| their script | problem | ours |
-|---|---|---|
-| `asbs_sphere_sampler.m` | bimodal S², `E = 6(1 − x₃²)` | ✔ `sphere.py`, same energy (their sampler itself is not re-run on this problem) |
-| `alg2_stiefel.m` | St(4,2), `E = tr(XᵀHX)`, spec(H) = {1,2,5,8} | ✔ `stiefel.py`, same H and same β grid, and their algorithm re-run by `rasbs_port.py` |
-| `earthquake_sphere_ex.m` | earthquake epicentres on S² | ✘ not attempted |
-| `cosmic_ray_ex.m` | arrival directions on the hemisphere S²₊ | ✘ not attempted |
-| `alg2_robotics.m` | 10-DOF planar IK, loop closure + obstacles | ✘ not attempted |
-| `asbs_m_wahba_so3.m` | robust Wahba problem on SO(3) | ✘ not attempted |
-
-The two we did reproduce are the two synthetic benchmarks with a known target,
-which are the only ones where an error against ground truth can be computed at
-all. The four we did not are their applied and higher-dimensional cases, and
-`alg2_robotics.m` in particular is a harder problem than anything in this
-repository. Our Ising and occupation experiments have no R-ASBS counterpart in
-either direction: their method is formulated for embedded Riemannian manifolds
-and does not apply to discrete state spaces.
-
-**R-ASBS baseline** (`rasbs_port.py`, a port of `alg2_stiefel.m` from commit
-`bb71d14`): two networks totalling **140,560** parameters (`netU` 70,408 +
-`netH` 70,152), 199 integration steps, batch 600, 1000 epochs, lr 1e-3, Haar
-source, ambient Euler step followed by a QR retraction. Parameter counts are
-within 1% of ours (139,528 vs 140,560) and the budget-matched comparison
-equalises oracle calls at 600,000 exactly.
-
-### Comparison scoreboard
-
-Reference column is exact where an exact value exists, otherwise an
-independent MCMC ground truth. The R-ASBS column is **measured**, never read
-off a published plot: the sphere numbers are the ones printed in their paper,
-the Stiefel numbers come from rerunning their algorithm ourselves.
-
-| Benchmark | Metric | Exact/reference | R-ASBS | Ours |
-|---|---|---:|---:|---:|
-| S² analytic | north mass | 0.500 | 0.438 | **0.4993 ± 0.0003** |
-| S² analytic | absolute north error | 0 | 0.062 | **0.0007 ± 0.0003** |
-| S² analytic | KS(x₃) | 0 | not reported | **0.0217 ± 0.0006** |
-| S² analytic | max norm residual | 0 | not reported | **2.2e-16** |
-| St(4,2) | E at β = 0.1 | 7.6671 | 7.7262 | **7.6893** |
-| St(4,2) | error at β = 0.001 | 0 | 0.042 | **0.0007** |
-| St(4,2) | error at β = 50, 199 steps | 0 | **0.270** | 4.391 (not converged) |
-| St(4,2) | error at β = 50, refined grid | 0 | 0.246 (1024 steps, floor) | **0.010** (1592 steps) |
-| St(4,2) | error at β = 100, refined grid | 0 | 0.215 (512 steps, floor) | **0.019** (3184 steps) |
-| St(4,2) | KS(E) at β = 100, 3184 steps | 0 | not reported | 0.258 (mean fixed, law not) |
-| St(4,2) | E as β → ∞ | 3 | **3.185** | 3.310 (β=10) |
-| St(4,2) | worst finite-β error | 0 | **0.547** (β=2) | **0.166** (β=1.3) |
-| St(4,2) | error at β=1 | 0 | ≈0.30 (interp.) | **0.100** |
-| St(4,2) | error at β=2, 512 steps | 0 | 0.493 | **0.072** |
-| St(4,2) | surrogate floor as N→∞ | 0 | **≈0.46** | none measured |
-| St(4,2) | orthogonality residual | 0 | 3.4e-07 | **3.8e-14** |
-| frame-sensitive St(4,2) | reference discrepancy | 0 | not applicable | **0.120** (0.049 refined) |
-
-Discrete experiments have no R-ASBS counterpart — they are compared against
-exact enumeration:
-
-| Benchmark | Metric | Exact | Ours |
-|---|---|---:|---:|
-| fixed-magnetisation Ising | TV vs exact | 0 | **0.0517** (iid floor 0.0511) |
-| fixed-magnetisation Ising | constraint violations | 0 | **0** |
-| occupation, small | TV vs exact | 0 | **0.0199** (iid floor 0.0167) |
-| occupation, m = N = 32 | KS(occupancy) | 0 | **0.0043** (source 0.2054) |
-| occupation, m = N = 128 | KS(occupancy) | 0 | **0.0084** (source 0.2054) |
-| occupation, m = N = 1000 | KS(occupancy) | 0 | **0.0102** (source 0.2035) |
-| occupation, m = N = 1000 | KS(max occupancy) | 0 | 0.2215 (our worst statistic) |
-| occupation, m = N = 1000 | W₁(max) / m | 0 | **0.0014** |
-| occupation, all scales | constraint violations | 0 | **0** |
-
-Both discrete TV values sit essentially **at the iid sampling floor** — the
-residual is the finite-sample error of drawing that many exact samples, not a
-defect of the sampler.
-
-### Wall-clock
-
-Single A100, for the numbers quoted in this README: Experiment D trains in
-~1130 s per β at 199 steps, ~2180 s at 398 and ~4380 s at 796, plus sampling
-and the MCMC reference. R-ASBS costs ~780 s per β at 512 steps and ~1560 s at
-1024. Every `results_*.json` records `train_s` (ours) or `wall_s` (theirs)
-per β.
-
-### Running
+**The source is a Dirac in every experiment.** We start from a *fixed point*
+`x_0` and learn a control that transports the reference process to the target,
+following Adjoint Sampling; we never sample the source from a guessed
+distribution. This is the structural point of the method, and it is what the
+R-ASBS comparison in the Stiefel section turns on.
 
 ```bash
 python tests_math.py                 # mathematical unit tests
-python fixed_ising.py verify         # gate A0
-python occupation.py verify          # gate B0
-python sphere.py verify              # gate C0
-python stiefel.py verify             # gate D0
 python figures.py                    # all figures -> fig/
 python gallery.py                    # sample gallery -> fig/
 ```
 
-Each script exposes `verify` (correctness gates), `train`, and a sweep mode.
-`stiefel.py` additionally has `ref` for the independent MCMC ground truth.
-
 `figures.py` plots metrics. `gallery.py` plots the samples themselves, as the
 objects they actually are, beside the exact or MCMC reference drawn the same
 way. The claim those panels support is "you cannot tell the two columns
-apart", and that is a claim the eye should adjudicate. Per-benchmark figures
-are described in their own sections.
-
-Two conventions that hold across every experiment:
-
-- All manifold experiments preserve their constraint to machine precision by
-  construction (2e-16 on S², 4e-14 on St(4,2)) because the update is an exact
-  geodesic/group step, not a projection or retraction.
-- The discrete experiments preserve their combinatorial constraint exactly:
-  zero violations across every run at every scale.
-
-**Checkpoints store samples in float64.** They used to be float32, whose
-epsilon is 1.2e-07. Recomputing an orthogonality residual from such a file
-returns storage round-off rather than the 3.8e-14 `stiefel.py` measures at
-generation time — and that round-off happens to look like R-ASBS's 3.4e-07
-retraction error, which is exactly the number the residual exists to
-distinguish itself from. `common.py:save_ckpt` promotes any floating-point
-sample tensor to float64; integer state indices are left alone. Figures draw
-the residual only when the checkpoint on disk is genuinely float64 and print a
-notice otherwise, so an old file degrades to a missing panel rather than to a
-wrong one. `regen_f64.sh` re-runs the β = 2 pair to refresh the pre-change
-files; everything else refreshes the next time its experiment is run.
+apart", and that is a claim the eye should adjudicate. Each script also exposes
+`verify` (correctness gates), `train`, and a sweep mode.
 
 ---
 
@@ -205,7 +54,7 @@ files; everything else refreshes the next time its experiment is run.
 
 **Experiment A — bijective discrete.** A 4×4 periodic Ising lattice with the
 magnetisation held fixed at zero, so the state space is the constraint set
-Ω = {s ∈ {±1}¹⁶ : Σᵢ sᵢ = 0}, of size C(16, 8) = 12,870. The target is the
+Ω = {s ∈ {±1}¹⁶ : Σᵢ sᵢ = 0}, of size **C(16, 8) = 12,870**. The target is the
 Gibbs law of `E = −J Σ_⟨ij⟩ sᵢsⱼ` at `J = 1`, `τ = 2`. The controlled process
 moves by spin *swaps*, which is what makes the constraint structural rather
 than enforced: every move is a bijection of Ω onto itself, so magnetisation
@@ -218,6 +67,24 @@ samples, and (c) compare the learned multiplier against the exact one state by
 state. A TV distance against truth therefore means something here, which it
 would not at a size where the reference is itself a sampler.
 
+| | configuration |
+|---|---|
+| script | `fixed_ising.py` |
+| state space | 4×4 periodic lattice, 16 spins, magnetisation fixed |
+| target | `E = −J Σ_⟨ij⟩ s_i s_j`, `J = 1`, `τ = 2` |
+| source `x_0` | fixed spin configuration (Dirac) |
+| reference | exact enumeration |
+| network | `SwapController`, hidden 512, **670,464** parameters |
+| integration steps | 128 |
+| iters × inner | 300 × 40 |
+| batch / minibatch | 2048 / 1024 |
+| lr | 3e-4 |
+| buffer | 8 |
+| eval samples | 20,000 |
+| seeds | 1 |
+
+### Results
+
 | metric | exact | ours |
 |---|---:|---:|
 | TV vs exact law | 0 | **0.0517** (iid floor 0.0511) |
@@ -225,23 +92,25 @@ would not at a size where the reference is itself a sampler.
 
 The TV number sits essentially at the iid sampling floor: draw 20,000 genuinely
 exact samples and the empirical law is already 0.0511 away from the truth, so
-the residual is finite-sample error rather than a defect of the sampler.
+the residual is finite-sample error rather than a defect of the sampler. The
+combinatorial constraint is preserved exactly — zero violations across every
+run.
 
 `fig8_ising_configs` draws 50 raw 4×4 spin configurations from our sampler
-beside 50 drawn by exact enumeration, and `fig2_discrete_correctness` carries
-the metric panel.
+beside 50 drawn by exact enumeration; `fig2_discrete_correctness` carries the
+metric panel.
 
 **Limitations.**
 
 - **Only the 4×4 lattice.** This is the size at which the constrained
   distribution can be enumerated exactly, which is the entire reason for the
   experiment — but it does mean we have no evidence about larger lattices.
-- No R-ASBS counterpart exists in either direction: their method is formulated
-  for embedded Riemannian manifolds and does not apply to discrete state
-  spaces.
+- **No R-ASBS counterpart exists**, in either direction: their method is
+  formulated for embedded Riemannian manifolds and does not apply to discrete
+  state spaces. The comparison here is against exact enumeration instead.
 
 ```bash
-python fixed_ising.py verify         # gate A0, exact-control propagation
+python fixed_ising.py verify         # gate A0
 python fixed_ising.py exact          # gate A0/A1/A2 with the exact control
 python fixed_ising.py train
 ```
@@ -253,17 +122,42 @@ python fixed_ising.py train
 **Experiment B — non-bijective discrete, and the scale test.** m indistinguishable
 particles distributed over N sites; a state is the occupancy vector η ∈ ℕᴺ with
 Σᵢ ηᵢ = m, and the constraint set has size C(m+N−1, N−1). The target is
-`π(η) ∝ Πᵢ Γ(ηᵢ+d) / (ηᵢ! Γ(d))` at `d = 0.5`. Unlike the Ising swap chain the
-moves here are **not** bijective — particles are indistinguishable, so many
-microscopic moves collapse onto the same occupancy transition, and the
+`π(η) ∝ Πᵢ Γ(ηᵢ+d) / (ηᵢ! Γ(d))` at `d = 0.5`, `τ = 1`. Unlike the Ising swap
+chain the moves here are **not** bijective — particles are indistinguishable,
+so many microscopic moves collapse onto the same occupancy transition, and the
 intertwining has to carry that degeneracy.
 
-At m = N = 4 the state space is small enough to enumerate, giving an exact TV:
+This is the one benchmark in the repository that is actually scaled. The other
+three are small by construction: the Ising lattice is 4×4 so that it can be
+enumerated, S² is 2-dimensional and St(4,2) is 5-dimensional. Here the same
+network and the same code run at every size and only the state space grows,
+from 10¹⁸ to **10⁶⁰⁰**.
+
+| | configuration |
+|---|---|
+| script | `occupation.py` |
+| state space | m particles on N sites, C(m+N−1, N−1) states |
+| target | `π(η) ∝ Π_i Γ(η_i+d)/(η_i! Γ(d))`, `d = 0.5`, `τ = 1` |
+| source `x_0` | fixed occupancy (Dirac) |
+| reference | exact (matrix exponential) |
+| network | `OccController`, hidden 256, **139,536** parameters (136,450 in the scale sweep) |
+| integration steps | 128 (256 at m = 1000) |
+| iters × inner | 1500 × 4 (3000 at m = 32, 128) |
+| batch / minibatch | 512 / 1024 (128 at m = 1000) |
+| lr | 1e-3 |
+| buffer | 8 |
+| eval samples | 20,000 |
+| seeds | 1 |
+
+### Results at m = N = 4, where the answer can be enumerated
 
 | metric | exact | ours |
 |---|---:|---:|
 | TV vs exact law | 0 | **0.0199** (iid floor 0.0167) |
 | constraint violations | 0 | **0** |
+
+As with the Ising lattice, the TV value sits essentially at the iid sampling
+floor, so the residual is finite-sample error rather than sampler bias.
 
 ### Scaling to 10⁶⁰⁰ states
 
@@ -290,11 +184,11 @@ occupancy vectors at m = N = 1000 with their per-box marginals.
 
 - **`KS(max)` degrades with scale**: 0.031 → 0.080 → 0.222. That is the
   extreme-value statistic — the law of the single largest occupancy — and it is
-  the one we do worst on at m = 1000. It is reported here and in the scoreboard
-  rather than left out.
+  the one we do worst on at m = 1000. It is reported rather than left out.
 - **The three rows are not budget-matched.** m = 32 and 128 use 3000 iterations,
   128 steps, batch 512; m = 1000 uses 1500 iterations, 256 steps, batch 128. So
   the row-to-row comparison should not be read as a clean scaling law.
+- **No R-ASBS counterpart**, for the same reason as the Ising lattice.
 
 ```bash
 python occupation.py verify                  # gate B0
@@ -307,8 +201,8 @@ python occupation.py scale --m 1000 --N 1000
 ## Sphere
 
 **Experiment C — S², scalar Killing readout.** The bimodal target
-`π ∝ exp(6 x₃²)` on the unit sphere, i.e. `E(x) = 6(1 − x₃²)`, which is the
-same energy and the same scale as R-ASBS's `asbs_sphere_sampler.m`. Mass
+`π ∝ exp(6 x₃²)` on the unit sphere, i.e. `E(x) = 6(1 − x₃²)` at `τ = 1`, which
+is the same energy and the same scale as R-ASBS's `asbs_sphere_sampler.m`. Mass
 concentrates on the two poles, and the diagnostic that matters is whether both
 poles get half of it: a sampler that collapses onto one pole still gets the
 radial statistics right, so the north mass and the KS distance of the `x₃`
@@ -316,6 +210,27 @@ marginal are what separate a correct sampler from a plausible-looking one.
 
 The reference is exact — the density is ∝ exp(6x₃²) with uniform azimuth, so
 inverse-CDF sampling draws genuinely iid target points.
+
+| | configuration |
+|---|---|
+| script | `sphere.py` |
+| state space | unit sphere in R³, continuous, dim 2 |
+| target | `E(x) = 6(1 − x₃²)`, `π ∝ exp(6x₃²)`, `τ = 1` |
+| source `x_0` | `(1, 0, 0)` (Dirac) |
+| reference | exact inverse-CDF |
+| network | `ScoreNet`, hidden 256, **136,963** parameters |
+| integration steps | 128 |
+| iters × inner | 4000 × 16 |
+| batch / minibatch | 8192 / 16384 |
+| lr | 1e-3 |
+| EMA / buffer | 0.9995 / 4 |
+| eval samples | 200,000 |
+| seeds | 5 |
+
+### Results
+
+The R-ASBS column is the number printed in their paper. We did not rerun their
+sphere sampler — see the limitation below.
 
 | metric | exact | R-ASBS (their paper) | ours |
 |---|---:|---:|---:|
@@ -352,11 +267,11 @@ in the residual.
 
 **Limitations.**
 
-- S² is 2-dimensional. This is a correctness benchmark, not a hard one.
-- The R-ASBS column is quoted from their paper. We did not rerun their sphere
-  sampler: we cannot run the MATLAB original, so we could not separate their
-  algorithm's behaviour from a porting error of our own, and a claim we cannot
-  check does not belong here.
+- **S² is 2-dimensional.** This is a correctness benchmark, not a hard one.
+- **The R-ASBS column is quoted from their paper, not measured.** We cannot run
+  the MATLAB original, so we could not separate their algorithm's behaviour
+  from a porting error of our own, and a claim we cannot check does not belong
+  here. The Stiefel section is where their algorithm is actually rerun.
 
 ```bash
 python sphere.py verify              # gate C0
@@ -371,8 +286,23 @@ python sphere.py train --antithetic
 R-ASBS.** The state space is the 4×2 orthonormal frames, dimension 5, with
 `E(X) = tr(XᵀHX)` and `H = diag(1, 2, 5, 8)` — R-ASBS's own `H` up to a change
 of basis, and their own β grid. Temperature is `τ = 1/β` with β swept from
-1e-3 to 1e6. The reference is an independent MCMC ground truth: 2×10⁵ chains
-× 3000 sweeps.
+1e-3 to 1e6.
+
+| | ours | R-ASBS (`rasbs_port.py`) |
+|---|---|---|
+| script | `stiefel.py` | port of `alg2_stiefel.m` @ `bb71d14` |
+| target | `E(X) = tr(XᵀHX)`, `H = diag(1,2,5,8)` | same `H`, ambient Z₂×Z₂ basis |
+| source | `E₀ = [e₁, e₂]` (**Dirac**) | **Haar** |
+| constraint | exact geodesic step | ambient Euler + QR retraction |
+| network | `ScoreNet`, hidden 256 | `netU` + `netH` |
+| parameters | **139,528** | **140,560** (0.99× ours) |
+| integration steps | 199 | 199 |
+| iters × inner | 1500 × 8 | 1000 epochs |
+| batch / minibatch | 2048 / 16384 | 600 |
+| lr | 1e-3 | 1e-3 |
+| EMA / buffer | 0.9995 / 4 | — |
+| eval samples | 100,000 | 100,000 |
+| reference | MCMC, 2e5 chains × 3000 sweeps | same |
 
 Experiment D additionally uses `σ = √2`, `nq = 64` fibre quadrature nodes, and
 `--antithetic` (the exact 16-fold symmetry `T_s(X) = SXD`, automatically
@@ -384,6 +314,23 @@ Gate `D0` includes the mandatory first-moment test for the spin clock. On
 St(4,2) each SU(2) ≅ S³ factor of Spin(4) runs at heat time s = r/2, not r; the
 test checks `E[X_r | X_0] = e^{−3r} X_0` and separates the two conventions by a
 factor of ~160 at r = 0.25, so a wrong clock cannot pass silently.
+
+### Which R-ASBS experiments we reproduced: two of six
+
+| their script | problem | ours |
+|---|---|---|
+| `asbs_sphere_sampler.m` | bimodal S², `E = 6(1 − x₃²)` | ✔ `sphere.py`, same energy (their sampler itself is not re-run) |
+| `alg2_stiefel.m` | St(4,2), `E = tr(XᵀHX)`, spec(H) = {1,2,5,8} | ✔ `stiefel.py`, same H and same β grid, **and their algorithm re-run** by `rasbs_port.py` |
+| `earthquake_sphere_ex.m` | earthquake epicentres on S² | ✘ not attempted |
+| `cosmic_ray_ex.m` | arrival directions on the hemisphere S²₊ | ✘ not attempted |
+| `alg2_robotics.m` | 10-DOF planar IK, loop closure + obstacles | ✘ not attempted |
+| `asbs_m_wahba_so3.m` | robust Wahba problem on SO(3) | ✘ not attempted |
+
+The two we did reproduce are the two synthetic benchmarks with a known target,
+which are the only ones where an error against ground truth can be computed at
+all. The four we did not are their applied and higher-dimensional cases, and
+`alg2_robotics.m` in particular is a harder problem than anything in this
+repository.
 
 ### The R-ASBS comparison
 
@@ -426,6 +373,24 @@ finest grid we ran for it, for the reason given directly below the table.
 | 200 | 3 (exact) | 3.2482 | +0.248 | 199 | not trained | — | — |
 | 10⁶ | 3 (exact) | 3.1847 | +0.185 | 199 | not trained | — | — |
 
+Selected rows against the reference, as a scoreboard:
+
+| metric | exact/reference | R-ASBS | ours |
+|---|---:|---:|---:|
+| E at β = 0.1 | 7.6671 | 7.7262 | **7.6893** |
+| error at β = 0.001 | 0 | 0.042 | **0.0007** |
+| error at β = 1 | 0 | ≈0.30 (interp.) | **0.100** |
+| error at β = 2, 512 steps | 0 | 0.493 | **0.072** |
+| worst finite-β error | 0 | **0.547** (β=2) | **0.166** (β=1.3) |
+| error at β = 50, 199 steps | 0 | **0.270** | 4.391 (not converged) |
+| error at β = 50, refined grid | 0 | 0.246 (1024 steps, floor) | **0.010** (1592 steps) |
+| error at β = 100, refined grid | 0 | 0.215 (512 steps, floor) | **0.019** (3184 steps) |
+| KS(E) at β = 100, 3184 steps | 0 | not reported | 0.258 (mean fixed, law not) |
+| E as β → ∞ | 3 | **3.185** | 3.310 (β=10) |
+| surrogate floor as N → ∞ | 0 | **≈0.46** | none measured |
+| orthogonality residual | 0 | 3.4e-07 | **3.8e-14** |
+| frame-sensitive target D2 | 0 | not applicable | **0.120** (0.049 refined) |
+
 **Why β ≥ 50 uses a larger N, and why the two columns use different ones.**
 The score the target implies is O(β), so the Euler increment h·score is O(1)
 per step at β = 100 on a 199-point grid — the integrator is asked to take
@@ -463,7 +428,8 @@ discretisation from the QR retraction. As β grows the target moves away from
 Haar, the source-tilting bias switches on and dominates, peaking at +0.547
 near β = 2. The two error sources are therefore separable, and the second one
 is structural: the correct initial law for the h-transform is Haar·φ₀ /
-⟨Haar, φ₀⟩, and φ₀ is not constant.
+⟨Haar, φ₀⟩, and φ₀ is not constant. This is the Dirac-vs-Haar distinction from
+the top of this README, measured.
 
 **The β → ∞ limit is never reached.** Their own paper states the limit is 3;
 the rerun plateaus at 3.185 and stays there from β = 10³ to β = 10⁶.
@@ -519,6 +485,11 @@ conclusion. Everything below is matched:
 | oracle calls | 600,000 | 600,000 (matched) |
 | generated samples | 100,000 | 100,000 (matched) |
 | constraint enforcement | QR retraction | exact geodesic step |
+
+**Wall-clock**, single A100: we train in ~1130 s per β at 199 steps, ~2180 s at
+398 and ~4380 s at 796, plus sampling and the MCMC reference. R-ASBS costs
+~780 s per β at 512 steps and ~1560 s at 1024. Every `results_*.json` records
+`train_s` (ours) or `wall_s` (theirs) per β.
 
 ### High β: diagnostics
 
@@ -596,7 +567,7 @@ best β = 100 control we have. So "off-mode during training" does not predict
 "bad control" either. The stability boundary is real and reproducible and we
 have no account of it; the step counts above were found by measurement.
 
-### What figure 7 shows
+### Figures
 
 `fig5_stiefel` carries the energy curves and the step-refinement panels.
 `fig7_stiefel_frames` draws 96 raw St(4,2) frames per sampler plus the second
@@ -626,7 +597,14 @@ than inferred from an error curve.
 
 Figure 7's bottom row draws the orthogonality residual from disk:
 **3.0e-14 across all 100,000 of our samples against 2.9e-07 across theirs**, a
-factor of 10⁷, recomputed rather than quoted.
+factor of 10⁷, recomputed rather than quoted. That comparison is only
+meaningful because **checkpoints store samples in float64**. They used to be
+float32, whose epsilon is 1.2e-07; recomputing the residual from such a file
+returns storage round-off that happens to look exactly like R-ASBS's 3.4e-07
+retraction error — the very number the residual exists to distinguish itself
+from. `common.py:save_ckpt` promotes any floating-point sample tensor to
+float64, figures draw the residual only when the file on disk is genuinely
+float64, and `regen_f64.sh` refreshes the pre-change β = 2 pair.
 
 **Limitations.**
 
@@ -648,22 +626,23 @@ factor of 10⁷, recomputed rather than quoted.
   `out_scale` sits near 0.55 β on-mode and near 2 β off-mode, and the failing
   runs are the off-mode ones — but a 2.5× β jump succeeded where a 1.3× jump on
   a finer grid failed. The step counts above were found by measurement.
-- Our self-imposed Stiefel gate is `|E − E_MCMC| < 0.05`. At β = 0.1 we pass
-  it (0.022); at β ≥ 0.5 we do not (0.10–0.17 at 199 steps). Refining the
-  integration grid on the *same* trained control drops β = 1 to 0.050 at 1024
-  steps, so roughly half the residual is discretisation and half is score
-  error. The gate is stricter than anything R-ASBS achieves at any β, but it
-  is not yet met, and it is reported as failed rather than relaxed.
+- **Our self-imposed gate `|E − E_MCMC| < 0.05` is not met at β ≥ 0.5.** At
+  β = 0.1 we pass it (0.022); at β ≥ 0.5 we do not (0.10–0.17 at 199 steps).
+  Refining the integration grid on the *same* trained control drops β = 1 to
+  0.050 at 1024 steps, so roughly half the residual is discretisation and half
+  is score error. The gate is stricter than anything R-ASBS achieves at any β,
+  but it is reported as failed rather than relaxed.
 - **The MCMC reference stops converging for β ≳ 1000**, where a fixed proposal
   size gives near-zero acceptance and the chain freezes at 3.0233 (identical to
   four decimals at β = 10³, 10⁴ and 10⁶). For those β we quote the exact value
   3 instead. In the useful range β ≤ 100 two independent chains agree to
-  0.0001–0.01, so the reference is trustworthy there and the comparison above
-  is safe.
-- KS(E) degrades at large β (0.23 at β = 10) even as the mean energy error
+  0.0001–0.01, so the reference is trustworthy there.
+- **KS(E) degrades at large β** (0.23 at β = 10) even as the mean energy error
   improves, because the target concentrates and KS becomes very sensitive.
-- The frame-sensitive target D2 has no analytic reference at all — MCMC is the
-  only ground truth, so its error bar is the reference's own.
+- **The frame-sensitive target D2 has no analytic reference at all** — MCMC is
+  the only ground truth, so its error bar is the reference's own.
+- **St(4,2) is 5-dimensional.** Like S², this is a correctness benchmark rather
+  than a high-dimensional one.
 
 ```bash
 python rasbs_port.py --check-retraction        # GS == sign-corrected QR
