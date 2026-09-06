@@ -1,0 +1,71 @@
+{
+  "config": {
+    "cmd": "train",
+    "sigma": 1.4142135623730951,
+    "beta": 1.0,
+    "betas": "65",
+    "steps": 796,
+    "nq": 64,
+    "frame": false,
+    "iters": 600,
+    "inner": 8,
+    "batch": 2048,
+    "mb": 16384,
+    "hidden": 256,
+    "lr": 0.001,
+    "ema": 0.9995,
+    "nbuf": 4,
+    "seeds": 1,
+    "eval_every": 200,
+    "n_samples": 20000,
+    "mc_moment": 50000,
+    "mcmc_chains": 50000,
+    "mcmc_sweeps": 1000,
+    "mcmc_eps": 0.35,
+    "seed": 0,
+    "verbose": true,
+    "antithetic": true,
+    "refine": "2",
+    "init_from": "ckpt/stiefel_anneal_b50_seed0.pt",
+    "ckpt_dir": "ckpt",
+    "tag": "chain",
+    "out": "json/results_chain_b65.json"
+  },
+  "betas": {
+    "65.0": {
+      "mcmc": {
+        "E_mean": 3.0538420586411648,
+        "E_std": 0.03006268467600838,
+        "constraint": 8.98962587434922e-15,
+        "trCX": 0.005060230189390792
+      },
+      "seeds": [
+        {
+          "E_mean": 4.093485800559898,
+          "E_std": 0.31153569275069193,
+          "constraint": 9.416337267433242e-14,
+          "trCX": 0.083570014818452,
+          "KS_E": 0.9999366126559566,
+          "E_err": 1.039643741918733,
+          "oracle_calls": 1228800,
+          "train_s": 1721.4239144325256,
+          "steps": 796,
+          "refined": {
+            "1592": {
+              "E_mean": 3.1256108441407293,
+              "E_std": 0.0782322762454696,
+              "constraint": 1.7037232598949713e-13,
+              "trCX": 0.03918286150044605,
+              "KS_E": 0.49690153545343757,
+              "E_err": 0.07176878549956456
+            }
+          }
+        }
+      ],
+      "dE": 1.039643741918733,
+      "KS_E": 0.9999366126559566
+    }
+  },
+  "mean_dE": 1.039643741918733,
+  "mean_KS": 0.9999366126559566
+}

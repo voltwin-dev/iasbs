@@ -1,0 +1,79 @@
+{
+  "config": {
+    "cmd": "train",
+    "sigma": 1.4142135623730951,
+    "beta": 1.0,
+    "betas": "100",
+    "steps": 398,
+    "nq": 64,
+    "frame": false,
+    "iters": 1500,
+    "inner": 8,
+    "batch": 2048,
+    "mb": 16384,
+    "hidden": 256,
+    "lr": 0.001,
+    "ema": 0.9995,
+    "nbuf": 4,
+    "seeds": 1,
+    "eval_every": 250,
+    "n_samples": 100000,
+    "mc_moment": 200000,
+    "mcmc_chains": 200000,
+    "mcmc_sweeps": 3000,
+    "mcmc_eps": 0.35,
+    "seed": 0,
+    "verbose": true,
+    "antithetic": true,
+    "refine": "2,4",
+    "init_from": "ckpt/stiefel_anneal_b50_seed0.pt",
+    "ckpt_dir": "ckpt",
+    "tag": "stiefel_anneal",
+    "out": "json/results_stiefel_anneal_b100.json"
+  },
+  "betas": {
+    "100.0": {
+      "mcmc": {
+        "E_mean": 3.0309720550297774,
+        "E_std": 0.017502754335673484,
+        "constraint": 1.064405289555735e-14,
+        "trCX": 0.0006959009285015795
+      },
+      "seeds": [
+        {
+          "E_mean": 7.093825911602871,
+          "E_std": 1.5750067376383616,
+          "constraint": 7.477295116836045e-14,
+          "trCX": 0.14144435834413788,
+          "KS_E": 1.0,
+          "E_err": 4.062853856573094,
+          "oracle_calls": 3072000,
+          "train_s": 2160.7987122535706,
+          "steps": 398,
+          "refined": {
+            "796": {
+              "E_mean": 6.564694886909701,
+              "E_std": 1.7241328421497364,
+              "constraint": 1.1060997025331216e-13,
+              "trCX": 0.26873747184097246,
+              "KS_E": 0.9963618219168773,
+              "E_err": 3.533722831879923
+            },
+            "1592": {
+              "E_mean": 3.710325272875006,
+              "E_std": 0.16301198498686184,
+              "constraint": 1.708243160826974e-13,
+              "trCX": 0.03357873581949052,
+              "KS_E": 0.9999856056904867,
+              "E_err": 0.6793532178452284
+            }
+          }
+        }
+      ],
+      "dE": 4.062853856573094,
+      "KS_E": 1.0
+    }
+  },
+  "mean_dE": 4.062853856573094,
+  "mean_KS": 1.0
+}

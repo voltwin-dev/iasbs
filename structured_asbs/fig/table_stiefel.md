@@ -17,4 +17,22 @@
 | 10000 | 3.0000 (exact) | 3.1873 | +0.1873 | - | - |
 | 1e+06 | 3.0000 (exact) | 3.1847 | +0.1847 | - | - |
 
-`*` training did not converge at this beta: the regression loss stays at 7e4 / 3e5 for the whole run and the 199-step grid is unstable at the resulting score magnitude. Reported as measured. R-ASBS is better than us at these two points.
+`*` training did not converge at this beta. The regression loss stays at 7e4 / 3e5 for the whole run, but that scale is a symptom, not the cause: a rerun with scale-free labels, whose normalised loss is O(1) at every beta, gives the same answer (+4.463 / +5.271). The cause is the 199-step Euler grid, unstable at an O(beta) score, together with the on-policy collection that samples from it. Reported as measured. R-ASBS is better than us at these two points on this grid. Refining the grid removes our error and not theirs -- see the second table below -- but that is a more expensive run and is reported separately rather than substituted in here.
+
+
+### High beta, refined integration grid
+
+| beta | method | steps | E | err | KS(E) |
+|-----:|--------|------:|--:|----:|------:|
+| 50 | ours | 398 | 3.1118 | +0.0685 | 0.479 |
+| 50 | ours | 796 | 3.0656 | +0.0223 | 0.228 |
+| 50 | ours | 1592 | 3.0534 | +0.0101 | 0.118 |
+| 50 | R-ASBS | 199 | 3.3139 | +0.2721 | - |
+| 50 | R-ASBS | 512 | 3.2969 | +0.2552 | - |
+| 100 | ours | 796 | 6.5005 | +3.4695 | 1.000 |
+| 100 | ours | 1592 | 3.7768 | +0.7458 | 1.000 |
+| 100 | ours | 3184 | 3.0771 | +0.0461 | 0.312 |
+| 100 | R-ASBS | 199 | 3.2626 | +0.2347 | - |
+| 100 | R-ASBS | 512 | 3.2456 | +0.2177 | - |
+
+Our error falls with the step count; R-ASBS's does not, because theirs is the source-tilting bias plus the QR retraction and neither is a function of step size. The KS column is the caveat: at beta = 100 our refined mean is within +0.046 but KS = 0.312 and the energy spread is 16x too broad, so refinement fixes the first moment and not the law. rasbs_port.py reports no KS, hence the dashes.

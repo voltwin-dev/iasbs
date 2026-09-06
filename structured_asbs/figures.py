@@ -182,12 +182,22 @@ def figure4():
 # ============================================================================
 
 # Above this beta our fixed training budget stops converging.  It is a measured
-# threshold, not a chosen one: at beta = 50 and 100 the regression loss sits at
-# 7.1e4 and 2.8e5 and never descends (it is ~0.05 at beta = 0.001, and grows
-# like beta^2), and the 199-step Euler grid is unstable at the resulting score
-# magnitude.  Those two points are plotted and tabulated like any other -- they
-# are our failure, not a gap -- but they are marked so nobody reads them as a
-# converged result.
+# threshold, not a chosen one.  The proximate symptom is that the regression
+# loss sits at 7.1e4 and 2.8e5 and never descends (it is ~0.05 at beta = 0.001
+# and grows like beta^2) -- but that is NOT the cause.  Rerunning both betas
+# with a scale-free label parametrisation, which makes the normalised loss O(1)
+# at every beta, reproduces the failure exactly: +4.463 / +5.271 against the
+# original +4.391 / +5.290 (json/results_stiefel_scalefix.json, and README
+# "Where our method fails").  What remains is time discretisation -- the score
+# is O(beta) while the Euler step is 1/199, so h*score is O(1) per step --
+# feeding an on-policy collection loop that draws its own training samples from
+# that same integrator.  These two points are plotted and tabulated like any
+# other -- they are our failure, not a gap -- but they are marked so nobody
+# reads them as a converged result.
+#
+# The plotted numbers stay from the stiefel_fill sweep so that the whole beta
+# column comes from one run with one set of flags; the scale-free rerun is a
+# control, not a replacement.
 OURS_DIVERGED = (50.0, 100.0)
 
 
@@ -205,6 +215,49 @@ def ours_betas():
         if d is not None:
             out.update({float(k): v for k, v in d["betas"].items()})
     return out
+
+
+def high_beta_refined():
+    """{beta: [(steps, E_mean, signed_err, KS_E), ...]} from the annealed runs.
+
+    These are the runs that recover beta = 50 and 100: a warm-started control
+    (--init-from) trained on a finer grid than the main sweep, then evaluated on
+    its own grid and on refinements of it.  The error is recomputed here against
+    each run's own MCMC reference rather than read from E_err, because E_err is
+    stored unsigned and every other panel in this file plots signed error.
+    """
+    out = {}
+    for name in ("results_stiefel_anneal_b50.json",
+                 "results_stiefel_anneal_b100_fine.json"):
+        d = load(name)
+        if d is None:
+            continue
+        for k, v in d["betas"].items():
+            m, tgt = v["seeds"][0], v["mcmc"]["E_mean"]
+            rows = [(int(m["steps"]), m["E_mean"], m["E_mean"] - tgt,
+                     m["KS_E"])]
+            for s, r in m.get("refined", {}).items():
+                rows.append((int(s), r["E_mean"], r["E_mean"] - tgt, r["KS_E"]))
+            out.setdefault(float(k), []).extend(rows)
+    return {b: sorted(v) for b, v in out.items()}
+
+
+def rasbs_high_beta_steps():
+    """{beta: [(steps, E_mean), ...]} for R-ASBS at beta = 50 and 100.
+
+    The claim this supports is that their high-beta error is a floor rather than
+    discretisation error.  We had that measured only at beta = 2, so asserting
+    it at 50 and 100 would have been an assumption -- and a flattering one, in a
+    comparison we are running ourselves.  So it is measured.
+    """
+    out = {}
+    for n in (199, 512, 1024):
+        d = load(f"results_rasbs_highbeta_steps_{n}.json")
+        if d is None:
+            continue
+        for k, v in d["betas"].items():
+            out.setdefault(float(k), []).append((n, v["E_mean"]))
+    return {b: sorted(v) for b, v in out.items()}
 
 
 def figure5():
@@ -241,7 +294,13 @@ def figure5():
         return ([float(k) for k in ks],
                 [_entry(d["betas"][k])[0] for k in ks])
 
-    fig, ax = plt.subplots(1, 3, figsize=(13, 3.4))
+    fig, ax = plt.subplots(1, 4, figsize=(17.4, 3.6))
+    hb, rhb = high_beta_refined(), rasbs_high_beta_steps()
+    # Best grid we reached at each high beta, for panels A and B.  Plotted as a
+    # separate marker rather than folded into the "ours" line because it is a
+    # different training recipe on a much finer grid -- see README, "Why this is
+    # not a like-for-like win".
+    best = {b: rows[-1] for b, rows in hb.items()}
 
     br, er = curve(ref)
     ba, ea = curve(ra)
@@ -261,6 +320,10 @@ def figure5():
             ax[0].plot([bo[i] for i in bad], [eo[i] for i in bad], "x", ms=8,
                        mew=2, color=CB["ours"],
                        label="ours, training did not converge")
+    if best:
+        ax[0].plot(sorted(best), [best[b][1] for b in sorted(best)], "*",
+                   ms=13, color=CB["ours"], mec="k", mew=0.6, ls="none",
+                   label="ours, refined grid")
     ax[0].set_xscale("log")
     ax[0].set_xlabel(r"$\beta$")
     ax[0].set_ylabel(r"$E[\mathrm{tr}(X^\top H X)]$")
@@ -294,6 +357,10 @@ def figure5():
         if bad:
             ax[1].plot([b2[i] for i in bad], [e2[i] for i in bad], "x", ms=8,
                        mew=2, color=CB["ours"], label="ours, not converged")
+    if best:
+        ax[1].plot(sorted(best), [best[b][2] for b in sorted(best)], "*",
+                   ms=13, color=CB["ours"], mec="k", mew=0.6, ls="none",
+                   label="ours, refined grid")
     ax[1].set_xscale("log")
     ax[1].set_xlabel(r"$\beta$")
     ax[1].set_ylabel("E - reference")
@@ -331,6 +398,33 @@ def figure5():
     ax[2].set_ylabel(r"$|E - $reference$|$")
     ax[2].set_title(r"C: error vs steps at $\beta=2$")
     ax[2].legend(fontsize=8)
+
+    # D: the same question at the two betas where R-ASBS beats us on the shared
+    # 199-step grid.  The point of the panel is that the two errors are not the
+    # same kind of quantity: ours falls like a discretisation error, theirs does
+    # not fall at all.  Both are absolute errors against each run's own MCMC
+    # reference, on log-log axes, so a straight descending line is convergence
+    # and a flat line is a floor.
+    mk = {50.0: "^", 100.0: "o"}
+    for b in sorted(hb):
+        rows = hb[b]
+        ax[3].loglog([r[0] for r in rows], [abs(r[2]) for r in rows],
+                     "-" + mk.get(b, "^"), ms=5, color=CB["ours"],
+                     alpha=1.0 if b == 100.0 else 0.55,
+                     label=f"ours, " + r"$\beta=$" + f"{b:g}")
+    for b in sorted(rhb):
+        rows, tgt = rhb[b], rmap.get(b)
+        if tgt is None:
+            continue
+        ax[3].loglog([r[0] for r in rows], [abs(r[1] - tgt) for r in rows],
+                     "--" + mk.get(b, "s"), ms=5, color=CB["rasbs"],
+                     alpha=1.0 if b == 100.0 else 0.55,
+                     label=f"R-ASBS, " + r"$\beta=$" + f"{b:g}")
+    ax[3].set_xlabel("integration steps")
+    ax[3].set_ylabel(r"$|E - $reference$|$")
+    ax[3].set_title("D: error vs steps at "
+                    + r"$\beta=50,100$" + "\n(ours converges, theirs floors)")
+    ax[3].legend(fontsize=7)
     _finish(fig, "fig5_stiefel")
 
 
@@ -369,10 +463,49 @@ def table_stiefel():
         lines.append("| " + " | ".join(row) + " |")
     if any(b in omap for b in OURS_DIVERGED):
         lines += ["",
-                  "`*` training did not converge at this beta: the regression "
-                  "loss stays at 7e4 / 3e5 for the whole run and the 199-step "
-                  "grid is unstable at the resulting score magnitude. Reported "
-                  "as measured. R-ASBS is better than us at these two points."]
+                  "`*` training did not converge at this beta. The regression "
+                  "loss stays at 7e4 / 3e5 for the whole run, but that scale is "
+                  "a symptom, not the cause: a rerun with scale-free labels, "
+                  "whose normalised loss is O(1) at every beta, gives the same "
+                  "answer (+4.463 / +5.271). The cause is the 199-step Euler "
+                  "grid, unstable at an O(beta) score, together with the "
+                  "on-policy collection that samples from it. Reported as "
+                  "measured. R-ASBS is better than us at these two points on "
+                  "this grid. Refining the grid removes our error and not "
+                  "theirs -- see the second table below -- but that is a more "
+                  "expensive run and is reported separately rather than "
+                  "substituted in here."]
+
+    # Second table: what those two betas do once the integration grid is
+    # refined.  Kept separate from the table above, and reported with the step
+    # count and KS in the same row, because it is neither the same training
+    # recipe nor the same cost as the 199-step numbers -- quoting the -0.0101
+    # next to R-ASBS's +0.2698 without the "1592 steps" attached would be a
+    # straightforwardly misleading comparison.  KS is included because at
+    # beta = 100 the mean is the flattering statistic: it lands within 0.05
+    # while the energy law is still plainly wrong.
+    hb, rhb = high_beta_refined(), rasbs_high_beta_steps()
+    if hb:
+        lines += ["", "", "### High beta, refined integration grid",
+                  "",
+                  "| beta | method | steps | E | err | KS(E) |",
+                  "|-----:|--------|------:|--:|----:|------:|"]
+        for b in sorted(hb):
+            tgt = _m(rmap[b]) if b in rmap else float("nan")
+            for n, em, er, ks in hb[b]:
+                lines.append(f"| {b:g} | ours | {n} | {em:.4f} | {er:+.4f} "
+                             f"| {ks:.3f} |")
+            for n, em in rhb.get(b, []):
+                lines.append(f"| {b:g} | R-ASBS | {n} | {em:.4f} "
+                             f"| {em - tgt:+.4f} | - |")
+        lines += ["",
+                  "Our error falls with the step count; R-ASBS's does not, "
+                  "because theirs is the source-tilting bias plus the QR "
+                  "retraction and neither is a function of step size. The "
+                  "KS column is the caveat: at beta = 100 our refined mean is "
+                  "within +0.046 but KS = 0.312 and the energy spread is 16x "
+                  "too broad, so refinement fixes the first moment and not the "
+                  "law. rasbs_port.py reports no KS, hence the dashes."]
     os.makedirs(OUT, exist_ok=True)
     txt = "\n".join(lines)
     with open(f"{OUT}/table_stiefel.md", "w") as f:

@@ -415,6 +415,26 @@ def bridge_path(prob, Y, steps, generator=None):
 # network
 # ============================================================================
 class ScoreNet(torch.nn.Module):
+    """Control network, factored as  score = out_scale * raw(t, X).
+
+    The regression label is affine in the terminal gradient G and G carries a
+    factor 1/tau = beta, so the target the network must emit grows like beta and
+    the squared loss like beta^2.  Adam is scale-invariant, so that by itself
+    would be harmless -- but three things here are *not* scale-invariant: the
+    fixed clip_grad_norm_(., 10.0), the zero-initialised last layer (which has
+    to travel O(beta) at a step size capped by lr), and the on-policy sample
+    collection that depends on the control already being roughly right.  At
+    beta >= 50 those three together stalled training completely (loss flat at
+    7e4 / 2.8e5, energy error +4.4 / +5.3).
+
+    Splitting a scalar `out_scale` out of the network puts the whole beta
+    dependence in a number that is measured, not learned: the trainable part
+    regresses lab / out_scale, which is O(1) at every beta, so the clip and the
+    initialisation mean the same thing at beta = 100 as at beta = 0.001.  The
+    scale is a buffer, so it rides along in the state_dict and evaluation code
+    needs no changes.
+    """
+
     def __init__(self, hidden=256, n_freq=6):
         super().__init__()
         self.n_freq = n_freq
@@ -428,8 +448,12 @@ class ScoreNet(torch.nn.Module):
         torch.nn.init.zeros_(self.net[-1].weight)
         torch.nn.init.zeros_(self.net[-1].bias)
         self.to(torch.float32)
+        # float64 so that reloading a checkpoint reproduces the scale exactly.
+        self.register_buffer("out_scale",
+                             torch.tensor(1.0, dtype=torch.float64))
 
-    def forward(self, t, X):
+    def raw(self, t, X):
+        """The O(1) part.  Training regresses this against lab / out_scale."""
         xf = X.to(torch.float32).reshape(X.shape[0], 8)
         tf = t.to(torch.float32)[:, None]
         k = torch.arange(1, self.n_freq + 1, device=xf.device,
@@ -437,7 +461,12 @@ class ScoreNet(torch.nn.Module):
         f = torch.cat([xf, tf, 1.0 - tf, torch.sin(math.pi * k * tf),
                        torch.cos(math.pi * k * tf)], dim=-1)
         v = self.net(f).reshape(X.shape[0], 4, 2).to(X.dtype)
+        # proj_tangent is linear in v, so it commutes with the scalar scale and
+        # it does not matter which side of the projection the scale sits on.
         return proj_tangent(X, v)
+
+    def forward(self, t, X):
+        return self.out_scale.to(X.dtype) * self.raw(t, X)
 
 
 class EMA:
@@ -450,7 +479,13 @@ class EMA:
     def update(self, net):
         d = self.decay
         for k, v in net.state_dict().items():
-            if v.dtype.is_floating_point:
+            if k.endswith("out_scale"):
+                # Not a learned weight: it is a measured normalisation that the
+                # `raw` output is defined relative to.  Averaging it against a
+                # stale value would rescale the EMA control by the ratio of the
+                # two, so it is copied verbatim.
+                self.shadow[k].copy_(v)
+            elif v.dtype.is_floating_point:
                 self.shadow[k].mul_(d).add_(v.detach(), alpha=1.0 - d)
             else:
                 self.shadow[k].copy_(v)
@@ -741,8 +776,29 @@ def train_one(prob, args, seed, verbose=True):
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(
         opt, T_max=args.iters * args.inner, eta_min=args.lr * 1e-2)
+    # Beta-annealing warm start.  What gets transferred is the control
+    # *function*, not the weight tensor: the source net represented its score as
+    # src_scale * raw_src, this net will represent it as out_scale * raw, and
+    # out_scale is not known until the first batch of labels has been measured.
+    # So the weights are loaded now and the last layer is rescaled by
+    # src_scale / out_scale once out_scale exists, which makes the initial
+    # control exactly equal to the source control rather than to the source
+    # control times an arbitrary ratio of scales.  Checkpoints written before
+    # the scale-free refactor have no out_scale and stored the unnormalised
+    # score directly, which is the src_scale = 1 case.
+    init_scale = None
+    if getattr(args, "init_from", ""):
+        sd = torch.load(args.init_from, map_location=prob.device,
+                        weights_only=False)["state_dict"]
+        init_scale = float(sd["out_scale"]) if "out_scale" in sd else 1.0
+        net.load_state_dict({k: v.to(prob.device) for k, v in sd.items()
+                             if k != "out_scale"}, strict=False)
+        if verbose:
+            print(f"    warm start from {args.init_from} "
+                  f"(source scale {init_scale:.3e})", flush=True)
     ema = EMA(net, decay=args.ema)
     buf = []
+    scale_init = True
     t0 = time.time()
     for it in range(1, args.iters + 1):
         with torch.no_grad():
@@ -778,8 +834,43 @@ def train_one(prob, args, seed, verbose=True):
                 yb = Sm * yb * Dm
                 gb = Sm * gb * Dm
             lab = C.stiefel_terminal_readout(xt, yb, gb)
-            pred = net(s.to(xt.dtype) / steps, xt)
-            loss = ((pred - lab) ** 2).sum(dim=(-2, -1)).mean()
+            # Running RMS of the label, per element.  A plain EMA rather than
+            # the analytic beta because the label is only *asymptotically*
+            # proportional to beta -- it also carries the -grad log p^St term,
+            # which does not scale -- and because the constant of
+            # proportionality is not 1.  decay 0.99 over iters*inner steps is
+            # far longer than the buffer turnover, so the scale is effectively
+            # constant by the time it matters; the first batch seeds it
+            # directly so the very first updates are not mis-scaled.
+            with torch.no_grad():
+                rms = (lab ** 2).mean().sqrt().clamp(min=1e-12)
+                if scale_init:
+                    net.out_scale.fill_(float(rms))
+                    if init_scale is not None:
+                        # Make out_scale * raw reproduce the source control
+                        # exactly.  The last layer is linear and everything
+                        # after it (reshape, proj_tangent) is linear too, so
+                        # scaling its weight and bias scales the output.
+                        f = init_scale / float(rms)
+                        net.net[-1].weight.mul_(f)
+                        net.net[-1].bias.mul_(f)
+                        # The EMA shadow was cloned from the pre-rescale
+                        # weights, so it needs the same correction or the
+                        # evaluated control starts off by a factor of f.
+                        last = f"net.{len(net.net) - 1}"
+                        for k in (f"{last}.weight", f"{last}.bias"):
+                            ema.shadow[k].mul_(f)
+                    scale_init = False
+                else:
+                    net.out_scale.mul_(0.99).add_(rms.to(torch.float64),
+                                                  alpha=0.01)
+                sc = net.out_scale.to(xt.dtype)
+            # Regress the normalised label with the normalised prediction, so
+            # the loss, the gradient clip and the output range are all O(1)
+            # independently of beta.  net.forward multiplies `raw` back by
+            # out_scale, so sampling is unchanged.
+            pred = net.raw(s.to(xt.dtype) / steps, xt)
+            loss = ((pred - lab / sc) ** 2).sum(dim=(-2, -1)).mean()
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
@@ -790,7 +881,11 @@ def train_one(prob, args, seed, verbose=True):
             ema.copy_to(ema_net)
             with torch.no_grad():
                 Xs = simulate(prob, _score_fn(ema_net, steps), 20000, steps)
-            print(f"    it {it:4d}  loss {float(loss):9.3f}  "
+            # `loss` is now the normalised loss, so it is comparable across
+            # beta; the scale it was divided by is printed alongside so the old
+            # unnormalised numbers can still be recovered (loss * scale^2).
+            print(f"    it {it:4d}  loss {float(loss):9.5f}  "
+                  f"scale {float(net.out_scale):.3e}  "
                   f"E={float(prob.energy(Xs).mean()):.4f}  "
                   f"({time.time()-t0:.0f}s)", flush=True)
     ema.copy_to(ema_net)
@@ -977,6 +1072,10 @@ def main():
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--antithetic", action="store_true")
     ap.add_argument("--refine", type=str, default="2,4,8,16")
+    ap.add_argument("--init-from", type=str, default="",
+                    help="checkpoint to warm-start the control from, for "
+                         "beta-annealing. The control *function* is "
+                         "transferred, not the raw weights: see train_one.")
     ap.add_argument("--ckpt-dir", type=str, default="")
     ap.add_argument("--tag", type=str, default="stiefel")
     ap.add_argument("--out", type=str, default="json/results_stiefel.json")

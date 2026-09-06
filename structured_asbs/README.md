@@ -19,6 +19,64 @@ json/            every results_*.json the figures and tables are built from
 
 ---
 
+## Experimental setup
+
+Everything below is what the committed `json/results_*.json` files were
+produced with; each of those files also carries its own full `config` block, so
+any number in this README can be traced back to the flags that made it.
+
+**Hardware and software.** Single NVIDIA A100 80GB per run (two available, used
+only to run independent experiments concurrently). PyTorch 2.5.1, CUDA 12.6,
+NumPy 2.4.6, conda environment `SML_env` (Python 3.11). Manifold state and all
+metrics are `float64`; the networks are `float32`.
+
+**The source is a Dirac in every experiment.** This is the structural point of
+the method and it is what the whole R-ASBS comparison turns on, so it is worth
+stating plainly: we start from a *fixed point* `x_0` and learn a control that
+transports the reference process to the target, following Adjoint Sampling. We
+never sample the source from a guessed distribution. R-ASBS instead starts from
+**Haar**, which is only correct in the β → 0 limit — the correct initial law
+for the h-transform is `Haar · φ₀ / ⟨Haar, φ₀⟩`, and `φ₀` is not constant. That
+mismatch is the source-tilting bias measured in the Stiefel section.
+
+| | A: Ising | B: occupation | C: S² | D: St(4,2) |
+|---|---|---|---|---|
+| script | `fixed_ising.py` | `occupation.py` | `sphere.py` | `stiefel.py` |
+| state space | 4×4 periodic lattice, 16 spins, magnetisation fixed | 4 particles on 4 sites | unit sphere in R³ | 4×2 orthonormal frames |
+| target | `E = −J Σ_⟨ij⟩ s_i s_j`, `J = 1`, `τ = 2` | `π(η) ∝ Π_i Γ(η_i+d)/(η_i! Γ(d))`, `d = 0.5` | `E(x) = 6(1 − x₃²)`, `π ∝ exp(6x₃²)` | `E(X) = tr(XᵀHX)`, `H = diag(1,2,5,8)` |
+| temperature | `τ = 2` | `τ = 1` | `τ = 1` | `τ = 1/β`, β swept 1e-3 → 1e6 |
+| source `x_0` | fixed spin configuration | fixed occupancy | `(1, 0, 0)` | `E₀ = [e₁, e₂]` |
+| reference | exact enumeration | exact (matrix exponential) | exact inverse-CDF | MCMC, 2e5 chains × 3000 sweeps |
+| network | `SwapController`, hidden 512 | `OccController`, hidden 256 | `ScoreNet`, hidden 256 | `ScoreNet`, hidden 256 |
+| parameters | 670,464 | 139,536 | 136,963 | 139,528 |
+| integration steps | 128 | 128 | 128 | 199 |
+| iters × inner | 300 × 40 | 1500 × 4 | 4000 × 16 | 1500 × 8 |
+| batch / minibatch | 2048 / 1024 | 512 / 1024 | 8192 / 16384 | 2048 / 16384 |
+| lr | 3e-4 | 1e-3 | 1e-3 | 1e-3 |
+| EMA / buffer | — / 8 | — / 8 | 0.9995 / 4 | 0.9995 / 4 |
+| eval samples | 20,000 | 20,000 | 200,000 | 100,000 |
+| seeds | 1 | 1 | 5 | 1 |
+
+Experiment D additionally uses `σ = √2`, `nq = 64` fibre quadrature nodes, and
+`--antithetic` (the exact 16-fold symmetry `T_s(X) = SXD`). Its ScoreNet also
+carries one non-trainable scalar buffer, `out_scale`, described under "What it
+is not (1): the loss scale".
+
+**R-ASBS baseline** (`rasbs_port.py`, a port of `alg2_stiefel.m` from commit
+`bb71d14`): two networks totalling **140,560** parameters (`netU` 70,408 +
+`netH` 70,152), 199 integration steps, batch 600, 1000 epochs, lr 1e-3, Haar
+source, ambient Euler step followed by a QR retraction. Parameter counts are
+within 1% of ours (139,528 vs 140,560) and the budget-matched comparison equalises
+oracle calls at 600,000 exactly.
+
+**Wall-clock**, single A100, for the numbers quoted in this README: Experiment D
+trains in ~1130 s per β at 199 steps, ~2180 s at 398 and ~4380 s at 796, plus
+sampling and the MCMC reference. R-ASBS costs ~780 s per β at 512 steps and
+~1560 s at 1024. Every `results_*.json` records `train_s` (ours) or `wall_s`
+(theirs) per β.
+
+---
+
 ## Comparison scoreboard
 
 Reference column is exact where an exact value exists, otherwise an
@@ -34,7 +92,10 @@ the Stiefel numbers come from rerunning their algorithm ourselves.
 | S² analytic | max norm residual | 0 | not reported | **2.2e-16** |
 | St(4,2) | E at β = 0.1 | 7.6671 | 7.7262 | **7.6893** |
 | St(4,2) | error at β = 0.001 | 0 | 0.042 | **0.0007** |
-| St(4,2) | error at β = 50 | 0 | **0.270** | 4.391 (not converged) |
+| St(4,2) | error at β = 50, 199 steps | 0 | **0.270** | 4.391 (not converged) |
+| St(4,2) | error at β = 50, refined grid | 0 | 0.246 (1024 steps, floor) | **0.010** (1592 steps) |
+| St(4,2) | error at β = 100, refined grid | 0 | 0.215 (512 steps, floor) | **0.046** (3184 steps) |
+| St(4,2) | KS(E) at β = 100, 3184 steps | 0 | not reported | 0.312 (mean fixed, law not) |
 | St(4,2) | E as β → ∞ | 3 | **3.185** | 3.310 (β=10) |
 | St(4,2) | worst finite-β error | 0 | **0.547** (β=2) | **0.166** (β=1.3) |
 | St(4,2) | error at β=1 | 0 | ≈0.30 (interp.) | **0.100** |
@@ -114,13 +175,24 @@ is structural: the correct initial law for the h-transform is Haar·φ₀ /
 **The β → ∞ limit is never reached.** Their own paper states the limit is 3;
 the rerun plateaus at 3.185 and stays there from β = 10³ to β = 10⁶.
 
-### Where our method fails
+### High β: where our method fails, and what that failure is
 
-At β = 50 and β = 100 our training does not converge, and R-ASBS beats us
-there by more than an order of magnitude. This is stated first because it is
-the one place in this repository where the comparison goes the other way.
+**On the shared 199-step grid, R-ASBS beats us at β = 50 and β = 100 by more
+than an order of magnitude** (+0.270 / +0.234 against our +4.391 / +5.290).
+That is stated first, and it is the headline number in the table above, because
+it is the one place in this repository where the comparison goes the other way.
 
-The mechanism is not subtle. The regression loss scales like β²:
+The rest of this section is about what kind of error that is, because it turns
+out not to be the same kind of error as R-ASBS's. Ours is discretisation error
+and shrinks to +0.010 and +0.046 when the integration grid is refined; theirs
+is a bias floor that refinement does not remove. Both halves of that sentence
+are measured below. Two other explanations we found plausible were tested and
+are wrong, and they are recorded here as well, because a repository that only
+lists the hypotheses that survived is not much use.
+
+#### What it is not (1): the loss scale
+
+The regression loss does scale like β²:
 
 | β | 0.001 | 2 | 50 | 100 |
 |---|---:|---:|---:|---:|
@@ -128,24 +200,115 @@ The mechanism is not subtle. The regression loss scales like β²:
 | converged? | yes | yes | no, flat for 1500 iters | no, flat for 1500 iters |
 
 At β = 50 the loss reads 71015 → 69980 → 71889 across the run: it never
-descends at all. The score magnitude that the target implies also destabilises
-the 199-step Euler grid. Refining that grid on the *same* trained control
-separates the two effects:
+descends at all. That is a tempting story — except Adam is scale-invariant, so
+loss magnitude alone cannot be the cause. What is *not* scale-invariant is the
+fixed `clip_grad_norm_(·, 10.0)`, and the zero-initialised output layer being
+asked to emit O(β) values at a step size capped by `lr`.
 
-| β | 199 steps | 398 steps | 796 steps |
+So we removed the scale. `ScoreNet` was refactored to `score = out_scale ·
+raw(t, X)`, with `out_scale` a running RMS of the label, and training regresses
+`raw` against `lab / out_scale`. This makes the loss, the gradient clip and the
+output range O(1) at every β. It works as intended — the normalised loss at
+β = 100 is 7.43, indistinguishable from 7.5 at β = 2 — and it changes nothing:
+
+| β | before (β²-scaled loss) | after (normalised loss) |
+|---:|---:|---:|
+| 50 | +4.391 | +4.463 |
+| 100 | +5.290 | +5.271 |
+
+That is a clean negative result, and it rules out the whole loss-scaling family
+of explanations. `--init-from` and the `out_scale` factorisation were kept
+anyway, since they are what make the numbers below reachable.
+
+#### What it is: discretisation
+
+The score the target implies is O(β), and the Euler step on a 199-point grid is
+h = 1/199, so h · score is O(1) *per step* at β = 100 — the integrator is being
+asked to take order-one jumps on a manifold of diameter order one. Refining the
+grid, and warm-starting the control from the next β down so that collection
+does not begin from a control that has never seen the mode, gives:
+
+| β | 199 | 398 | 796 | 1592 | 3184 |
+|---:|---:|---:|---:|---:|---:|
+| 50 | +4.391 | +0.0685 | +0.0223 | **+0.0101** | — |
+| 100 | +5.290 | +4.063 | +3.470 | +0.746 | **+0.0461** |
+
+These rows are not single sweeps and should not be read as one. The 199 column
+is the original cold-start run from the main β sweep. For β = 50 the remaining
+columns come from one control trained on 398 steps (warm-started from β = 20),
+evaluated on its own grid and then refined. For β = 100, the 398 cell is a
+control trained on 398 steps and the 796 / 1592 / 3184 cells are a second
+control trained on 796, again refined. Refinement always reuses the trained
+control; it never retrains. `json/results_stiefel_anneal_*.json` has the raw
+records.
+
+Both rows end below R-ASBS's +0.270 and +0.234 — by 27× at β = 50 and 5× at
+β = 100. Nothing about the *learning* was broken: the β = 100 control in that
+last cell was trained while its own sampler sat off-mode at E = 6.50, and still
+integrates to a nearly correct mean energy once the grid is fine enough.
+
+That last sentence says *mean* on purpose. |ΔE| is a one-number summary and it
+is the flattering one here; the distributional metric is not as kind:
+
+| | steps | E | reference | ΔE | KS(E) |
+|---|---:|---|---|---:|---:|
+| β = 50 | 1592 | 3.0534 ± 0.0377 | 3.0433 ± 0.0286 | +0.0101 | 0.118 |
+| β = 100 | 3184 | 3.0771 ± 0.2831 | 3.0310 ± 0.0175 | +0.0461 | 0.312 |
+
+At β = 50 the agreement is real: the mean is 0.3% off and the spread is 30%
+too wide. At β = 100 it is not. The mean lands within 0.046, but the energy
+distribution is **16× too broad**, and KS = 0.312 says the two samples are
+plainly distinguishable. Both rows fail the KS < 0.05 gate that every other β
+in the sweep passes. So refinement fixes the mean at β = 100 and does not fix
+the law; 3184 steps is enough for the first moment and not enough for the
+distribution, and we did not find the grid that is.
+
+#### Why this is not a like-for-like win
+
+The refined cells cost more than the R-ASBS numbers they beat, and the training
+recipe is not the one used for the rest of the β column (the β = 50 row is
+warm-started from β = 20 and trained on 398 steps; the β = 100 row is
+warm-started from β = 50 and trained on 796). So the headline table keeps the
+199-step numbers, where R-ASBS wins, and these are reported separately rather
+than swapped in.
+
+What makes the comparison worth making at all is that the two errors behave
+differently under refinement. Ours falls by a factor of 400 (β = 50) and 100
+(β = 100). R-ASBS's does not. We did not assume this at β = 50 and 100 — we
+measured it, rerunning their algorithm at the same three step counts with
+everything else held fixed:
+
+| R-ASBS steps | 199 | 512 | 1024 |
 |---:|---:|---:|---:|
-| 50 | +4.391 | +3.333 | **+0.415** |
-| 100 | +5.290 | +4.202 | +3.509 |
+| error at β = 50 | +0.2721 | +0.2552 | +0.2479 |
+| error at β = 100 | +0.2347 | +0.2177 | (running) |
 
-So at β = 50 most of the failure is integration, not learning — 796 steps
-recovers to +0.415, still bad but no longer catastrophic. At β = 100 both
-effects are present and refinement recovers little. Either way the fixed budget
-(1500 iterations, lr 1e-3, 199 steps) is simply the wrong budget at large β,
-and we have not fitted a β-dependent one. R-ASBS's Haar source, whose bias
-saturates at ≈+0.23, degrades far more gracefully.
+A 5× refinement buys them 0.024. The same refinement factor takes us from
++4.391 to +0.010. The identical pattern holds at β = 2, where their error is
+largest and their own step sweep gives
 
-The two points are plotted and tabulated like every other β, marked but not
-removed.
+| R-ASBS steps | 32 | 64 | 128 | 256 | 512 |
+|---:|---:|---:|---:|---:|---:|
+| E − E_ref | +0.804 | +0.659 | +0.600 | +0.525 | +0.492 |
+
+which Richardson-extrapolates in 1/N to a floor near +0.46 — the
+source-tilting bias and the QR retraction, neither of which is a function of
+step size. Spending 16× the steps buys them 0.31; spending 16× the steps buys
+us a factor of 400. That is the substantive difference, and it is a statement
+about where each method's error comes from, not about which is faster.
+
+#### What we still do not understand
+
+Whether a given (β, steps, warm start) combination lands in the stable regime
+is not something we can predict. `out_scale`, the measured RMS of the label,
+sits near 0.55 β when the sampler is on the mode and near 2 β when it is not,
+and the runs that fail are the ones that spend their transient in the second
+regime. But the increment size does not control which happens: warm-starting
+β = 50 from β = 20 is a 2.5× jump and stayed on-mode, while β = 65 from β = 50
+is a 1.3× jump, on a *finer* grid, and did not. We tried a 50 → 65 → 80 → 100
+chain on that reasoning and it failed at the first leg. So the stability
+boundary is real and reproducible but we have no account of it, and the step
+counts above were found by measurement rather than derived.
 
 ### Reproducing
 
@@ -323,11 +486,20 @@ directly in the second moment rather than inferred from an error curve.
 
 ## Honest limitations
 
-- **At β ≥ 50 our training does not converge and R-ASBS is better than we
-  are** (their +0.27 against our +4.39 at β = 50). The loss grows like β² and
-  never descends at the fixed budget; grid refinement recovers β = 50 to +0.415
-  but not β = 100. A β-dependent budget is the obvious fix and we have not done
-  it.
+- **At β ≥ 50 on the shared 199-step grid our sampler does not converge and
+  R-ASBS is better than we are** (their +0.27 against our +4.39 at β = 50).
+  The cause is discretisation, not learning: refining the grid and
+  warm-starting from the β below recovers +0.010 at β = 50 (1592 steps) and
+  +0.046 at β = 100 (3184 steps), both far below R-ASBS's floor, but at 8–16×
+  their step budget and with a training recipe that differs from the rest of
+  the sweep. We report both, and keep the 199-step number in the headline.
+- **The β = 100 refined cell fixes the mean and not the law.** ΔE = +0.046 but
+  KS(E) = 0.312 and the energy spread is 16× too broad. We did not find a grid
+  fine enough to fix the distribution at β = 100.
+- **We cannot predict which (β, steps, warm start) combinations are stable.**
+  `out_scale` sits near 0.55 β on-mode and near 2 β off-mode, and the failing
+  runs are the off-mode ones — but a 2.5× β jump succeeded where a 1.3× jump on
+  a finer grid failed. The step counts above were found by measurement.
 - Our self-imposed Stiefel gate is `|E − E_MCMC| < 0.05`. At β = 0.1 we pass
   it (0.022); at β ≥ 0.5 we do not (0.10–0.17 at 199 steps). Refining the
   integration grid on the *same* trained control drops β = 1 to 0.050 at 1024
