@@ -150,13 +150,15 @@ class FixedIsingSpace:
     def _distance_weight_matrix(self, f, chunk=2048):
         k, M = self.k, self.M
         J = min(k, self.n - k)
-        W = torch.zeros(M, J + 1, device=self.device)
+        # the (chunk, M) distance block is the largest temporary here; cap it so
+        # that L = 5 (M = 5.2e6) does not ask for a 42 GB allocation.
+        chunk = max(1, min(chunk, int(1e9) // max(M, 1)))
+        W = torch.zeros(M, J + 1, device=self.device, dtype=f.dtype)
         Sf = self.Sf
         for a in range(0, M, chunk):
             b = min(a + chunk, M)
             d = k - torch.round(Sf[a:b] @ Sf.T).long()          # (c, M)
-            for j in range(J + 1):
-                W[a:b, j] = ((d == j).to(f.dtype) * f).sum(dim=1)
+            W[a:b].scatter_add_(1, d, f.unsqueeze(0).expand(b - a, M))
         return W
 
     def kappa_table(self, gammas):
