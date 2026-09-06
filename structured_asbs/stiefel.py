@@ -848,7 +848,7 @@ def run_train(args):
             ms.append(m)
             print(report(f"seed {seed}", m), flush=True)
             C.save_ckpt(args.ckpt_dir, f"{args.tag}_b{beta:g}_seed{seed}",
-                        net=net, samples=Xs.to(torch.float32),
+                        net=net, samples=Xs,
                         extra={"config": vars(args), "metrics": m,
                                "mcmc": mref, "beta": beta})
         dE = float(np.mean([m["E_err"] for m in ms]))
@@ -858,7 +858,7 @@ def run_train(args):
         out[beta] = {"mcmc": mref, "seeds": ms, "dE": dE, "KS_E": ks}
         print(f"    beta={beta:g}  mean |dE|={dE:.4f}   mean KS(E)={ks:.4f}")
         C.save_ckpt(args.ckpt_dir, f"{args.tag}_b{beta:g}_mcmc",
-                    samples=Xref[:args.n_samples].to(torch.float32),
+                    samples=Xref[:args.n_samples],
                     extra={"metrics": mref, "beta": beta})
 
     mdE, mks = float(np.mean(gate_dE)), float(np.mean(gate_ks))
@@ -941,7 +941,7 @@ def run_sweep(args):
         print(report(f"steps={steps:4d}", m), flush=True)
         if args.ckpt_dir:
             C.save_ckpt(args.ckpt_dir, f"{args.tag}_sweep_steps{steps}",
-                        net=net, samples=Xs.to(torch.float32),
+                        net=net, samples=Xs,
                         extra={"metrics": m, "steps": steps})
     with open(args.out, "w") as f:
         json.dump({"config": vars(args), "sweep": out}, f, indent=2, default=str)

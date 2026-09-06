@@ -9,10 +9,12 @@ the same way.  Nothing here is summarised into a curve.
 Two things this file is careful about, because both are easy to get wrong and
 both would flatter us:
 
-  * Checkpointed samples are stored in float32.  The orthogonality residual
-    recomputed from them is therefore float32 round-off (~1e-7), NOT the true
-    3.8e-14 that stiefel.py measures in float64 at generation time.  No panel
-    here draws that residual; quoting it from disk would be an artefact.
+  * Checkpoints written before common.py stored samples in float64 are float32.
+    An orthogonality residual recomputed from those is float32 round-off
+    (~1e-7), NOT the true 3.8e-14 that stiefel.py measures at generation time,
+    and it coincidentally resembles R-ASBS's 3.4e-07 retraction error.
+    Figure 7 draws that residual only when the checkpoint is actually float64,
+    and prints a notice otherwise rather than plotting the storage artefact.
 
   * stiefel.py works in the eigenbasis of H (H = diag(1,2,5,8)) while
     rasbs_port.py works in R-ASBS's ambient Z2xZ2 basis.  Figure 7 rotates
@@ -51,9 +53,20 @@ def load_ck(tag):
     return torch.load(p, map_location="cpu", weights_only=False)
 
 
-def samples_of(tag):
+def samples_of(tag, want_f64=False):
+    """Return samples as float64 for arithmetic.
+
+    `want_f64` asks whether the file *itself* was float64.  Upcasting a float32
+    checkpoint does not recover precision, so any panel that measures round-off
+    has to check the stored dtype rather than the array it gets back.
+    """
     d = load_ck(tag)
-    return None if d is None else d["samples"].numpy().astype(np.float64)
+    if d is None:
+        return (None, False) if want_f64 else None
+    x = d["samples"]
+    exact = x.dtype == torch.float64
+    x = x.numpy().astype(np.float64)
+    return (x, exact) if want_f64 else x
 
 
 def _missing(fig, tags):
@@ -205,9 +218,9 @@ def _canonical(X):
 
 
 def figure7(args, beta=2):
-    o = samples_of(f"stiefel_grid_b{beta}_seed0")
+    o, o64 = samples_of(f"stiefel_grid_b{beta}_seed0", want_f64=True)
     r = samples_of(f"stiefel_grid_b{beta}_mcmc")
-    a = samples_of(f"rasbs_b{beta}")
+    a, a64 = samples_of(f"rasbs_b{beta}", want_f64=True)
     miss = [t for t, d in [(f"stiefel_grid_b{beta}_seed0", o),
                            (f"stiefel_grid_b{beta}_mcmc", r),
                            (f"rasbs_b{beta}", a)] if d is None]
@@ -245,9 +258,17 @@ def figure7(args, beta=2):
     Mr, Mo, Ma, Mh = M(r), M(o), M(a), np.eye(4) * 0.5
     dh = np.linalg.norm(Mh - Mr)
 
-    fig = plt.figure(figsize=(12.6, 6.4))
-    gs = fig.add_gridspec(2, 4, height_ratios=[1, 0.62], hspace=0.42,
-                          wspace=0.14)
+    show_gram = o64 and a64
+    if not show_gram:
+        print("  [note] figure 7: orthogonality panel skipped -- "
+              f"ours float64={o64}, R-ASBS float64={a64}; a residual "
+              "recomputed from float32 storage would be round-off, not the "
+              "measured 3.8e-14.  Re-run the experiment to refresh the "
+              "checkpoint.")
+    fig = plt.figure(figsize=(12.6, 6.4 + (2.0 if show_gram else 0.0)))
+    gs = fig.add_gridspec(3 if show_gram else 2, 4,
+                          height_ratios=[1, 0.62, 0.52] if show_gram
+                          else [1, 0.62], hspace=0.42, wspace=0.14)
 
     sub = fig.add_subplot(gs[0, 0:1])
     sheet(sub, o, "ours", f"$E$ = {(w * np.diag(Mo)).sum():.3f}")
@@ -304,6 +325,40 @@ def figure7(args, beta=2):
         "the null: no transport at all")
     cb = fig.colorbar(im, ax=axs, fraction=0.015, pad=0.012)
     cb.ax.tick_params(labelsize=7)
+
+    if show_gram:
+        # Constraint enforcement, drawn rather than tabulated.  Ours is an exact
+        # geodesic step, theirs a QR retraction; the gap is seven orders of
+        # magnitude and no amount of grid refinement closes it.
+        def gram(ax, X, title, sub):
+            G = np.abs(np.einsum("nia,nib->nab", X[:96], X[:96])
+                       - np.eye(2))
+            rows_, cols_ = 4, 24
+            tile = np.full((rows_ * 3 - 1, cols_ * 3 - 1), np.nan)
+            for k in range(rows_ * cols_):
+                i, j = divmod(k, cols_)
+                tile[i * 3:i * 3 + 2, j * 3:j * 3 + 2] = G[k]
+            im = ax.imshow(np.log10(np.maximum(tile, 1e-18)), cmap="magma",
+                           vmin=-16, vmax=-6, interpolation="nearest")
+            ax.set_xticks([]); ax.set_yticks([])
+            for sp in ax.spines.values():
+                sp.set_visible(False)
+            ax.set_title(title, fontsize=9.5, pad=3)
+            _caption(ax, sub)
+            return im
+
+        Go = np.abs(np.einsum("nia,nib->nab", o, o) - np.eye(2)).max()
+        Ga = np.abs(np.einsum("nia,nib->nab", a, a) - np.eye(2)).max()
+        axa = fig.add_subplot(gs[2, 0:2])
+        img = gram(axa, o, "$|X^\\top X - I|$, ours (exact geodesic step)",
+                   f"max over all {len(o):,} samples: {Go:.1e}")
+        axb = fig.add_subplot(gs[2, 2:4])
+        gram(axb, a, "$|X^\\top X - I|$, R-ASBS (QR retraction)",
+             f"max over all {len(a):,} samples: {Ga:.1e}   "
+             f"({Ga / max(Go, 1e-300):.0e}$\\times$ larger)")
+        cb2 = fig.colorbar(img, ax=[axa, axb], fraction=0.015, pad=0.012)
+        cb2.set_label("$\\log_{10}$ residual", fontsize=8)
+        cb2.ax.tick_params(labelsize=7)
 
     fig.suptitle(f"Figure 7 $-$ St(4,2) at $\\beta$ = {beta}: raw frames, and "
                  "the second moment that separates the samplers",

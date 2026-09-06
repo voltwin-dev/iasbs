@@ -492,13 +492,13 @@ def run_exact(args):
         out[steps] = m
         report(f"steps={steps:4d}", m)
         C.save_ckpt(args.ckpt_dir, f"{args.tag}_exact_steps{steps}",
-                    samples=x.to(torch.float32), extra={"metrics": m})
+                    samples=x, extra={"metrics": m})
     prob = SphereProblem(sigma=args.sigma, tau=args.tau, steps=128)
     torch.manual_seed(args.seed)
     xr = simulate(prob, None, args.n_samples, 128)
     report("reference   ", z_metrics(xr))
     C.save_ckpt(args.ckpt_dir, f"{args.tag}_reference",
-                samples=xr.to(torch.float32),
+                samples=xr,
                 extra={"metrics": z_metrics(xr)})
     # finite-sample KS floor
     grid, cdf = C.exact_s2_z_cdf_grid(num=40001)
@@ -639,7 +639,7 @@ def run_train(args):
                 xs_fin = simulate(prob, _score_fn(ema_net, steps),
                                   args.n_samples, steps)
             p = C.save_ckpt(args.ckpt_dir, f"{args.tag}_seed{seed}",
-                            net=ema_net, samples=xs_fin.to(torch.float32),
+                            net=ema_net, samples=xs_fin,
                             extra={"config": vars(args), "metrics": m,
                                    "score_rel_err": errs})
             print(f"    ckpt -> {p}", flush=True)

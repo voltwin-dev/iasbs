@@ -741,13 +741,24 @@ def save_ckpt(ckpt_dir, tag, net=None, samples=None, extra=None):
     os.makedirs(ckpt_dir, exist_ok=True)
     blob = {"tag": tag}
     if net is not None:
+        # The network really is a float32 module; storing it as anything else
+        # would be a lie about what was trained.
         blob["state_dict"] = {k: v.detach().cpu()
                               for k, v in net.state_dict().items()}
     if samples is not None:
         if torch.is_tensor(samples):
-            blob["samples"] = samples.detach().cpu()
+            x = samples.detach().cpu()
         else:
-            blob["samples"] = torch.as_tensor(np.asarray(samples))
+            x = torch.as_tensor(np.asarray(samples))
+        # Manifold samples are stored in float64.  Our constraint residuals are
+        # 2e-16 on S^2 and 3.8e-14 on St(4,2); float32 storage has an epsilon of
+        # 1.2e-07, so downcasting would destroy the very result the checkpoint
+        # exists to evidence -- and would leave a number that coincidentally
+        # resembles R-ASBS's 3.4e-07 retraction error.  Integer state indices
+        # are left alone.
+        if x.is_floating_point():
+            x = x.to(torch.float64)
+        blob["samples"] = x
     if extra:
         blob["extra"] = extra
     path = os.path.join(ckpt_dir, f"{tag}.pt")

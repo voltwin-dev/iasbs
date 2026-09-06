@@ -221,11 +221,20 @@ with uniform azimuth, so this is exact), and against that reference 99% of the
 1800 equal-area bins fall within ±3σ with max |z| = 4.3: at 200,000 samples a
 side there is no resolvable structure left in the residual.
 
-**Checkpointed samples are float32.** The orthogonality residual recomputed
-from disk is therefore float32 round-off, ~1e-7 — not the 3.8e-14 that
-`stiefel.py` measures in float64 at generation time. No panel draws that
-residual; it would be an artefact of the storage format, and it would happen
-to look like R-ASBS's 3.4e-07.
+**Checkpoints now store samples in float64.** They used to be float32, whose
+epsilon is 1.2e-07. Recomputing the orthogonality residual from such a file
+returns storage round-off rather than the 3.8e-14 `stiefel.py` measures at
+generation time — and that round-off happens to look like R-ASBS's 3.4e-07
+retraction error, which is exactly the number the residual exists to
+distinguish itself from. `common.py:save_ckpt` promotes any floating-point
+sample tensor to float64; integer state indices are left alone. Figure 7 draws
+the residual only when the checkpoint on disk is genuinely float64 and prints a
+notice otherwise, so an old file degrades to a missing panel rather than to a
+wrong one.
+
+Checkpoints written before this change are float32. `regen_f64.sh` re-runs the
+β = 2 pair (ours and the R-ASBS port) at the same configuration and seed to
+refresh them; everything else refreshes the next time its experiment is run.
 
 **`stiefel.py` and `rasbs_port.py` do not use the same basis.** Ours works in
 the eigenbasis of H (H = diag(1, 2, 5, 8)); theirs works in R-ASBS's ambient
