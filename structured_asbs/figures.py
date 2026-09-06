@@ -180,10 +180,38 @@ def figure4():
 # ============================================================================
 # Figure 5 -- Stiefel
 # ============================================================================
+
+# Above this beta our fixed training budget stops converging.  It is a measured
+# threshold, not a chosen one: at beta = 50 and 100 the regression loss sits at
+# 7.1e4 and 2.8e5 and never descends (it is ~0.05 at beta = 0.001, and grows
+# like beta^2), and the 199-step Euler grid is unstable at the resulting score
+# magnitude.  Those two points are plotted and tabulated like any other -- they
+# are our failure, not a gap -- but they are marked so nobody reads them as a
+# converged result.
+OURS_DIVERGED = (50.0, 100.0)
+
+
+def ours_betas():
+    """Our beta grid, merged across runs, as {beta: entry}.
+
+    results_stiefel_grid.json is the original six-beta sweep;
+    results_stiefel_fill.json adds the betas that had simply never been trained
+    (each is a full ~30-minute run, which is the only reason they were absent).
+    Same configuration and seed, so the two merge directly.
+    """
+    out = {}
+    for name in ("results_stiefel_grid.json", "results_stiefel_fill.json"):
+        d = load(name)
+        if d is not None:
+            out.update({float(k): v for k, v in d["betas"].items()})
+    return out
+
+
 def figure5():
     ref = load("results_stiefel_ref.json")
     ra = load("results_rasbs_stiefel.json")
-    ours = load("results_stiefel_grid.json")
+    om = ours_betas()
+    ours = {"betas": {f"{b:g}": v for b, v in om.items()}} if om else None
     miss = [n for n, d in [("results_stiefel_ref.json", ref),
                            ("results_rasbs_stiefel.json", ra)] if d is None]
     if miss:
@@ -225,7 +253,14 @@ def figure5():
     ax[0].axhline(3.0, ls=":", color="gray")
     if ours is not None:
         bo, eo = curve(ours)
-        ax[0].plot(bo, eo, "-^", ms=4, color=CB["ours"], label="ours")
+        ok = [i for i, b in enumerate(bo) if b not in OURS_DIVERGED]
+        bad = [i for i, b in enumerate(bo) if b in OURS_DIVERGED]
+        ax[0].plot([bo[i] for i in ok], [eo[i] for i in ok], "-^", ms=4,
+                   color=CB["ours"], label="ours")
+        if bad:
+            ax[0].plot([bo[i] for i in bad], [eo[i] for i in bad], "x", ms=8,
+                       mew=2, color=CB["ours"],
+                       label="ours, training did not converge")
     ax[0].set_xscale("log")
     ax[0].set_xlabel(r"$\beta$")
     ax[0].set_ylabel(r"$E[\mathrm{tr}(X^\top H X)]$")
@@ -252,7 +287,13 @@ def figure5():
     ax[1].plot(b1, e1, "-s", ms=3, color=CB["rasbs"], label="R-ASBS (rerun)")
     if ours is not None:
         b2, e2 = err(ours)
-        ax[1].plot(b2, e2, "-^", ms=4, color=CB["ours"], label="ours")
+        ok = [i for i, b in enumerate(b2) if b not in OURS_DIVERGED]
+        bad = [i for i, b in enumerate(b2) if b in OURS_DIVERGED]
+        ax[1].plot([b2[i] for i in ok], [e2[i] for i in ok], "-^", ms=4,
+                   color=CB["ours"], label="ours")
+        if bad:
+            ax[1].plot([b2[i] for i in bad], [e2[i] for i in bad], "x", ms=8,
+                       mew=2, color=CB["ours"], label="ours, not converged")
     ax[1].set_xscale("log")
     ax[1].set_xlabel(r"$\beta$")
     ax[1].set_ylabel("E - reference")
@@ -296,7 +337,8 @@ def figure5():
 def table_stiefel():
     """PLAN 8.2 comparison table, emitted as markdown."""
     ref, ra = load("results_stiefel_ref.json"), load("results_rasbs_stiefel.json")
-    ours = load("results_stiefel_grid.json")
+    om = ours_betas()
+    ours = {"betas": {f"{b:g}": v for b, v in om.items()}} if om else None
     if ref is None or ra is None:
         return _missing("8.2 table", ["results_stiefel_ref.json / rasbs"])
     def _m(v):
@@ -319,10 +361,18 @@ def table_stiefel():
         else:
             row += ["-", "-"]
         if b in omap:
-            row += [f"{_m(omap[b]):.4f}", f"{_m(omap[b]) - tgt:+.4f}"]
+            mark = " *" if b in OURS_DIVERGED else ""
+            row += [f"{_m(omap[b]):.4f}{mark}",
+                    f"{_m(omap[b]) - tgt:+.4f}{mark}"]
         else:
             row += ["-", "-"]
         lines.append("| " + " | ".join(row) + " |")
+    if any(b in omap for b in OURS_DIVERGED):
+        lines += ["",
+                  "`*` training did not converge at this beta: the regression "
+                  "loss stays at 7e4 / 3e5 for the whole run and the 199-step "
+                  "grid is unstable at the resulting score magnitude. Reported "
+                  "as measured. R-ASBS is better than us at these two points."]
     os.makedirs(OUT, exist_ok=True)
     txt = "\n".join(lines)
     with open(f"{OUT}/table_stiefel.md", "w") as f:

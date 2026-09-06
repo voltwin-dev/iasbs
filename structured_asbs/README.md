@@ -33,6 +33,8 @@ the Stiefel numbers come from rerunning their algorithm ourselves.
 | S² analytic | KS(x₃) | 0 | not reported | **0.0217 ± 0.0006** |
 | S² analytic | max norm residual | 0 | not reported | **2.2e-16** |
 | St(4,2) | E at β = 0.1 | 7.6671 | 7.7262 | **7.6893** |
+| St(4,2) | error at β = 0.001 | 0 | 0.042 | **0.0007** |
+| St(4,2) | error at β = 50 | 0 | **0.270** | 4.391 (not converged) |
 | St(4,2) | E as β → ∞ | 3 | **3.185** | 3.310 (β=10) |
 | St(4,2) | worst finite-β error | 0 | **0.547** (β=2) | **0.166** (β=1.3) |
 | St(4,2) | error at β=1 | 0 | ≈0.30 (interp.) | **0.100** |
@@ -78,18 +80,26 @@ choice of the original: their 4×4 Z₂×Z₂ group matrix `H` (spectrum
 retraction, the backward sequential projection, and σ = 1, N = 199, B = 600,
 1000 epochs, lr = 1e-3.
 
-| β | reference | R-ASBS rerun | R-ASBS error |
-|---:|---:|---:|---:|
-| 0.001 | 7.9965 | 7.9546 | −0.042 |
-| 0.01 | 7.9628 | 7.9407 | −0.022 |
-| 0.1 | 7.6671 | 7.7262 | +0.059 |
-| 0.5 | 6.4171 | 6.5426 | +0.126 |
-| 1.3 | 4.7503 | 5.2008 | +0.451 |
-| 2 | 4.0976 | 4.6444 | **+0.547** |
-| 5 | 3.4104 | 3.8893 | +0.479 |
-| 10 | 3.2025 | 3.5275 | +0.325 |
-| 100 | 3.0279 | 3.2614 | +0.234 |
-| 10⁶ | 3 (exact) | 3.1847 | +0.185 |
+| β | reference | R-ASBS rerun | R-ASBS error | ours | our error |
+|---:|---:|---:|---:|---:|---:|
+| 0.001 | 7.9965 | 7.9546 | −0.042 | 7.9958 | **−0.001** |
+| 0.01 | 7.9628 | 7.9407 | −0.022 | 7.9679 | **+0.005** |
+| 0.1 | 7.6671 | 7.7262 | +0.059 | 7.6893 | **+0.022** |
+| 0.5 | 6.4171 | 6.5426 | +0.126 | 6.5152 | **+0.098** |
+| 1.3 | 4.7503 | 5.2008 | +0.451 | 4.9016 | **+0.151** |
+| 2 | 4.0976 | 4.6444 | **+0.547** | 4.2335 | **+0.136** |
+| 5 | 3.4104 | 3.8893 | +0.479 | 3.5212 | **+0.111** |
+| 7 | 3.2905 | 3.6104 | +0.320 | 3.3995 | **+0.109** |
+| 10 | 3.2025 | 3.5275 | +0.325 | 3.3102 | **+0.108** |
+| 20 | 3.1005 | 3.3858 | +0.285 | 3.2170 | **+0.116** |
+| 50 | 3.0418 | 3.3116 | **+0.270** | 7.4330 | +4.391 ✗ |
+| 100 | 3.0279 | 3.2614 | **+0.234** | 8.3180 | +5.290 ✗ |
+| 200 | 3 (exact) | 3.2482 | +0.248 | not trained | — |
+| 10⁶ | 3 (exact) | 3.1847 | +0.185 | not trained | — |
+
+Our column is trained one β at a time — each entry is a separate ~30 minute
+run, which is the only reason the grid was ever partial. ✗ marks the two
+points where our training does not converge; see below.
 
 Two observations that the curve alone does not show.
 
@@ -103,6 +113,39 @@ is structural: the correct initial law for the h-transform is Haar·φ₀ /
 
 **The β → ∞ limit is never reached.** Their own paper states the limit is 3;
 the rerun plateaus at 3.185 and stays there from β = 10³ to β = 10⁶.
+
+### Where our method fails
+
+At β = 50 and β = 100 our training does not converge, and R-ASBS beats us
+there by more than an order of magnitude. This is stated first because it is
+the one place in this repository where the comparison goes the other way.
+
+The mechanism is not subtle. The regression loss scales like β²:
+
+| β | 0.001 | 2 | 50 | 100 |
+|---|---:|---:|---:|---:|
+| final loss | 0.055 | ~10¹ | 7.1e+04 | 2.8e+05 |
+| converged? | yes | yes | no, flat for 1500 iters | no, flat for 1500 iters |
+
+At β = 50 the loss reads 71015 → 69980 → 71889 across the run: it never
+descends at all. The score magnitude that the target implies also destabilises
+the 199-step Euler grid. Refining that grid on the *same* trained control
+separates the two effects:
+
+| β | 199 steps | 398 steps | 796 steps |
+|---:|---:|---:|---:|
+| 50 | +4.391 | +3.333 | **+0.415** |
+| 100 | +5.290 | +4.202 | +3.509 |
+
+So at β = 50 most of the failure is integration, not learning — 796 steps
+recovers to +0.415, still bad but no longer catastrophic. At β = 100 both
+effects are present and refinement recovers little. Either way the fixed budget
+(1500 iterations, lr 1e-3, 199 steps) is simply the wrong budget at large β,
+and we have not fitted a β-dependent one. R-ASBS's Haar source, whose bias
+saturates at ≈+0.23, degrades far more gracefully.
+
+The two points are plotted and tabulated like every other β, marked but not
+removed.
 
 ### Reproducing
 
@@ -235,6 +278,9 @@ wrong one.
 Checkpoints written before this change are float32. `regen_f64.sh` re-runs the
 β = 2 pair (ours and the R-ASBS port) at the same configuration and seed to
 refresh them; everything else refreshes the next time its experiment is run.
+With those refreshed, figure 7's bottom row now draws the residual from disk:
+**3.0e-14 across all 100,000 of our samples against 2.9e-07 across theirs**, a
+factor of 10⁷, recomputed rather than quoted.
 
 **`stiefel.py` and `rasbs_port.py` do not use the same basis.** Ours works in
 the eigenbasis of H (H = diag(1, 2, 5, 8)); theirs works in R-ASBS's ambient
@@ -277,6 +323,11 @@ directly in the second moment rather than inferred from an error curve.
 
 ## Honest limitations
 
+- **At β ≥ 50 our training does not converge and R-ASBS is better than we
+  are** (their +0.27 against our +4.39 at β = 50). The loss grows like β² and
+  never descends at the fixed budget; grid refinement recovers β = 50 to +0.415
+  but not β = 100. A β-dependent budget is the obvious fix and we have not done
+  it.
 - Our self-imposed Stiefel gate is `|E − E_MCMC| < 0.05`. At β = 0.1 we pass
   it (0.022); at β ≥ 0.5 we do not (0.10–0.17 at 199 steps). Refining the
   integration grid on the *same* trained control drops β = 1 to 0.050 at 1024
