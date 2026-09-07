@@ -8,7 +8,6 @@ Our method and the baseline live in separate directories, so that no reader has
 to take on trust which code produced which column.
 
 ```
-PLAN.md                   the experimental plan the sections below are graded against
 LICENSE                   MIT for our code; see its scope note about rasbs/
 requirements.txt          pinned versions every number below was produced with
 common.py                 shared kernels, quadrature, Stiefel/S^3 helpers, ckpt IO
