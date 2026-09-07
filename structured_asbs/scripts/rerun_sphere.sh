@@ -1,7 +1,7 @@
 #!/bin/bash
 cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 set -x
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 CK=ckpt
 $PY -u structured_asbs/sphere.py exact --n-samples 200000 --ckpt-dir $CK --tag sphere \
     --out json/results_sphere_exact.json

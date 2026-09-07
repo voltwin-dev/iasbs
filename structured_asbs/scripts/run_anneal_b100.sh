@@ -4,7 +4,7 @@ cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # that run_anneal.sh just produced (dE = 0.0685 at 398 steps).  Split out
 # because run_train exits nonzero on a failed gate, which killed the original
 # two-leg script after beta=50.  No `set -e` here for the same reason.
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 export CUDA_VISIBLE_DEVICES=1
 $PY -u structured_asbs/stiefel.py train --betas 100 \
     --sigma 1.4142135623730951 --nq 64 --iters 1500 --inner 8 \

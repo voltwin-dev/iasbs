@@ -16,7 +16,7 @@ cd "$(dirname "$0")/.."   # repo root: json/, ckpt/ and fig/ live here
 # --ckpt-dir/--tag are mandatory here, not optional: the first version of this
 # script omitted them, so the six controls were discarded at exit and the sweep
 # had to be re-run from scratch to answer a follow-up question.
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 export CUDA_VISIBLE_DEVICES=0
 for N in 199 512 1024; do
   $PY -u rasbs/rasbs_port.py --betas 50,100 --steps $N --epochs 1000 \

@@ -15,7 +15,7 @@ cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # NOTE: run_train exits nonzero when a gate fails, and these betas are
 # exactly the ones we expect to miss the 0.05 gate, so `set -e` would kill
 # the chain after the first one.  Failures are reported, not fatal.
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 export CUDA_VISIBLE_DEVICES=1
 
 COMMON="--sigma 1.4142135623730951 --nq 64 --iters 1500 --inner 8 \

@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."   # repo root: json/, ckpt/ and fig/ live here
 # script omitted them, so the five controls were discarded at exit and the
 # sweep had to be re-run from scratch to answer a follow-up question.
 set -x
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 for N in 32 64 128 256 512; do
   $PY -u rasbs/rasbs_port.py --betas 2 --steps $N --epochs 1000 \
       --n-samples 100000 --ckpt-dir ckpt --tag rasbs_steps$N \

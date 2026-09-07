@@ -20,7 +20,7 @@ cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # Intermediate legs are short (600 iters, warm starts have little to learn) and
 # evaluate cheaply; only the final leg gets the full sampling budget.  No
 # `set -e`: a failed gate exits nonzero and that is expected here.
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 export CUDA_VISIBLE_DEVICES=1
 
 BASE="--sigma 1.4142135623730951 --nq 64 --inner 8 --batch 2048 --mb 16384 \

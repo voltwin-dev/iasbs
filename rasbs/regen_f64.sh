@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."   # repo root: json/, ckpt/ and fig/ live here
 # and seed as the runs that produced the headline numbers; only the storage
 # dtype changes.
 set -e
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 export CUDA_VISIBLE_DEVICES=1
 
 $PY -u rasbs/rasbs_port.py --betas 2 --tag rasbs --ckpt-dir ckpt \

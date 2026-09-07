@@ -3,7 +3,7 @@ cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # Re-run every headline experiment with --ckpt-dir so the learned control and
 # the raw terminal samples are on disk for figure generation.
 set -x
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 CK=ckpt
 
 # --- Phase 2a: fixed Ising -------------------------------------------------

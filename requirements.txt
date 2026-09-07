@@ -1,6 +1,11 @@
 # Deliberately minimal, in the spirit of the R-ASBS repository: no Hydra,
 # no Lightning, no experiment framework.  Everything runs from plain scripts.
-torch>=2.5
-numpy>=2.0
-scipy>=1.11
-matplotlib>=3.8
+#
+# These are the exact versions every number in README.md was produced with
+# (conda env SML_env, Python 3.11, torch built against CUDA 12.4, 2x A100 80GB).
+# Nearby versions almost certainly work; the pins are here so that a reader who
+# gets a different number knows the environment is not the reason.
+torch==2.5.1
+numpy==2.4.6
+scipy==1.17.1
+matplotlib==3.11.1

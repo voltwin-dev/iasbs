@@ -9,6 +9,8 @@ to take on trust which code produced which column.
 
 ```
 PLAN.md                   the experimental plan the sections below are graded against
+LICENSE                   MIT for our code; see its scope note about rasbs/
+requirements.txt          pinned versions every number below was produced with
 common.py                 shared kernels, quadrature, Stiefel/S^3 helpers, ckpt IO
 json/  ckpt/  fig/        artifacts, shared by both methods
 
@@ -58,7 +60,13 @@ flags that made it.
 Run on a single NVIDIA A100 80GB (two available, used only to run independent
 experiments concurrently), PyTorch 2.5.1, CUDA 12.4, NumPy 2.4.6, conda
 environment `SML_env` (Python 3.11). Manifold state and all metrics are
-`float64`; the networks are `float32`.
+`float64`; the networks are `float32`. `requirements.txt` pins those exact
+versions; nearby ones almost certainly work, the pins are there so a reader who
+gets a different number knows the environment is not the reason.
+
+The `bash …` command blocks below call the interpreter through `PY`, which
+defaults to whatever `python` is first on `PATH`. Point it somewhere else with
+`PY=/path/to/python bash rasbs/rasbs_steps.sh`.
 
 **The source is a Dirac in every experiment.** We start from a *fixed point*
 `x_0` and learn a control that transports the reference process to the target,
@@ -1003,3 +1011,15 @@ ablations above pass it explicitly. Both were originally written without it,
 which silently discarded the eleven controls they trained; the numbers in this
 section survived only because they were already in `json/`. The default was
 changed so that the omission cannot recur.
+
+---
+
+## License
+
+Our code is MIT (see `LICENSE`).
+
+The MIT grant covers the original work only. `rasbs/` holds ports of the R-ASBS
+reference implementation, whose upstream repository carries no license file at
+the commit we read (`bb71d14`). We claim no ownership of that material; anyone
+wanting to reuse `rasbs/` should ask its authors. The upstream clone is not
+redistributed here — `.gitignore` excludes `rasbs_ref/`.

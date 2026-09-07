@@ -13,7 +13,7 @@ cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # refines to 1592 and 3184.  If this still fails, the failure is a real
 # property of the h-transform at sharp targets and not a budget we forgot to
 # spend.  No `set -e`: a failed gate exits nonzero and that is expected here.
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 export CUDA_VISIBLE_DEVICES=1
 $PY -u structured_asbs/stiefel.py train --betas 100 \
     --sigma 1.4142135623730951 --nq 64 --iters 1500 --inner 8 \

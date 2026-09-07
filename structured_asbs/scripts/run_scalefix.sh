@@ -5,7 +5,7 @@ cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # stiefel_fill run recorded in json/results_stiefel_fill.json, so the before /
 # after comparison isolates the fix.
 set -e
-PY=/root/miniconda3/envs/SML_env/bin/python
+PY=${PY:-python}
 export CUDA_VISIBLE_DEVICES=1
 $PY -u structured_asbs/stiefel.py train --betas 50,100 \
     --sigma 1.4142135623730951 --steps 199 --nq 64 --iters 1500 --inner 8 \
