@@ -404,6 +404,61 @@ IASBS buys a 24x accuracy improvement over the best R-ASBS configuration at abou
 efficiency claim against R-ASBS; the claim in §4 is about *correctness and
 robustness to initialisation*, not speed.
 
+### 6.2 DAM
+
+| experiment | K | iters | wall (s) | s / iter | f1 evals | CTMC jumps | jumps / f1 eval |
+|---|---|---|---|---|---|---|---|
+| Occupation m=4 | 1 | 10 | 224.7 | 22.5 | 20,480 | 1,499,657 | **73.2** |
+| Occupation m=4 | 4 | 10 | 163.9 | 16.4 | 51,200 | 1,197,204 | **23.4** |
+| Occupation m=4 | 16 | 400 | 7380.9 | 18.5 | 6,963,200 | 67,417,741 | 9.68 |
+| Occupation m=4 | 16 | 1200 | **11529.3** | 9.6 | **20,889,600** | **185,004,804** | 8.86 |
+| Occupation m=4 | 64 | 400 | 3177.7 | 7.9 | 26,624,000 | 222,041,777 | 8.34 |
+| Ising L=4 | 16 | 1200 | RUNNING | >30 | — | — | — |
+| Occupation-scale m=32 | 16 | 1200 | RUNNING | >30 | — | — | — |
+| Occupation-scale m=128 | 16 | 600 | QUEUED | — | — | — | — |
+| Occupation-scale m=1000 | 16 | 300 | QUEUED | — | — | — | — |
+| Ising L=5 | 16 | 600 | QUEUED | — | — | — | — |
+
+DAM runs are **latency-bound, not throughput-bound**: measured CPU time equals wall
+time to within 1% on every leg, because each Gillespie rollout is a Python `while`
+loop issuing many small kernels and synchronising on `active.any()`. Consequences:
+
+- Batch size is nearly free; the number of `while` iterations is what costs.
+- Co-scheduling two DAM runs on one device roughly *doubles* both wall times rather
+  than overlapping them, which is why the remaining legs are queued serially
+  (`dam/queue_remaining.sh`).
+- The jump-explosion column is the mechanism behind the small-K divergence in §5.2:
+  at K=1 each terminal evaluation costs 73 simulated jumps versus 8.9 at K=16.
+
+### 6.3 Cost of the comparison, head to head
+
+Same benchmark (occupation m=4), same hardware, best setting of each method:
+
+| | IASBS | DAM (K=16, 1200 it) | ratio |
+|---|---|---|---|
+| terminal TV | **0.01248** | 0.01490 | IASBS 1.19x better |
+| adjoint rollouts | **0** | 20,889,600 | infinite |
+| f1 evals on rollout endpoints | **0** | 20,889,600 | infinite |
+| CTMC jumps simulated for the adjoint | **0** | 185,004,804 | infinite |
+| wall clock (s) | **214** | 11,529 | **53.9x** |
+
+IASBS is 54x faster in wall clock *and* more accurate, because the adjoint
+`phi_t(x) = E_base[f1(X_1) | X_t = x]` that DAM estimates with 20.9 million
+Monte-Carlo rollout-endpoint evaluations is available to IASBS in closed form via
+the intertwining identity. The gap is structural, not a matter of tuning.
+
+**The "0" is a specific quantity, not a claim of zero arithmetic.** See §6.4 for
+the exact accounting — IASBS does evaluate the target energy, and on the sphere
+its gradient. What it never does is *simulate a path in order to evaluate `f1` at
+the endpoint*.
+
+Caveat stated plainly: the two methods do not solve identical optimisation
+problems, and DAM is a general-purpose algorithm that does not require the
+intertwining structure. The comparison shows what that generality costs on a space
+where the structure *is* available, which is the regime this paper is about.
+
+---
+
 ### 6.4 What "0 terminal evaluations" counts — exact accounting
 
 The `f1 evals` column is not a hand-wave, but it is also not "IASBS does no work
@@ -474,59 +529,6 @@ supplies `Lambda_g` in closed form from quantities it already has (the endpoint,
 its one-swap neighbours, and a heat-kernel table). Any broader reading — "IASBS
 evaluates no energies", "IASBS does less arithmetic" — is **not** supported, and
 on Ising the second reading is measurably false.
-
-### 6.2 DAM
-
-| experiment | K | iters | wall (s) | s / iter | f1 evals | CTMC jumps | jumps / f1 eval |
-|---|---|---|---|---|---|---|---|
-| Occupation m=4 | 1 | 10 | 224.7 | 22.5 | 20,480 | 1,499,657 | **73.2** |
-| Occupation m=4 | 4 | 10 | 163.9 | 16.4 | 51,200 | 1,197,204 | **23.4** |
-| Occupation m=4 | 16 | 400 | 7380.9 | 18.5 | 6,963,200 | 67,417,741 | 9.68 |
-| Occupation m=4 | 16 | 1200 | **11529.3** | 9.6 | **20,889,600** | **185,004,804** | 8.86 |
-| Occupation m=4 | 64 | 400 | 3177.7 | 7.9 | 26,624,000 | 222,041,777 | 8.34 |
-| Ising L=4 | 16 | 1200 | RUNNING | >30 | — | — | — |
-| Occupation-scale m=32 | 16 | 1200 | RUNNING | >30 | — | — | — |
-| Occupation-scale m=128 | 16 | 600 | QUEUED | — | — | — | — |
-| Occupation-scale m=1000 | 16 | 300 | QUEUED | — | — | — | — |
-| Ising L=5 | 16 | 600 | QUEUED | — | — | — | — |
-
-DAM runs are **latency-bound, not throughput-bound**: measured CPU time equals wall
-time to within 1% on every leg, because each Gillespie rollout is a Python `while`
-loop issuing many small kernels and synchronising on `active.any()`. Consequences:
-
-- Batch size is nearly free; the number of `while` iterations is what costs.
-- Co-scheduling two DAM runs on one device roughly *doubles* both wall times rather
-  than overlapping them, which is why the remaining legs are queued serially
-  (`dam/queue_remaining.sh`).
-- The jump-explosion column is the mechanism behind the small-K divergence in §5.2:
-  at K=1 each terminal evaluation costs 73 simulated jumps versus 8.9 at K=16.
-
-### 6.3 Cost of the comparison, head to head
-
-Same benchmark (occupation m=4), same hardware, best setting of each method:
-
-| | IASBS | DAM (K=16, 1200 it) | ratio |
-|---|---|---|---|
-| terminal TV | **0.01248** | 0.01490 | IASBS 1.19x better |
-| adjoint rollouts | **0** | 20,889,600 | infinite |
-| f1 evals on rollout endpoints | **0** | 20,889,600 | infinite |
-| CTMC jumps simulated for the adjoint | **0** | 185,004,804 | infinite |
-| wall clock (s) | **214** | 11,529 | **53.9x** |
-
-IASBS is 54x faster in wall clock *and* more accurate, because the adjoint
-`phi_t(x) = E_base[f1(X_1) | X_t = x]` that DAM estimates with 20.9 million
-Monte-Carlo rollout-endpoint evaluations is available to IASBS in closed form via
-the intertwining identity. The gap is structural, not a matter of tuning.
-
-**The "0" is a specific quantity, not a claim of zero arithmetic.** See §6.4 for
-the exact accounting — IASBS does evaluate the target energy, and on the sphere
-its gradient. What it never does is *simulate a path in order to evaluate `f1` at
-the endpoint*.
-
-Caveat stated plainly: the two methods do not solve identical optimisation
-problems, and DAM is a general-purpose algorithm that does not require the
-intertwining structure. The comparison shows what that generality costs on a space
-where the structure *is* available, which is the regime this paper is about.
 
 ---
 
