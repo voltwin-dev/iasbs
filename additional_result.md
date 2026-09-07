@@ -314,15 +314,28 @@ Per terminal evaluation, K=16 is the better spend:
 
 ### 5.4 Cost comparison, the headline number
 
-| method | best TV on occupation m=4 | f1 evals at rollout endpoints | CTMC jumps simulated for the adjoint | wall (s) |
-|---|---|---|---|---|
-| DAM, K=16 | 0.01490 | 20,889,600 | 185,004,804 | 11529.3 |
-| DAM, K=64 | 0.04498 | 26,624,000 | 222,041,777 | 3177.7 |
-| **IASBS** | **0.01248** | **0** | **0** | 214 |
+**Source matching.** The DAM occupation adapter draws its start state from
+`source_state()`, which returns the single state `sp.i0` = `eta_0 = N e_c` for the
+whole batch, and its `log_f1` is `sp.logf1 = -E/tau - log p_base(. | eta_0)`. That
+is the **Dirac** source. The comparison below is therefore against the **Dirac**
+IASBS occupation run (`json/results_occ_full.json`, TV **0.012730**), *not* the
+non-Dirac uniform-source run of §2.2 (TV 0.01248). Both use m=N=4, `|X|=35`,
+128 steps.
+
+| method | source | best TV on occupation m=4 | f1 evals at rollout endpoints | CTMC jumps simulated for the adjoint | wall (s) |
+|---|---|---|---|---|---|
+| DAM, K=16 | Dirac | 0.01490 | 20,889,600 | 185,004,804 | 11529.3 |
+| DAM, K=64 | Dirac | 0.04498 | 26,624,000 | 222,041,777 | 3177.7 |
+| **IASBS** | **Dirac** | **0.012730** | **0** | **0** | no log (<= 214) |
+| IASBS | uniform non-Dirac | 0.01248 | 0 | 0 | 214 |
+
+The last row is listed for completeness only and is **not** the head-to-head: it
+solves a different (harder) problem, since a non-Dirac source additionally
+requires the learned IPF corrector.
 
 IASBS obtains `phi_t` in closed form through the intertwining identity, so it
 performs **no** adjoint rollouts and therefore evaluates `f1` at **no** rollout
-endpoints during training. DAM's best result is 19% worse in TV and costs
+endpoints during training. DAM's best result is 17% worse in TV and costs
 **20.9 million** rollout-endpoint evaluations plus 185 million simulated CTMC
 jumps to get there.
 
@@ -351,7 +364,8 @@ co-scheduling inflates their wall clock roughly linearly.
 |---|---|---|---|---|---|---|
 | Ising L=4 non-Dirac | 3000 | 256 | **1869** | 0.62 | 0 | `ising_nd_L4.pt` |
 | Ising L=5 non-Dirac | 3000 | 256 | 31144 @ it 2500, ~37000 proj. | 12.3 | 0 | `ising_nd_L5.pt` (written at loop end) |
-| Occupation m=4 non-Dirac | — | 128 | **214** | — | 0 | `occ_nd_m4.pt` |
+| Occupation m=4 **Dirac** (head-to-head row) | 1500 | 128 | no log | — | 0 | `occ4_full.pt` |
+| Occupation m=4 non-Dirac | 1500 | 128 | **214** | 0.14 | 0 | `occ_nd_m4.pt` |
 | Occupation m=32 (seed 0) | 3000 | 128 | **3230** | 1.08 | 0 | `occ_nd_s32_seed0.pt` |
 | Occupation m=32 (seed 1) | 3000 | 128 | **3231** | 1.08 | 0 | `occ_nd_s32_seed1.pt` |
 | Occupation m=128 | 3000 | 128 | **1523** | 0.51 | 0 | `occ_nd_s128.pt` |
@@ -434,15 +448,18 @@ loop issuing many small kernels and synchronising on `active.any()`. Consequence
 
 Same benchmark (occupation m=4), same hardware, best setting of each method:
 
-| | IASBS | DAM (K=16, 1200 it) | ratio |
+Both rows are the **Dirac** source, m=N=4, 128 steps (see the source-matching
+note in §5.4).
+
+| | IASBS (Dirac) | DAM (Dirac, K=16, 1200 it) | ratio |
 |---|---|---|---|
-| terminal TV | **0.01248** | 0.01490 | IASBS 1.19x better |
+| terminal TV | **0.012730** | 0.01490 | IASBS 1.17x better |
 | adjoint rollouts | **0** | 20,889,600 | infinite |
 | f1 evals on rollout endpoints | **0** | 20,889,600 | infinite |
 | CTMC jumps simulated for the adjoint | **0** | 185,004,804 | infinite |
-| wall clock (s) | **214** | 11,529 | **53.9x** |
+| wall clock (s) | no log (<= **214**) | 11,529 | **>= 54x** |
 
-IASBS is 54x faster in wall clock *and* more accurate, because the adjoint
+IASBS is at least 54x faster in wall clock *and* more accurate, because the adjoint
 `phi_t(x) = E_base[f1(X_1) | X_t = x]` that DAM estimates with 20.9 million
 Monte-Carlo rollout-endpoint evaluations is available to IASBS in closed form via
 the intertwining identity. The gap is structural, not a matter of tuning.
@@ -483,7 +500,7 @@ the O(1) importance-weight variance analysed in §5.2. So the column measures
 adjoint rollouts, so it has no rollout endpoints and makes no `log_f1` calls at
 rollout endpoints. It is *not* zero energy evaluations. The full picture:
 
-| quantity | IASBS Ising L=4 | IASBS occupation m=4 | IASBS sphere non-Dirac (per seed) | DAM occupation m=4, K=16 |
+| quantity | IASBS Ising L=4 (non-Dirac) | IASBS occupation m=4 (Dirac) | IASBS sphere non-Dirac (per seed) | DAM occupation m=4 (Dirac), K=16 |
 |---|---|---|---|---|
 | extra adjoint rollouts | **0** | **0** | **0** | 20,889,600 |
 | `f1` evals at rollout endpoints | **0** | **0** | **0** | 20,889,600 |
@@ -505,7 +522,7 @@ Row-by-row justification:
   vectorised reduction over a `(mb, Np, n)` tensor with **no sequential
   simulation and no sampling variance**, whereas each DAM `f1` eval sits at the
   end of a Python-level Gillespie `while` loop (§6.2).
-- **Occupation is 0 on the fly because the space is enumerable.** `occupation.py`
+- **Occupation (Dirac) is 0 on the fly because the space is enumerable.** `occupation.py`
   precomputes `self.E`, `self.logf1` and the full rate table
   `self.R = exp(logf1[trans] - logf1[:, None, None])` once over all `|Omega| = 35`
   states, so training is table lookup. DAM on the same problem uses the *same*
