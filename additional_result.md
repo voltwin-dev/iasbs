@@ -17,12 +17,12 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 
 | # | Claim | Evidence |
 |---|---|---|
-| 1 | IASBS reaches exact-IPF accuracy on discrete structured spaces | §2.1, §2.2 — TV at or below the i.i.d. sampling floor |
+| 1 | IASBS reaches exact-IPF accuracy on discrete structured spaces, up to `\|Omega\| ~ 1e4` | §2.1, §2.2 — TV at or below the i.i.d. sampling floor at Ising L=4 and occupation m=4; §2.1 — Ising L=5 (`\|Omega\| = 5.2e6`) misses the gate at 0.07228 |
 | 2 | IASBS accuracy does not degrade with state-space size | §2.3 — KS improves monotonically from m=32 to m=1000 |
 | 3 | IASBS extends to non-Dirac (Haar) sources without loss | §3.2 — matches the Dirac headline to 3 decimal places |
 | 4 | Reported R-ASBS mode collapse is an initialisation artifact | §4 — collapse vanishes under the authors' own init |
 | 5 | DAM needs millions of Monte-Carlo adjoint rollouts; IASBS needs none | §5, §6.4 — 20.9 M rollout-endpoint f1 evals for DAM's best TV vs 0 for IASBS (IASBS still evaluates the energy; see §6.4) |
-| 6 | DAM has a hard stability cliff, and it moves with problem size | §5.2 — K=1, K=4 diverge at m=4; §6.2 — K=16 itself diverges at both m=32 and Ising L=4 |
+| 6 | DAM has a hard stability cliff, and raising K does not clear it | §5.2 — K=1, K=4 diverge at m=4; §6.2 — K=16 diverges at m=32 and Ising L=4, and K=64 still diverges at m=32 |
 
 ---
 
@@ -45,22 +45,37 @@ sector).
 | L | sites n | `\|Omega\| = C(n, n/2)` | TV (exact law) | empirical TV | i.i.d. TV floor | violations | status |
 |---|---|---|---|---|---|---|---|
 | 4 | 16 | 12,870 | **0.03470** | 0.06571 | 0.04940 | **0 / 200,000** | **DONE — PASS** |
-| 5 | 25 | 5,200,300 | 0.06714 (it 2725/3000, best 0.06714) | pending | pending | pending | RUNNING |
+| 5 | 25 | 5,200,300 | 0.07228 (best 0.06714 at it 2725) | 0.35530 | 0.32546 | **0 / 200,000** | **DONE — A1 FAIL, A2 PASS** |
 
 `json/results_ising_nd_L4.json`, `json/results_ising_nd_L5.json`.
 
 L=4 sits **below** the i.i.d. floor of 0.04940, i.e. the learned terminal law is
 statistically indistinguishable from exact samples at this sample size.
 
-L=5 caveat: the empirical TV, the i.i.d. floor and the A2 violation count are
-computed only in the post-loop evaluation block, so they are listed as `pending`
-rather than assumed. The exact-law TV is a deterministic propagation of the
-learned rates over all 5,200,300 states and needs no sampling, which is why it is
-the only column available mid-run.
+**L=5 misses gate A1, and it is reported as a miss.** The exact-law TV settles at
+0.07228 against a gate of 0.05. The best value seen was 0.06714 at iteration 2725,
+and the last 300 iterations oscillate within 0.067-0.081 without trending down, so
+the run is converged rather than truncated — more iterations at this configuration
+would not fix it. Constraint gate A2 passes exactly: **0 violations in 200,000
+samples**, so the magnetization-preserving swap dynamics remain correct at
+`|Omega| = 5.2e6`. What degrades with lattice size is accuracy, not structure.
+Config: 3000 iterations, 256 steps, batch 2048, 1,728,738 parameters, 36,966 s
+wall (12.3 s/iter, 20x the L=4 cost per iteration).
+
+Reading the empirical column at L=5 needs care. 200,000 samples spread over
+5,200,300 states leave most states empty, so the empirical TV is dominated by
+sampling noise: exact i.i.d. draws from the target score **0.32546** at this
+sample size against the run's 0.35530. The excess of **0.030** — not the raw
+0.355 — is the part attributable to the sampler, and it is consistent with the
+exact-law TV of 0.072. The exact-law column is the meaningful one at this size: it
+is a deterministic propagation of the learned rates over all 5,200,300 states,
+with no Monte-Carlo error at all.
 
 IPF corrector sanity check: `mean exp(h) = 0.99723` at L=4 and `0.99792` at L=5
-(target 1), with `max |h| = 0.07224` and `0.25522`. The corrector is a small
-multiplicative perturbation, as the intertwining identity predicts.
+(target 1), with `max |h| = 0.07224` and `0.25522`. The corrector remains a small
+multiplicative perturbation, as the intertwining identity predicts, but the L=5
+excursion is 3.5x the L=4 one — the corrector is working measurably harder, which
+is the same direction as the A1 miss.
 
 ### 2.2 Occupation process m=4, non-Dirac — validated against exact IPF
 
@@ -483,7 +498,7 @@ robustness to initialisation*, not speed.
 | Ising L=4, 10-iter diagnostic | 16 | 10 | **21.3** | **2.13** | 174,080 | 936,880 | **5.38** |
 | Occupation-scale m=32, 10-iter diagnostic | 16 | 10 | 123.3 | 12.33 | 174,080 | 26,661,608 | **153.2** |
 | **Ising L=4** | 16 | 40 of 200 | **DIVERGED, killed at 286 s** | 2.1 -> **37.6** | — | — | — |
-| Occupation-scale m=32 | 64 | 400 | RUNNING from 14:13:57 UTC | — | — | — | — |
+| **Occupation-scale m=32** | 64 | 15 of 400 | **DIVERGED, killed at 1664 s** | 15.2 -> **36.8** | — | — | — |
 | Occupation-scale m=128 | 16 | 600 | KILLED at 3695 s, <50 it | >74 | — | — | — |
 | Occupation-scale m=1000 | 16 | 300 | dropped (K=16 expected to diverge) | — | — | — | — |
 | Ising L=5 | 16 | 600 | not run | — | — | — | — |
@@ -542,6 +557,30 @@ m=4 and *diverges* at m=32, the stability cliff of §5.2 is not a fixed constant
 requeued at K=64, and the m=1000 leg at K=16 was dropped rather than run as a
 foregone divergence. This strengthens claim 6: DAM's rollout budget is not merely
 large, it must be re-tuned per problem size, whereas IASBS has no such parameter.
+
+**Quadrupling K to 64 does not clear the m=32 cliff.** The retry diverges on the
+same trajectory, only one eval later:
+
+| it | loss | KS_occ | ESS / 64 | cumulative s |
+|---|---|---|---|---|
+| 5 | **+134.78** | 0.2052 | 3.48 | 76 |
+| 10 | -3,969.86 | 0.2030 | 2.37 | 166 |
+| 15 | -30,079.50 | 0.1987 | **1.18** | 350 |
+
+The loss is *positive* at iteration 5, so K=64 does buy a slightly longer healthy
+window than K=16 (already at -2.4e5 by then), but it is a delay, not a fix: by
+iteration 15 the ESS is **1.18 out of 64**, a worse retention *fraction* (1.8%)
+than K=16's 1.93/16 (12%), and the per-iteration cost has climbed 15.2 -> 36.8 s.
+KS_occ never leaves the uncontrolled reference band of 0.2040 — 15 iterations of
+training produced no measurable progress toward the target at all. Killed at
+1,664 s; log kept as `dam/logs/dam_occs32_K64_DIVERGED.log`.
+
+This is the sharper form of claim 6. It is not that DAM needs a larger K on larger
+spaces; it is that **raising K does not obviously rescue it once the space is
+large enough** — the estimator's failure at m=32 is not simple denominator
+variance that averaging fixes, since 4x the averaging bought five iterations.
+Every DAM leg attempted beyond the |X| = 35 occupation problem has diverged:
+occupation-scale m=32 at K=16 and K=64, and Ising L=4 at K=16.
 
 **Budget note on the larger DAM legs.** The Ising L=4 and occupation-scale m=32
 legs were launched at 1200 iterations with `--eval-every 50` on the assumption of
@@ -701,44 +740,37 @@ python -m dam.tests_math
 
 ## 8. Still running / still to run
 
-Every IASBS experiment is finished. What remains is entirely DAM-baseline work
-plus one text correction.
-
-**Running**
-
-| job | progress | last metric | projected wall |
-|---|---|---|---|
-| IASBS Ising L=5 non-Dirac | 2725 / 3000 | TV 0.06714 (best 0.06714) | ~37500 s |
-| DAM occupation-scale m=32, K=64 | started 14:13:57 UTC, 0 / 400 | — | TBD |
+**Nothing is running.** Every IASBS experiment is finished and every DAM leg has
+either converged or diverged.
 
 **Finished since the last update**
 
 | job | outcome |
 |---|---|
+| IASBS Ising L=5 non-Dirac | **DONE** — A1 FAIL (TV 0.07228 vs gate 0.05), A2 PASS (0 / 200,000) — §2.1 |
 | DAM Ising L=4, K=16 | **DIVERGED** at it 15, killed at it 40 / 286 s — §6.2 |
+| DAM occupation-scale m=32, K=64 | **DIVERGED** at it 10, killed at it 15 / 1,664 s — §6.2 |
 
-**Queued** (serially, `dam/queue_gpu0.sh`, see §6.2 for why not in parallel)
+**Not run, and why**
 
-| job | iters | note |
-|---|---|---|
-| DAM Ising L=4, K=64 | 200 | does more K clear the Ising cliff? not yet launched |
-
-The m=128 and m=1000 DAM legs at K=16 were dropped: K=16 is now measured to
-diverge at m=32 and on Ising L=4, so running it at m=128 and m=1000 would only
-reproduce a foregone divergence. The informative experiment is instead to raise K
-at fixed m, which is what the running m=32 K=64 leg does.
+| job | reason |
+|---|---|
+| DAM occupation-scale m=128 / m=1000, K=16 | K=16 is measured to diverge at m=32 and on Ising L=4; larger m would only reproduce a foregone divergence |
+| DAM occupation-scale m=32, K=256 | K=16 -> K=64 bought five iterations, so the K axis is not where the fix is |
+| DAM Ising L=5, K=16 | Ising L=4 already diverges at K=16 |
+| IASBS_600 Stiefel at beta = 0.1, 0.5, 7, 10, 20 | matched-budget ablation not performed at those temperatures; ~28 min per beta if wanted |
 
 **Text only**
 
 - README correction of the R-ASBS mode-collapse description (§4.2).
 
-A note on the queued DAM legs. Their iteration budgets are deliberately smaller
-than the IASBS runs they are compared against, because the per-rollout jump count
-grows with the state space and a matched-iteration DAM run at m=1000 is not
-affordable. If a leg fails to reach its gate inside the reduced budget, the
-reported outcome is the wall clock and the f1-evaluation count at the cutoff,
-labelled as budget-limited rather than as a method failure — the same correction
-already applied to the K=16 m=4 leg in §5.1.
+**Two honest negatives, recorded rather than buried.** IASBS Ising L=5 misses its
+accuracy gate at 0.07228, and no DAM configuration attempted outside the |X| = 35
+occupation problem converged at all, which means the head-to-head of §5.4 and §6.3
+rests on the *one* benchmark where DAM works. That is a real limit on the strength
+of the DAM comparison and is stated as such: on larger discrete spaces the claim is
+not "IASBS beats DAM by 17%", it is "IASBS converges and DAM does not", which is a
+weaker and differently-shaped claim.
 
 ---
 
