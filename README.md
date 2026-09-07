@@ -8,6 +8,7 @@ Our method and the baseline live in separate directories, so that no reader has
 to take on trust which code produced which column.
 
 ```
+PLAN.md                   the experimental plan the sections below are graded against
 common.py                 shared kernels, quadrature, Stiefel/S^3 helpers, ckpt IO
 json/  ckpt/  fig/        artifacts, shared by both methods
 
@@ -55,7 +56,7 @@ carries its own full `config` block, so any number here traces back to the
 flags that made it.
 
 Run on a single NVIDIA A100 80GB (two available, used only to run independent
-experiments concurrently), PyTorch 2.5.1, CUDA 12.6, NumPy 2.4.6, conda
+experiments concurrently), PyTorch 2.5.1, CUDA 12.4, NumPy 2.4.6, conda
 environment `SML_env` (Python 3.11). Manifold state and all metrics are
 `float64`; the networks are `float32`.
 
@@ -73,8 +74,18 @@ had to be regenerated. `rasbs/rasbs_port.py` is pinned to upstream commit
 `bb71d14` (2026-08-28). The Ising and Occupation sections carry no R-ASBS
 column: no counterpart experiment exists in their paper or their repository.
 
-Checkpoints under `ckpt/` are not committed (1.4 GB); the `json/results_*.json`
-files are, and every table here is built from them.
+Checkpoints under `ckpt/` are not committed (2.5 GB); the `json/results_*.json`
+files are, and almost every table here is built from them. The exception is the
+extra columns `remeasure.py` derives — KL, Hellinger, χ², ESS fraction, the
+max density ratio, ⟨sᵢsⱼ⟩ and the sphere's KS(E) — which are recomputed from
+the checkpoints rather than stored in any JSON. Those numbers need `ckpt/`,
+which means retraining, and the commands that produce it are in each section.
+
+**One input is not committed either.** `.gitignore` excludes `rasbs_ref/`, the
+frozen R-ASBS clone kept locally for reference, and the earthquake target is
+built from `rasbs_ref/query.csv` inside it. Experiment E and the R-ASBS
+earthquake column are therefore not runnable from a fresh clone until that
+clone is restored; every other experiment is self-contained.
 
 All commands below are run from the repository root.
 
@@ -87,8 +98,19 @@ python structured_asbs/gallery.py      # sample gallery -> fig/
 `figures.py` plots metrics. `gallery.py` plots the samples themselves, as the
 objects they actually are, beside the exact or MCMC reference drawn the same
 way. The claim those panels support is "you cannot tell the two columns
-apart", and that is a claim the eye should adjudicate. Each script also exposes
-`verify` (correctness gates), `train`, and a sweep mode.
+apart", and that is a claim the eye should adjudicate. `figures.py` also writes
+`fig/table_stiefel.md`, the Stiefel comparison table in markdown. That generated
+table fills each (β, steps) cell with the smaller |ΔE| of the two β = 100
+controls, so at 796 and 1592 steps it quotes the direct warm start while the
+README quotes the chain throughout; the two agree at 3184 steps, which is the
+cell either of them is judged on.
+
+Every experiment script takes a subcommand. `sphere.py` and `earthquake.py`
+expose `verify` (correctness gates), `exact` and `train`; `occupation.py` adds
+`var`, `scale` and `scalevar` to those three;
+`stiefel.py` exposes `verify`, `ref`, `train` and `sweep`; `fixed_ising.py`
+exposes only `exact` and `train`, because its gate A0 is checked inside the
+`exact` control rather than as a separate mode.
 
 ---
 
@@ -167,8 +189,11 @@ the terminal end, where the sharp state dependence encoding the Gibbs weight
 lives, is where the residual TV comes from.
 
 `fig8_ising_configs` draws 50 raw 4×4 spin configurations from our sampler
-beside 50 drawn by exact enumeration; `fig2_discrete_correctness` carries the
-metric panel.
+beside 50 drawn by exact enumeration; `fig2_discrete_correctness` panel A
+carries the metric panel, specifically the **exact control's** TV against step
+count with the iid floor marked, not the learned run's single number. **Both
+figures are 4×4 only** — neither `figures.py` nor `gallery.py` has a 5×5 code
+path, so the 5×5 subsection below is tables only.
 
 ### Scaling the exact check: the 5×5 lattice
 
@@ -250,9 +275,9 @@ transfer, not a run that misbehaved. A2 (zero violations) passed.
   state spaces. The comparison here is against exact enumeration instead.
 
 ```bash
-python structured_asbs/fixed_ising.py verify         # gate A0
 python structured_asbs/fixed_ising.py exact          # gate A0/A1/A2 with the exact control
-python structured_asbs/fixed_ising.py train
+python structured_asbs/fixed_ising.py train --steps 256 --iters 3000 \
+    --tag ising_poisson256 --out json/results_ising_poisson256.json
 python structured_asbs/remeasure.py ising            # every table in this section, from ckpt/
 # 5x5: 5,200,300 states, still enumerated exactly
 python structured_asbs/fixed_ising.py exact --L 5 --steps-sweep 64 128 256 512 \
@@ -300,11 +325,41 @@ from 10¹⁸ to **10⁶⁰⁰**.
 
 | metric | exact | ours |
 |---|---:|---:|
-| TV vs exact law | 0 | **0.0199** (iid floor 0.0167) |
+| TV vs exact law, learned control | 0 | **0.0127** (`results_occ_full.json`) |
+| TV vs exact law, exact control | 0 | 0.0199 (`results_occ_exact.json`) |
+| iid floor, 20,000 samples | — | 0.0167 |
 | constraint violations | 0 | **0** |
 
 As with the Ising lattice, the TV value sits essentially at the iid sampling
-floor, so the residual is finite-sample error rather than sampler bias.
+floor, so the residual is finite-sample error rather than sampler bias. The
+exact control's 0.0199 is the empirical TV of the same integrator with the
+multiplier taken from enumeration; its step sweep is first-order and clean —
+0.2965, 0.1410, 0.0379, 0.0189, 0.0094, 0.0047 at 8…256 steps, halving per
+doubling from 32 steps on (the 16 → 32 step is a 3.7× drop, the coarse end
+still leaving the asymptotic regime) — which is what `fig2` panel B plots.
+
+**Estimator and loss ablation, m = N = 4.** The terminal expectation can be
+estimated three ways, selected by `--estimator`, and the loss by `--loss`:
+
+| variant | flags | TV vs exact law |
+|---|---|---:|
+| full enumeration over moves | `--estimator full` | **0.0127** |
+| uniform move sampling | `--estimator uniform` | 0.0162 |
+| occupancy-weighted sampling | `--estimator occupancy` | 0.0164 |
+| Bregman → MSE loss | `--estimator full --loss mse` | 0.0131 |
+
+All four land within 0.004 TV of each other and all four have zero constraint
+violations, so neither choice is load-bearing at this size; `full` is the
+default because it is exact and affordable when the move set is small.
+
+**Gate B3 — estimator variance.** `occupation.py var` measures the variance of
+the terminal estimator at t = 0, 0.25, 0.5, 0.75, 0.9 and passes
+(`json/results_occ_var.json`, `B3: true`). At t = 0 occupancy weighting is exact
+(variance 3.5e−13 against uniform's 1.059); in the interior four-sample
+occupancy weighting cuts the variance about 4× against one sample
+(0.418 vs 1.672 at t = 0.25) and 4.6–4.8× against uniform. The same
+measurement at m = N = 128 and 1000 is in `results_occ_var128.json` and
+`results_occ_var1000.json`, and also passes.
 
 ### Scaling to 10⁶⁰⁰ states
 
@@ -339,8 +394,19 @@ occupancy vectors at m = N = 1000 with their per-box marginals.
 
 ```bash
 python structured_asbs/occupation.py verify                  # gate B0
-python structured_asbs/occupation.py train
+python structured_asbs/occupation.py exact                   # exact control, step sweep
+python structured_asbs/occupation.py train --tag occ4_full --out json/results_occ_full.json
+python structured_asbs/occupation.py var                     # gate B3, estimator variance
 python structured_asbs/occupation.py scale --m 1000 --N 1000
+python structured_asbs/occupation.py scalevar --m 1000 --N 1000 \
+    --out json/results_occ_var1000.json
+# the estimator / loss ablation
+python structured_asbs/occupation.py train --estimator uniform \
+    --tag occ4_uniform --out json/results_occ_uniform.json
+python structured_asbs/occupation.py train --estimator occupancy \
+    --tag occ4_occupancy --out json/results_occ_occupancy.json
+python structured_asbs/occupation.py train --loss mse \
+    --tag occ4_mse --out json/results_occ_mse.json
 ```
 
 ---
@@ -417,8 +483,10 @@ that half the distribution is missing, which is why this section gates on them.
 
 Collapse is fast and it is not undertraining: at 100 epochs north mass is
 already 0.0004, at 300 epochs 0.0002. Longer training makes the *profile* worse,
-not better — ⟨E⟩ goes 1.267 (100 epochs) → 1.172 (300) → 1.040 (600), passing
-through the exact 1.154 on its way past it. The sampler spends its training
+not better — at seed 0, ⟨E⟩ goes 1.267 (100 epochs) → 1.172 (300) → 1.046
+(600), passing through the exact 1.154 on its way past it. (The 1.040 in the
+table above is the mean over five seeds at 600 epochs; these three are one seed,
+so that they differ only in epoch count.) The sampler spends its training
 budget over-sharpening the single pole it kept.
 
 **The symmetry is exact** — north mass and azimuthal uniformity are both at the
@@ -442,7 +510,10 @@ variant is not worse on average so much as *unreliable*: per-seed north masses
 0.460, 0.474, 0.495, 0.528, 0.528, a spread of ± 0.0275 against ± 0.0006 for
 antithetic and symmetrised, which are indistinguishable from each other and fix
 it completely. Neither improves ⟨E⟩ — the pole imbalance and the radial bias
-are independent defects. `fig4_sphere` plots the comparison.
+are independent defects. `fig4_sphere` plots the comparison. All three variants
+are 4000 iterations; `json/results_sphere_train_plain2500.json` is the same
+plain variant stopped at 2500 (north error 0.0599, KS(x₃) 0.0667), kept only to
+show that the plain run is still improving when the others have converged.
 
 **Figures.** `fig6_sphere_cloud` shows four S² clouds: the uncontrolled source,
 ours, exact iid target samples, and the residual between the last two.
@@ -500,7 +571,9 @@ in the residual.
 
 ```bash
 python structured_asbs/sphere.py verify              # gate C0
-python structured_asbs/sphere.py train --antithetic
+python structured_asbs/sphere.py train --antithetic --iters 4000 --inner 16 \
+    --batch 8192 --mb 16384 --ema 0.9995 --seeds 5 --n-samples 200000 \
+    --tag sphere_anti --out json/results_sphere_train_anti.json
 python structured_asbs/remeasure.py sphere           # every table in this section, from ckpt/
 python rasbs/rasbs_sphere_port.py --check            # port self-checks
 python rasbs/rasbs_sphere_port.py --problem bimodal --seed 0   # the collapse
@@ -642,12 +715,29 @@ with an open cause rather than a diagnosis.
 
 - **Gates E1 and E2 fail**, as above. This is the one benchmark in the
   repository where our sampler does not reach its own threshold.
+- **There is no figure for this experiment.** `figures.py` and `gallery.py`
+  have no earthquake code path, so everything above is tables and prose. The
+  R-ASBS §4.2 globe plot has no counterpart here.
+- **The target data is not in the repository.** `rasbs_ref/` is gitignored, and
+  `rasbs_ref/query.csv` is where the 4,776 epicentres come from.
 - **The exact-control baseline is missing at κ = 600**, so the failure is not
   yet attributed to the learned control as opposed to the integrator.
 - **R-ASBS beats us on mode coverage here**, and we have not shown that our
   Dirac source is the reason — the argument above is a mechanism, not a
-  measurement. The experiment that would settle it (rerun ours from a Haar
-  source and see whether coverage rises to ≈0.94) has not been run.
+  measurement. The obvious experiment, rerunning ours from a Haar source to see
+  whether coverage rises to ≈0.94, **is not available to us**, and the reason is
+  worth stating because it is the same reason the method is corrector-free.
+  Weighting the reference by `f₁(X₁)` produces a process whose *initial* density
+  is `μ(x₀) · h(x₀, 0)` with `h(x₀, 0) = ∫ p_{r₀₁}(x₀·y) f₁(y) dy`. For a Dirac
+  `μ` that integral is `∫π = 1`, so the source survives the h-transform exactly
+  — the Dirac source is what buys the closed form, not an incidental choice. For
+  a Haar `μ` it is `4π(P_{r₀₁}π)(x₀)`, the heat-smoothed target, so the run
+  would no longer start uniform. We measured the distortion at `r₀₁ = 1`:
+  initial density over uniform ranges 0.833 to 1.175, a **1.41× spread**, with
+  **TV(initial law, Haar) = 0.0376**. Getting `p_base` constant — which Haar
+  does give, since it is heat-stationary — is necessary and not sufficient. The
+  ablation therefore needs a corrector we have not derived, or a mixture-of-
+  Diracs source in which each component is individually exact. Neither was run.
 - **The R-ASBS column is a port, not their binary.** MATLAB's Deep Learning
   Toolbox is not available here, so their script cannot be executed for a
   cross-check; see the porting audit in the Sphere section.
@@ -657,7 +747,8 @@ with an open cause rather than a diagnosis.
 python structured_asbs/earthquake.py verify                    # sampler + log Z identities
 python structured_asbs/earthquake.py exact --kappa 20          # quadrature control, step sweep
 python structured_asbs/earthquake.py train --kappa 600 --anneal 150 300 450 600 \
-    --steps 512 --iters 6000 --tag earthquake_k600 \
+    --steps 512 --iters 6000 --hidden 512 --n-dir 384 --bw-hi 128 \
+    --max-drift 200 --tag earthquake_k600 \
     --out json/results_earthquake_k600.json
 python rasbs/rasbs_sphere_port.py --problem quake              # the R-ASBS column
 ```
@@ -692,21 +783,27 @@ sequential projection, σ = 1, N = 199, B = 600, 1000 epochs, lr = 1e-3.
 | source | `E₀ = [e₁, e₂]` (**Dirac**) | **Haar** |
 | constraint | exact geodesic step | ambient Euler + QR retraction |
 | network | `ScoreNet`, hidden 256 | `netU` + `netH` |
-| parameters | **139,528** | **140,560** (0.99× ours) |
+| parameters | **139,528** | **140,560** (1.01× ours) |
 | integration steps | 199 | 199 |
 | iters × inner | 1500 × 8 | 1000 epochs |
 | batch / minibatch | 2048 / 16384 | 600 |
 | lr | 1e-3 | 1e-3 |
 | EMA / buffer | 0.9995 / 4 | — |
-| eval samples | 100,000 | 100,000 |
-| reference | MCMC, 2e5 chains × 3000 sweeps | same |
+| eval samples | 100,000 | **5,000** on the 199-step sweep, 100,000 on the step and high-β reruns |
+| reference | MCMC, 2e5 chains × 4000 sweeps (`results_stiefel_ref.json`; the per-run references in the other files use 3000, and the β = 65/80 chain legs 5e4 × 1000) | same |
 
 ### Results
 
 `N` is the number of integration steps. β ≤ 20 is the shared 199-step grid both
 methods were originally run on; at β = 50 and 100 each column is quoted at the
 finest grid we ran for it, for the reason given in the ablation below. R-ASBS
-column from `rasbs/rasbs_port.py` → `json/results_rasbs_stiefel.json`.
+column from `rasbs/rasbs_port.py` → `json/results_rasbs_stiefel.json` at 199
+steps and `json/results_rasbs_highbeta_steps_1024.json` at β = 50 and 100; our
+β = 50 and 100 cells from `json/results_stiefel_anneal_b50.json` and
+`json/results_chain_b100.json`, the rest from `json/results_stiefel_fill.json`.
+The `err` column is always measured against the shared `reference` column, so
+the β = 50 and 100 entries differ by 0.002–0.003 from the per-run MCMC quoted
+in the refinement table below.
 
 | β | reference | R-ASBS | err | N | ours | err | N |
 |---:|---:|---:|---:|---:|---:|---:|---:|
@@ -720,13 +817,18 @@ column from `rasbs/rasbs_port.py` → `json/results_rasbs_stiefel.json`.
 | 7 | 3.2905 | 3.6104 | +0.320 | 199 | 3.3995 | **+0.109** | 199 |
 | 10 | 3.2025 | 3.5275 | +0.325 | 199 | 3.3102 | **+0.108** | 199 |
 | 20 | 3.1005 | 3.3858 | +0.285 | 199 | 3.2170 | **+0.116** | 199 |
-| 50 | 3.0418 | 3.2897 | +0.248 | 1024 | 3.0534 | **+0.010** | 1592 |
-| 100 | 3.0279 | 3.2456 | +0.218 | 512 | 3.0496 | **+0.019** | 3184 |
-| 200 | 3 (exact) | 3.2482 | +0.248 | 199 | not trained | — | — |
-| 10⁶ | 3 (exact) | 3.1847 | +0.185 | 199 | not trained | — | — |
+| 50 | 3.0418 | 3.2897 | +0.248 | 1024 | 3.0534 | **+0.012** | 1592 |
+| 100 | 3.0279 | 3.2487 | +0.221 | 1024 | 3.0496 | **+0.022** | 3184 |
+| 200 | 3.0243 (MCMC) | 3.2482 | +0.224 | 199 | not trained | — | — |
+| 10⁶ | 3.0233 (MCMC, frozen) | 3.1847 | +0.161 | 199 | not trained | — | — |
 
 Worst finite-β error: **0.547** (theirs, β = 2) against **0.166** (ours, β = 1.3
-at matched budget). Orthogonality residual: **3.8e-14** against 3.4e-07, because
+at matched budget). Orthogonality residual: **3.3e-14** at β = 2 against
+3.4e-07, and 3.0e-14 when recomputed from disk across all 100,000 samples
+(figure 7). It grows slowly with the step count — 1.1e-14 at 32 steps to
+6.6e-14 at 512 in `json/results_stiefel_sweep.json` — and the largest we
+measure anywhere is 3.2e-13, at β = 100 and 3184 steps. Every one of those is
+eleven orders of magnitude below their 3.4e-07, which is what it is because
 the update is an exact geodesic step rather than a retraction. Two things the
 curve alone does not show:
 
@@ -738,7 +840,8 @@ Haar·φ₀ / ⟨Haar, φ₀⟩ and φ₀ is not constant — the Dirac-vs-Haar 
 the top of this README, measured.
 
 **The β → ∞ limit is never reached.** Their own paper states the limit is 3; the
-rerun plateaus at 3.185 and stays there from β = 10³ to β = 10⁶.
+rerun plateaus just above 3.18 — 3.2086 at β = 10³, 3.1873 at 10⁴, 3.1847 at
+10⁶ — and stops moving there.
 
 **Budget matching.** PLAN §9.2 requires matching terminal energy/gradient
 evaluations, and counting them exactly revealed that our default uses
@@ -746,7 +849,12 @@ evaluations, and counting them exactly revealed that our default uses
 budget-matched run (`--batch 400 --iters 1500`, exactly 600,000 calls, same 199
 steps) gives +0.166 / +0.161 / +0.111 at β = 1.3 / 2 / 5 against their +0.451 /
 +0.547 / +0.479 — removing the advantage costs 0.01–0.03 and changes no
-conclusion. Parameters (0.99×), steps, and sample counts are matched throughout.
+conclusion. Parameters (1.01×) and step counts are matched throughout. Sample
+counts are not: their 199-step sweep evaluates 5,000 terminal samples against
+our 100,000, which is their script's own default and which we left alone. It
+makes their column noisier, not biased: the one configuration measured both
+ways — 199 steps at β = 50 and 100 — gives 3.3116 / 3.2614 at 5,000 samples and
+3.3139 / 3.2626 at 100,000, a shift of 0.002 against errors of 0.25.
 **Wall-clock**, single A100: ~1130 s per β at 199 steps, ~2180 s at 398, ~4380 s
 at 796 for us; ~780 s per β at 512 steps and ~1560 s at 1024 for them. Every
 `results_*.json` records `train_s` (ours) or `wall_s` (theirs).
@@ -758,8 +866,8 @@ PLAN §9.3 predicts exactly this but warns *do not claim such a floor before
 measuring it*. Measured at β = 2, where their bias peaks, everything except the
 step count held fixed:
 
-R-ASBS row from `rasbs/rasbs_steps.sh` → `json/results_rasbs_steps_*.json`; our row
-from `stiefel.py`'s `--sweep` → `json/results_stiefel_sweep.json`.
+R-ASBS row from `rasbs/rasbs_steps.sh` → `json/results_rasbs_steps_*.json`; our
+row from `stiefel.py`'s `sweep` subcommand → `json/results_stiefel_sweep.json`.
 
 | N_steps | 32 | 64 | 128 | 256 | 512 |
 |---|---:|---:|---:|---:|---:|
@@ -777,9 +885,17 @@ there — that is the honest matched-grid number and R-ASBS beats us by an order
 of magnitude:
 
 R-ASBS rows from `rasbs/rasbs_steps_highbeta.sh` →
-`json/results_rasbs_highbeta_steps_*.json`; our rows from
-`json/results_stiefel_anneal_b{50,100}.json` and
-`results_stiefel_anneal_b100_fine.json`.
+`json/results_rasbs_highbeta_steps_*.json`; our β = 50 row from
+`json/results_stiefel_anneal_b50.json`, our β = 100 row from
+`json/results_chain_b100.json` (the 50 → 65 → 80 → 100 chain, which is the
+better of the two β = 100 controls; the direct β = 50 warm start in
+`json/results_stiefel_anneal_b100_fine.json` gives +3.4695 / +0.7458 / +0.0461
+in the same three cells). The two 199-step "ours" cells are the unconverged
+199-step controls from `json/results_stiefel_fill.json` and
+`json/results_stiefel_anneal_b100.json`, carried over from the headline table
+so the refinement has a starting point; every cell in this table is measured
+against its own run's MCMC reference, which is why the β = 50 and 100 endpoints
+read +0.0101 / +0.0187 here and +0.012 / +0.022 in the headline table above.
 
 | β | 199 | 398 | 512 | 796 | 1024 | 1592 | 3184 |
 |---:|---:|---:|---:|---:|---:|---:|---:|
@@ -788,8 +904,9 @@ R-ASBS rows from `rasbs/rasbs_steps_highbeta.sh` →
 | R-ASBS, 100 | +0.235 | — | **+0.218** | — | +0.221 | — | — |
 | ours, 100 | +5.290 | +4.063 | — | +3.535 | — | +0.750 | **+0.0187** |
 
-Ours falls by 400× and 100× over that refinement; theirs moves by 0.024 and by
-−0.003 (run-to-run noise on a quantity that has stopped moving). The refined
+Ours falls by 435× and 283× over that refinement; theirs moves by −0.024 at
+β = 50 and −0.014 at β = 100 over the same 199 → 1024 span, and by −0.003 from
+512 to 1024 — run-to-run noise on a quantity that has stopped moving. The refined
 cells reuse a trained control and never retrain, but they are warm-started from
 the β below, a recipe the rest of the column does not use. Three by-products
 worth recording:
@@ -845,12 +962,16 @@ refreshes the pre-change β = 2 pair.
   finer grid failed, and every leg of the winning chain sat off-mode. The step
   counts above were found by measurement, not derived.
 - **Our self-imposed gate `|E − E_MCMC| < 0.05` is not met at β ≥ 0.5**
-  (0.10–0.17 at 199 steps). Refining the same trained control drops β = 1 to
-  0.050 at 1024 steps, so about half the residual is discretisation. The gate is
-  stricter than anything R-ASBS achieves at any β, but it is reported as failed
+  (0.10–0.17 at 199 steps). Refining the same trained control drops the β = 1
+  error to 0.050 at 796 steps — that measurement is on the frame-sensitive
+  target D2 (`json/results_stiefel_frame.json`: ΔE 0.117 at 199 steps, 0.0493
+  and 0.0516 across two seeds at 796, KS(E) 0.029) — so about half the residual
+  is discretisation. The gate is stricter than anything R-ASBS achieves at any β, but it is reported as failed
   rather than relaxed.
 - **The MCMC reference stops converging for β ≳ 1000**, where acceptance goes to
-  zero and the chain freezes at 3.0233; for those β we quote the exact value 3.
+  zero and the chain freezes at 3.0233 for every β from 10³ to 10⁶; the true
+  limit is 3, so the reference itself carries about +0.023 of error there, which
+  is a tenth of R-ASBS's residual and does not change the comparison.
   At β ≤ 100 two independent chains agree to 0.0001–0.01.
 - **KS(E) degrades at large β** (0.23 at β = 10) even as the mean error improves,
   because the target concentrates and KS becomes very sensitive.
@@ -862,8 +983,15 @@ refreshes the pre-change β = 2 pair.
 ```bash
 python rasbs/rasbs_port.py --check-retraction   # GS == sign-corrected QR
 python rasbs/rasbs_port.py --out json/results_rasbs_stiefel.json
-python structured_asbs/stiefel.py ref --betas "0.001,0.01,0.1,0.5,1.3,2,5,7,10,20,50,100"
+python structured_asbs/stiefel.py ref --mcmc-sweeps 4000 \
+    --betas "0.001,0.01,0.1,0.5,1.3,2,5,7,10,20,50,100,200,1000,10000,1000000"
 python structured_asbs/stiefel.py verify                       # gate D0, incl. spin-clock test
+python structured_asbs/stiefel.py train --frame --betas 1.0 --steps 199 \
+    --iters 2500 --mb 16384 --ema 0.9995 --seeds 2 --refine 2,4 \
+    --tag stiefel_frame --out json/results_stiefel_frame.json   # target D2
+python structured_asbs/stiefel.py sweep --beta 2 --iters 1500 --mb 16384 \
+    --ema 0.9995 --antithetic --tag stiefel_d3 \
+    --out json/results_stiefel_sweep.json   # our beta=2 step ablation
 bash rasbs/rasbs_steps.sh                   # their beta=2 step ablation
 bash rasbs/rasbs_steps_highbeta.sh          # their beta=50/100 step ablation
 bash rasbs/regen_f64.sh                     # float64 rerun at beta=2

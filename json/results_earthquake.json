@@ -1,0 +1,39 @@
+{
+  "config": {
+    "cmd": "verify",
+    "data": "",
+    "train_frac": 0.7,
+    "kappa": 600.0,
+    "anneal": null,
+    "sigma": 1.4142135623730951,
+    "tau": 1.0,
+    "steps": 256,
+    "sweep": [
+      64,
+      128,
+      256,
+      512
+    ],
+    "iters": 2000,
+    "inner": 16,
+    "batch": 2048,
+    "mb": 4096,
+    "hidden": 384,
+    "n_dir": 256,
+    "bw_hi": 64.0,
+    "lr": 0.001,
+    "ema": 0.999,
+    "max_drift": 0.0,
+    "eval_every": 100,
+    "n_samples": 100000,
+    "nu": 256,
+    "nphi": 512,
+    "seed": 0,
+    "ckpt_dir": "ckpt",
+    "tag": "earthquake",
+    "out": "json/results_earthquake.json"
+  },
+  "n_train": 3343,
+  "n_test": 1433,
+  "pass": true
+}

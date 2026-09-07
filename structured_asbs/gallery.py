@@ -33,7 +33,10 @@ import os
 # common.py and the shared json/ ckpt/ fig/ directories live at the
 # repository root, one level up from this script.
 import os as _os, sys as _sys
-_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+_sys.path.insert(0, _ROOT)
+# figure 7 imports H_RASBS from the baseline port, which lives in rasbs/.
+_sys.path.insert(0, _os.path.join(_ROOT, "rasbs"))
 import common as C
 
 import numpy as np
