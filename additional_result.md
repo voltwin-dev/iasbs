@@ -22,7 +22,7 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 | 3 | IASBS extends to non-Dirac (Haar) sources without loss | §3.2 — matches the Dirac headline to 3 decimal places |
 | 4 | Reported R-ASBS mode collapse is an initialisation artifact | §4 — collapse vanishes under the authors' own init |
 | 5 | DAM needs millions of Monte-Carlo adjoint rollouts; IASBS needs none | §5, §6.4 — 20.9 M rollout-endpoint f1 evals for DAM's best TV vs 0 for IASBS (IASBS still evaluates the energy; see §6.4) |
-| 6 | DAM has a hard stability cliff, and it moves with problem size | §5.2 — K=1, K=4 diverge at m=4; §6.2 — K=16 itself diverges at m=32 |
+| 6 | DAM has a hard stability cliff, and it moves with problem size | §5.2 — K=1, K=4 diverge at m=4; §6.2 — K=16 itself diverges at both m=32 and Ising L=4 |
 
 ---
 
@@ -45,7 +45,7 @@ sector).
 | L | sites n | `\|Omega\| = C(n, n/2)` | TV (exact law) | empirical TV | i.i.d. TV floor | violations | status |
 |---|---|---|---|---|---|---|---|
 | 4 | 16 | 12,870 | **0.03470** | 0.06571 | 0.04940 | **0 / 200,000** | **DONE — PASS** |
-| 5 | 25 | 5,200,300 | 0.08677 (it 2575/3000, best 0.07528) | pending | pending | pending | RUNNING |
+| 5 | 25 | 5,200,300 | 0.06714 (it 2725/3000, best 0.06714) | pending | pending | pending | RUNNING |
 
 `json/results_ising_nd_L4.json`, `json/results_ising_nd_L5.json`.
 
@@ -429,8 +429,8 @@ robustness to initialisation*, not speed.
 | Occupation m=4 | 64 | 400 | 3177.7 | 7.9 | 26,624,000 | 222,041,777 | 8.34 |
 | Ising L=4, 10-iter diagnostic | 16 | 10 | **21.3** | **2.13** | 174,080 | 936,880 | **5.38** |
 | Occupation-scale m=32, 10-iter diagnostic | 16 | 10 | 123.3 | 12.33 | 174,080 | 26,661,608 | **153.2** |
-| Ising L=4 | 16 | 1200 | RUNNING (relaunched alone, ~45 min proj.) | 2.13 | — | — | — |
-| Occupation-scale m=32 | 64 | 400 | QUEUED (K=16 diverged) | — | — | — | — |
+| **Ising L=4** | 16 | 40 of 200 | **DIVERGED, killed at 286 s** | 2.1 -> **37.6** | — | — | — |
+| Occupation-scale m=32 | 64 | 400 | RUNNING from 14:13:57 UTC | — | — | — | — |
 | Occupation-scale m=128 | 16 | 600 | KILLED at 3695 s, <50 it | >74 | — | — | — |
 | Occupation-scale m=1000 | 16 | 300 | dropped (K=16 expected to diverge) | — | — | — | — |
 | Ising L=5 | 16 | 600 | not run | — | — | — | — |
@@ -445,12 +445,40 @@ completely different causes:
 | ESS mean / p10 | 3.68 / **1.52** | 1.93 / **1.00** |
 | jumps per f1 eval | **5.38** | **153.2** |
 | s / iter, uncontended | **2.13** | 12.33 and rising |
-| verdict | **healthy, merely contended** | **DIVERGING** |
+| verdict at it 10 | *appeared healthy* | **DIVERGING** |
+| verdict at it 40 | **DIVERGED** (see below) | — |
 
-Ising L=4 was never diverging. Its loss descends, its jump count per terminal
-evaluation (5.38) is *below* the 8.86 of the converged occupation m=4 leg, and on
-an uncontended device it runs at 2.13 s/iter, so the >104 s/iter measured earlier
-was entirely the co-scheduling penalty of §6.2. It has been relaunched alone.
+**A 10-iteration diagnostic is not long enough — Ising L=4 diverges too, from
+iteration 15.** The diagnostic above sampled only the pre-divergence phase and
+led me to relaunch Ising L=4 at K=16 as "healthy but contended". Alone on GPU0 it
+then produced no eval line in 905 s, so it was relaunched a second time with
+`--eval-every 5`. The dense log settles the question:
+
+| it | loss | TV (exact law) | E-hist TV | ESS / 16 | cumulative s |
+|---|---|---|---|---|---|
+| 5 | 10.93 | 0.76046 | 0.74692 | 3.82 | 11 |
+| 10 | 7.25 | 0.75909 | 0.75136 | 3.22 | 21 |
+| 15 | **-16.30** | 0.76199 | 0.75090 | 3.02 | 31 |
+| 20 | -9.70e3 | 0.80817 | 0.73972 | 2.26 | 41 |
+| 25 | -3.81e12 | 0.85085 | 0.73072 | 1.76 | 54 |
+| 30 | -4.30e11 | 0.86370 | 0.72258 | 1.71 | 70 |
+| 35 | -4.78e12 | 0.87208 | 0.67669 | 1.44 | 98 |
+| 40 | -4.15e12 | **0.97347** | 0.84403 | **1.04** | 286 |
+
+Every diagnostic moves the same way at once: the loss turns negative at iteration
+15 and reaches -4e12 by iteration 25, the ESS collapses monotonically from 3.82 to
+**1.04 out of 16** (a single rollout carrying the adjoint denominator), TV rises
+*away* from the target, 0.760 -> **0.973** (worse than the untrained controller),
+and the per-iteration cost climbs 2.1 -> **37.6 s/iter** between iterations 35 and
+40 as the diverging rates inflate the jump count. That last effect is exactly why
+the `--eval-every 50` relaunch printed nothing in 905 s: it was not slow, it was
+diverging into a cost explosion. The leg was killed at 286 s and its log kept as
+`dam/logs/dam_ising_L4_K16_DIVERGED.log`.
+
+So the cliff is crossed on a **second, independent** problem family. Ising L=4 has
+`|Omega| = 12,870` against `|X| = 35` for occupation m=4, and K=16 — sufficient at
+m=4 — fails on both of the larger spaces tried. IASBS solves the same Ising L=4
+target to TV **0.03470** (§2.1).
 
 Occupation-scale m=32 at K=16 shows the exact §5.2 divergence signature, and
 worse than any leg recorded there: 153 jumps per f1 evaluation against 73.2 at
@@ -481,7 +509,7 @@ loop issuing many small kernels and synchronising on `active.any()`. Consequence
 - Batch size is nearly free; the number of `while` iterations is what costs.
 - Co-scheduling two DAM runs on one device roughly *doubles* both wall times rather
   than overlapping them, which is why the remaining legs are queued serially
-  (`dam/queue_remaining.sh`).
+  (`dam/queue_gpu0.sh`).
 - The jump-explosion column is the mechanism behind the small-K divergence in §5.2:
   at K=1 each terminal evaluation costs 73 simulated jumps versus 8.9 at K=16.
 
@@ -627,17 +655,25 @@ plus one text correction.
 
 | job | progress | last metric | projected wall |
 |---|---|---|---|
-| IASBS Ising L=5 non-Dirac | 2575 / 3000 | TV 0.08677 | ~37000 s |
-| DAM Ising L=4, K=16 | <50 / 1200 | — | >36000 s |
-| DAM occupation-scale m=32, K=16 | <50 / 1200 | — | >36000 s |
+| IASBS Ising L=5 non-Dirac | 2725 / 3000 | TV 0.06714 (best 0.06714) | ~37500 s |
+| DAM occupation-scale m=32, K=64 | started 14:13:57 UTC, 0 / 400 | — | TBD |
 
-**Queued** (serially, `dam/queue_remaining.sh`, see §6.2 for why not in parallel)
+**Finished since the last update**
+
+| job | outcome |
+|---|---|
+| DAM Ising L=4, K=16 | **DIVERGED** at it 15, killed at it 40 / 286 s — §6.2 |
+
+**Queued** (serially, `dam/queue_gpu0.sh`, see §6.2 for why not in parallel)
 
 | job | iters | note |
 |---|---|---|
-| DAM occupation-scale m=128, K=16 | 600 | budget cut as m grows |
-| DAM occupation-scale m=1000, K=16 | 300 | may not finish; that is a result |
-| DAM Ising L=5, K=16 | 600 | matched against §2.1 |
+| DAM Ising L=4, K=64 | 200 | does more K clear the Ising cliff? not yet launched |
+
+The m=128 and m=1000 DAM legs at K=16 were dropped: K=16 is now measured to
+diverge at m=32 and on Ising L=4, so running it at m=128 and m=1000 would only
+reproduce a foregone divergence. The informative experiment is instead to raise K
+at fixed m, which is what the running m=32 K=64 leg does.
 
 **Text only**
 
