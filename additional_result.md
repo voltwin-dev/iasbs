@@ -673,11 +673,42 @@ A2's energy histogram is what a run does on approach to a boundary it cannot
 cross. Round 1's apparent success was partly an artifact of the same thing:
 a controller pinned to a small box cannot diverge, but it also cannot converge.
 
-Round 3 (running) sets the clamp *above* the target, `a-clamp 8` (27% headroom
-over 6.308, permitting a rate multiplier of 3.0e3 versus the baseline's 4.9e8),
-keeping `m-clip 5`, with and without the round-1 outlier removal.
+**Round 3 — clamp above the target (`a-clamp 8`, 27% headroom over 6.308,
+rate multiplier 3.0e3 against the baseline's 4.9e8).**
 
-**What this already establishes, regardless of how round 3 lands.** The §5.2
+| arm | settings | best E-hist TV | E-hist TV @ 600 | TV @ 600 | ESS mean / p10 | peak ESS | jumps | wall |
+|---|---|---|---|---|---|---|---|---|
+| F | `a-clamp 8 m-clip 5` | 0.40969 (it 550) | 0.41500 | 0.77586 | 2.34 / 1.01 | 2.93 | 176.7 M | 1446 s |
+| G | F + `ess-min 3 coef-cap 10` | **0.15688** (it 325) | 0.20890 | 0.81692 | **4.32 / 1.18** | **5.68** | 102.5 M | 1296 s |
+
+The clamp diagnosis is confirmed in the direction predicted. Arm G retains
+**4.32 of 16** rollouts against 2.35 at clamp 3 and **1.04** for the diverging
+baseline, holds the energy histogram near 0.19-0.21 instead of bouncing off a
+boundary, and does it with **42% fewer simulated jumps** than arm F — the ESS
+filter and the `r/q` cap are doing real work, not just trimming. Arm F, the same
+clamp without that damping, is markedly worse on every axis, so at clamp 8 the
+outlier removal is what keeps the run healthy.
+
+**The full TV still does not descend on any arm.** Across all eight
+configurations it sits in 0.76-0.83 while the energy histogram falls as low as
+0.157. That gap is informative: the energy *marginal* is being learned and the
+within-energy-level distribution is not. Under the Gibbs target, equal-energy
+states are equiprobable, but `f1 propto mu / p_base(. | x_0)` is not flat within
+an energy level — it has to undo the base process's geometry-dependent
+preference among equal-energy states — and that is exactly the component a
+Monte-Carlo adjoint with 4 effective rollouts out of 16 estimates worst.
+
+**Round 4 (running): the budget test.** Every arm so far had 600 iterations.
+Occupation m=4 needed **1200** iterations at K=16 to reach TV 0.0149, and was
+still at 0.39 at iteration 200, on a state space of `|X| = 35`. Ising L=4 is
+368x larger at `|Omega| = 12,870` and has been given half that budget, so
+"600 iterations was simply not enough" is not yet excluded. Two arms at matched
+wall clock (~110 min each, one GPU each), both on the round-3 G configuration:
+arm **H** at K=16 for 3000 iterations (5x the budget), arm **I** at K=32 for
+1500 iterations (tests whether the ESS ceiling binds instead of the budget --
+if it does, I beats H at equal cost; if the budget binds, H wins).
+
+**What this already establishes, regardless of how round 4 lands.** The §5.2
 divergence is not intrinsic to the estimator — it is a bounded-control problem,
 and clipping `log m_hat` at 5 plus a finite rate box removes it entirely on a
 benchmark where the unmodified method reaches -4e12 loss and ESS 1.04. What is
@@ -685,8 +716,9 @@ benchmark where the unmodified method reaches -4e12 loss and ESS 1.04. What is
 reading of round 2 is that the two requirements pull against each other: the box
 must be small enough to bound the jump explosion and large enough to contain the
 optimum. On Ising L=4 those two constraints are at least compatible in principle
-(6.31 needed, 20 permitted at baseline); whether the optimiser finds it is what
-round 3 measures.
+(6.31 needed, 20 permitted at baseline), and round 3 shows a clamp of 8 is a
+workable box -- the ESS quadruples relative to the diverging baseline. What
+round 3 does not deliver is a descending TV, which is what round 4 tests.
 
 ### 6.3 Cost of the comparison, head to head
 
@@ -823,8 +855,9 @@ python -m dam.tests_math
 
 ## 8. Still running / still to run
 
-**Running:** DAM stabiliser round 3 (`fix_F_clamp8`, `fix_G_clamp8damp`), Ising
-L=4 K=16, 600 iterations each, ~23 min per arm on one GPU each -- see §6.2.1.
+**Running:** DAM stabiliser round 4 (`fix_H_long3000` at K=16 for 3000
+iterations, `fix_I_K32` at K=32 for 1500), Ising L=4, ~110 min per arm on one
+GPU each -- see §6.2.1.
 Every IASBS experiment is finished.
 
 **Finished since the last update**
