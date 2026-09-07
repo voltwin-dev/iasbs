@@ -294,11 +294,17 @@ class SphereProblem:
 # ----------------------------------------------------------------------------
 # simulation
 # ----------------------------------------------------------------------------
-def simulate(prob, score_fn, batch, steps, generator=None, keep_path=False):
-    """Geodesic random walk for the controlled BM on S^2."""
+def simulate(prob, score_fn, batch, steps, generator=None, keep_path=False,
+             x_init=None):
+    """Geodesic random walk for the controlled BM on S^2.
+
+    x_init=None reproduces the Dirac source delta_{x0}; supplying a (B,3)
+    tensor gives the non-Dirac source (Haar) used by train-nondirac.
+    """
     dt = 1.0 / steps
     sig = prob.sigma
-    x = prob.x0[None, :].expand(batch, 3).contiguous().clone()
+    x = (prob.x0[None, :].expand(batch, 3).contiguous().clone()
+         if x_init is None else x_init.clone())
     path = [] if keep_path else None
     for s in range(steps):
         if keep_path:
@@ -316,16 +322,18 @@ def simulate(prob, score_fn, batch, steps, generator=None, keep_path=False):
     return x
 
 
-def bridge_path(prob, y1, steps, generator=None):
+def bridge_path(prob, y1, steps, generator=None, x0=None):
     """Reference Brownian bridge x_0 -> y1 on S^2, all grid points.
 
     Doob h-transform of the reference with h(x, t) = p_{r_{t,1}}(x . y1),
-    whose score is exact from the spectral table.
+    whose score is exact from the spectral table.  x0=None starts every path
+    at the Dirac source; a (B,3) tensor gives per-sample starting points.
     """
     sig = prob.sigma
     dt = 1.0 / steps
     B = y1.shape[0]
-    x = prob.x0[None, :].expand(B, 3).contiguous().clone()
+    x = (prob.x0[None, :].expand(B, 3).contiguous().clone()
+         if x0 is None else x0.clone())
     out = []
     for s in range(steps):
         out.append(x.clone())
@@ -340,6 +348,24 @@ def bridge_path(prob, y1, steps, generator=None):
         x = C.sphere_exp(x, C.sphere_project_tangent(x, v))
         x = x / x.norm(dim=-1, keepdim=True)
     return torch.stack(out)                                       # (steps,B,3)
+
+
+def random_sphere(n, device=DEV):
+    """Haar (uniform) source on S^2."""
+    return C.random_stiefel(n, 3, 1, device=device)[:, :, 0]
+
+
+def terminal_kernel_score(prob, x0, y):
+    """grad_y log p_{r_{0,1}}(x0 . y), the exact reference terminal score.
+
+    This is the regression target of the non-Dirac corrector: its conditional
+    expectation given X_1 = y is grad log of the base-propagated source
+    density, i.e. exactly the quantity the Dirac run gets in closed form.
+    """
+    c = (x0 * y).sum(-1).clamp(-1.0, 1.0)
+    si = torch.zeros(y.shape[0], device=y.device, dtype=torch.long)
+    k = prob.tab.dlogp_dc(si, c)
+    return C.sphere_project_tangent(y, k[:, None] * (x0 - c[:, None] * y))
 
 
 # ----------------------------------------------------------------------------
@@ -669,10 +695,162 @@ def run_train(args):
     return 0 if (north_err < 0.03 and ks < 0.05) else 1
 
 
+def run_train_nondirac(args):
+    """IASBS with a Haar source on S^2.
+
+    Identical geometry to run_train -- same bridge, same Killing readout, same
+    controller regression.  The ONLY change is the terminal gradient: the
+    closed-form Dirac term  grad log p_{0,1}(x0 . y)  is replaced by a learned
+    corrector H_psi(y), regressed on the exact reference terminal score of the
+    *sampled* source point.  At the IPF fixed point
+        H(y) = E[ grad_y log p_{0,1}(X_0 . y) | X_1 = y ],
+    so  G_ND(y) = -grad E(y)/tau - H(y)  is grad log f1-hat.
+    """
+    prob = SphereProblem(sigma=args.sigma, tau=args.tau, steps=args.steps)
+    steps = args.steps
+    ones = None
+    all_m, hist = [], []
+    for seed in range(args.seeds):
+        torch.manual_seed(1000 + seed)
+        net = ScoreNet(hidden=args.hidden, symmetric=args.symmetrize
+                       ).to(prob.device)
+        ema_net = ScoreNet(hidden=args.hidden, symmetric=args.symmetrize
+                           ).to(prob.device)
+        hnet = ScoreNet(hidden=args.hidden, symmetric=False).to(prob.device)
+        hema_net = ScoreNet(hidden=args.hidden, symmetric=False).to(prob.device)
+        n_par = sum(p.numel() for p in net.parameters())
+        n_par_h = sum(p.numel() for p in hnet.parameters())
+        opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+        opth = torch.optim.Adam(hnet.parameters(), lr=args.hlr)
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=args.iters * args.inner, eta_min=args.lr * 1e-2)
+        ema = EMA(net, decay=args.ema)
+        hema = EMA(hnet, decay=args.ema)
+        buf = []
+        loss_h = torch.zeros(())
+        t0 = time.time()
+        for it in range(1, args.iters + 1):
+            x0 = random_sphere(args.batch, device=prob.device)
+            with torch.no_grad():
+                y1 = simulate(prob, _score_fn(net, steps), args.batch, steps,
+                              x_init=x0)
+                b = terminal_kernel_score(prob, x0, y1)
+            ones = torch.ones(args.mb_h, device=prob.device,
+                              dtype=y1.dtype)
+            for _ in range(args.inner_h):
+                idx = torch.randint(args.batch, (args.mb_h,),
+                                    device=prob.device)
+                yh, bh = y1[idx], b[idx]
+                if args.antithetic:
+                    # R = diag(1,1,-1) is an isometry that fixes E and leaves
+                    # Haar invariant, and the reference kernel sees only
+                    # x0 . y, so (R x0, R y1) has the same law and its exact
+                    # terminal score is R b.  Same augmentation the Dirac
+                    # headline run uses on the controller.
+                    f = (torch.rand(yh.shape[0], 1, device=yh.device) < 0.5)
+                    sgn = torch.where(f, -1.0, 1.0).to(yh.dtype)
+                    yh = yh.clone(); bh = bh.clone()
+                    yh[:, 2] *= sgn[:, 0]
+                    bh[:, 2] *= sgn[:, 0]
+                h = hnet(ones, yh)
+                loss_h = ((h - bh) ** 2).sum(-1).mean()
+                opth.zero_grad(set_to_none=True)
+                loss_h.backward()
+                torch.nn.utils.clip_grad_norm_(hnet.parameters(), 10.0)
+                opth.step()
+                hema.update(hnet)
+            with torch.no_grad():
+                hema.copy_to(hema_net)
+                o1 = torch.ones(y1.shape[0], device=prob.device,
+                                dtype=y1.dtype)
+                Gy = C.sphere_project_tangent(
+                    y1, -C.sphere_energy_grad(y1) / args.tau) \
+                    - hema_net(o1, y1)
+                path = bridge_path(prob, y1, steps, x0=x0)         # (S,B,3)
+                buf.append((path.to(torch.float32), y1.to(torch.float32),
+                            Gy.to(torch.float32)))
+                if len(buf) > args.nbuf:
+                    buf.pop(0)
+                P = torch.cat([bb[0] for bb in buf], dim=1)
+                Y = torch.cat([bb[1] for bb in buf], dim=0)
+                GG = torch.cat([bb[2] for bb in buf], dim=0)
+                B = Y.shape[0]
+            for _ in range(args.inner):
+                bi = torch.randint(B, (args.mb,), device=prob.device)
+                s = torch.randint(steps, (args.mb,), device=prob.device)
+                xt = P[s, bi].to(torch.float64)
+                yb, gb = Y[bi].to(torch.float64), GG[bi].to(torch.float64)
+                if args.antithetic:
+                    f = (torch.rand(xt.shape[0], 1, device=xt.device) < 0.5)
+                    sgn = torch.where(f, -1.0, 1.0).to(xt.dtype)
+                    xt = xt.clone(); yb = yb.clone(); gb = gb.clone()
+                    xt[:, 2] *= sgn[:, 0]
+                    yb[:, 2] *= sgn[:, 0]
+                    gb[:, 2] *= sgn[:, 0]
+                lab = C.sphere_terminal_readout(xt, yb, gb)
+                pred = net(s.to(xt.dtype) / steps, xt)
+                loss = ((pred - lab) ** 2).sum(-1).mean()
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+                opt.step()
+                sched.step()
+                ema.update(net)
+            if it % args.eval_every == 0 or it == args.iters:
+                ema.copy_to(ema_net)
+                with torch.no_grad():
+                    xs = random_sphere(args.n_samples, device=prob.device)
+                    x = simulate(prob, _score_fn(ema_net, steps),
+                                 args.n_samples, steps, x_init=xs)
+                m = z_metrics(x)
+                m.update({"seed": seed, "iter": it, "loss": float(loss),
+                          "loss_h": float(loss_h)})
+                hist.append(m)
+                print(f"  seed {seed} it {it:4d}  loss {float(loss):8.4f}  "
+                      f"loss_h {float(loss_h):8.4f}  "
+                      f"north {m['north_mass']:.4f}  KS(x3) {m['KS_z']:.4f}  "
+                      f"({time.time()-t0:.0f}s)", flush=True)
+        ema.copy_to(ema_net)
+        hema.copy_to(hema_net)
+        m = hist[-1]
+        m["params"] = n_par
+        m["params_h"] = n_par_h
+        all_m.append(m)
+        if args.ckpt_dir:
+            with torch.no_grad():
+                xs = random_sphere(args.n_samples, device=prob.device)
+                xs_fin = simulate(prob, _score_fn(ema_net, steps),
+                                  args.n_samples, steps, x_init=xs)
+            p = C.save_ckpt(args.ckpt_dir, f"{args.tag}_seed{seed}",
+                            net=ema_net, samples=xs_fin,
+                            extra={"config": vars(args), "metrics": m,
+                                   "hnet": hema_net.state_dict(),
+                                   "source": "Haar S2"})
+            print(f"    ckpt -> {p}", flush=True)
+
+    north_err = float(np.mean([m["north_err"] for m in all_m]))
+    ks = float(np.mean([m["KS_z"] for m in all_m]))
+    cons = float(np.max([m["constraint"] for m in all_m]))
+    print(f"\n  mean over {args.seeds} seeds: hemisphere err {north_err:.4f}   "
+          f"KS(x3) {ks:.4f}   max |‖x‖-1| {cons:.2e}")
+    print("\n=== GATES ===")
+    print(f"C1  mean hemisphere err < 0.03 (R-ASBS 0.062): "
+          f"{'PASS' if north_err < 0.03 else 'FAIL'}  ({north_err:.4f})")
+    print(f"C2  KS(x3) < 0.05                            : "
+          f"{'PASS' if ks < 0.05 else 'FAIL'}  ({ks:.4f})")
+    with open(args.out, "w") as f:
+        json.dump({"config": vars(args), "source": "Haar S2", "seeds": all_m,
+                   "history": hist, "north_err": north_err, "KS_z": ks},
+                  f, indent=2, default=str)
+    print(f"  wrote {args.out}")
+    return 0 if (north_err < 0.03 and ks < 0.05) else 1
+
+
 def main():
     C.use_repo_root()
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["verify", "exact", "train"])
+    ap.add_argument("cmd", choices=["verify", "exact", "train",
+                                    "train-nondirac"])
     ap.add_argument("--sigma", type=float, default=math.sqrt(2.0))
     ap.add_argument("--tau", type=float, default=1.0)
     ap.add_argument("--steps", type=int, default=128)
@@ -689,6 +867,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ema", type=float, default=0.999)
     ap.add_argument("--nbuf", type=int, default=4)
+    ap.add_argument("--hlr", type=float, default=1e-3)
+    ap.add_argument("--inner-h", type=int, default=4)
+    ap.add_argument("--mb-h", type=int, default=4096)
     ap.add_argument("--symmetrize", action="store_true")
     ap.add_argument("--antithetic", action="store_true")
     # Default "ckpt", never "": a run whose checkpoint is not
@@ -698,7 +879,8 @@ def main():
     ap.add_argument("--out", type=str, default="json/results_sphere.json")
     args = ap.parse_args()
     return {"verify": run_verify, "exact": run_exact,
-            "train": run_train}[args.cmd](args)
+            "train": run_train,
+            "train-nondirac": run_train_nondirac}[args.cmd](args)
 
 
 if __name__ == "__main__":

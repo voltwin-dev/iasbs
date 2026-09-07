@@ -397,6 +397,20 @@ def net_mult_on_index(space, net, t, idx):
     return a[b, space.edge_i[idx], space.edge_j[idx]].to(torch.float64)
 
 
+def net_h_on_pairs(space, net_h, X1_idx):
+    """Learned log corrector ratio h_g(Y) for every unordered pair g.
+
+    The corrector is a function of the terminal state alone, so the same
+    SwapController architecture is evaluated at t = 1 and read out on the pair
+    index instead of the legal-edge index -- a swap that is illegal at Y leaves
+    Y fixed, and the loss below drives h to 0 there, which is the correct
+    value.  Returns (B, n_pairs), float64 to match terminal_labels.
+    """
+    tt = torch.ones(X1_idx.shape[0], device=space.device)
+    a = net_h(tt, space.S[X1_idx])
+    return a[:, space.pairs[:, 0], space.pairs[:, 1]].to(torch.float64)
+
+
 def net_mult_all_states(space, net, t, chunk=4096):
     out = []
     for a in range(0, space.M, chunk):
@@ -732,23 +746,198 @@ def run_train(args):
     return 0 if (tv <= 0.05 and viol == 0) else 1
 
 
+def run_train_nondirac(args):
+    """Non-Dirac source: nu_0 = Uniform(Omega), corrector learned alongside.
+
+    The Dirac run knows log p_base(Y | x_0) in closed form and folds it into the
+    terminal label.  With a source distribution that ratio becomes
+
+        fhat_1(z) = sum_{x0} p_base(z | x0) f_0(x0) nu_0(x0),
+
+    which contains f_0 and is therefore not available in closed form: the loop
+    is an IPF fixed-point iteration, not one-shot regression.  What IS available
+    is an unbiased single-sample estimator of the ratio fhat_1(gY)/fhat_1(Y) --
+    namely Q_g(X_0, Y) with (X_0, Y) an endpoint PAIR of the controlled process,
+    since p*(x0 | Y) is exactly the law that makes E[Q_g | Y] equal that ratio.
+    Regressing Q with the same Poisson-Bregman loss the controller uses puts
+    exp(h_g) at that conditional mean.  X_0 and Y must travel together through
+    the replay buffer; drawing X_0 uniformly and independently of Y gives a
+    measurably biased corrector (mean Q = 1.014 rather than 1).
+
+    Everything else -- the swap controller, the bridge sampler, the exact
+    propagation, the target pi -- is shared with the Dirac driver.
+    """
+    space = FixedIsingSpace(L=args.L, J=args.J, tau=args.tau, gamma=args.gamma)
+    torch.manual_seed(args.seed)
+    net = SwapController(space.n, hidden=args.hidden).to(space.device)
+    net_h = SwapController(space.n, hidden=args.hidden).to(space.device)
+    n_par = sum(p.numel() for p in net.parameters())
+    n_par_h = sum(p.numel() for p in net_h.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    opt_h = torch.optim.Adam(net_h.parameters(), lr=args.lr_h)
+    steps = args.steps
+
+    print(f"L={args.L} |Omega|={space.M}  params={n_par}+{n_par_h}  "
+          f"steps={steps}  source=Uniform(Omega)  device={space.device}")
+
+    ts = np.arange(steps) / steps
+    log_kap0 = space.kappa_table(np.maximum(space.gamma * ts, 1e-12))
+    log_kap1 = space.kappa_table(np.maximum(space.gamma * (1 - ts), 1e-12))
+    p0_unif = torch.full((space.M,), 1.0 / space.M, device=space.device,
+                         dtype=torch.float64)
+
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=args.iters * args.inner, eta_min=args.lr * 0.05)
+    sched_h = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt_h, T_max=args.iters * args.inner_h, eta_min=args.lr_h * 0.05)
+
+    buf0, buf1 = [], []
+    hist = []
+    it1 = {}
+    t_start = time.time()
+    for it in range(1, args.iters + 1):
+        with torch.no_grad():
+            idx0 = torch.randint(space.M, (args.batch,), device=space.device)
+            idx1 = simulate(
+                space, lambda t, i: net_mult_on_index(space, net, t, i),
+                args.batch, steps, idx0=idx0)
+        buf0.append(idx0)
+        buf1.append(idx1)
+        if len(buf1) > args.buffer:
+            buf0.pop(0)
+            buf1.pop(0)
+        pool0, pool1 = torch.cat(buf0), torch.cat(buf1)
+
+        # --- corrector: exp(h_g) -> E[Q_g | Y] ------------------------------
+        for _ in range(args.inner_h):
+            sel = torch.randint(len(pool1), (args.mb,), device=space.device)
+            Y, X0 = pool1[sel], space.S[pool0[sel]]
+            with torch.no_grad():
+                q = torch.exp(corrector_labels(space, X0, Y).clamp(-20.0, 20.0))
+            hv = net_h_on_pairs(space, net_h, Y).clamp(-20.0, 20.0)
+            loss_h = (torch.exp(hv) - hv * q).mean()
+            opt_h.zero_grad(set_to_none=True)
+            loss_h.backward()
+            torch.nn.utils.clip_grad_norm_(net_h.parameters(), 10.0)
+            opt_h.step()
+            sched_h.step()
+
+        # --- controller: identical to the Dirac loop, corrected label -------
+        for _ in range(args.inner):
+            sel = torch.randint(len(pool1), (args.mb,), device=space.device)
+            X1, X0 = pool1[sel], space.S[pool0[sel]]
+            ti = torch.randint(steps, (args.mb,), device=space.device)
+            with torch.no_grad():
+                Xt = sample_bridge(space, X1, ti, log_kap0, log_kap1, X0=X0)
+                hg = net_h_on_pairs(space, net_h, X1)
+                log_lam = terminal_labels(space, X1, log_corr=hg)
+                lam = torch.exp(log_lam.clamp(-20.0, 20.0))
+                tgt = torch.gather(lam, 1, space.edge_pair[Xt])
+            tt = ti.to(torch.float64) / steps
+            a = net(tt, space.S[Xt])
+            b = torch.arange(args.mb, device=space.device).unsqueeze(1)
+            av = a[b, space.edge_i[Xt], space.edge_j[Xt]].clamp(-20.0, 20.0)
+            if args.loss == "poisson":
+                loss = (torch.exp(av) - av * tgt).mean()
+            else:
+                loss = ((torch.exp(av) - tgt) ** 2).mean()
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+            opt.step()
+            sched.step()
+
+        if it == 1:
+            # IPF iteration 1 has f_0 = 1 (the controller is zero-initialised),
+            # so the endpoints are a BASE-process pair and the exact corrector
+            # is known: the Johnson graph is distance-regular, hence
+            # fhat_1 = sum_d N_d kappa_d is constant in z and every ratio is
+            # exactly 1.  A learned corrector that is not near 0 here is a bug
+            # in the estimator, not a hard problem -- there is nothing to learn.
+            with torch.no_grad():
+                hv = net_h_on_pairs(space, net_h, pool1[:2048])
+                it1 = {"mean_exp_h": float(torch.exp(hv).mean()),
+                       "max_abs_h": float(hv.abs().max())}
+            print(f"  IPF-1 corrector vs exact 1: mean exp(h) "
+                  f"{it1['mean_exp_h']:.5f}   max|h| {it1['max_abs_h']:.5f}")
+
+        if it % args.eval_every == 0 or it == args.iters:
+            with torch.no_grad():
+                p = propagate_exact(
+                    space, lambda t: net_mult_all_states(space, net, t), steps,
+                    p0=p0_unif)
+            tv = 0.5 * float((p - space.pi).abs().sum())
+            eh = energy_hist_tv(space, p)
+            hist.append({"iter": it, "TV": tv, "energy_hist_TV": eh,
+                         "loss": float(loss), "loss_h": float(loss_h)})
+            print(f"  it {it:4d}  loss {float(loss):10.4f}  "
+                  f"loss_h {float(loss_h):8.4f}   exact-law TV {tv:.5f}   "
+                  f"E-hist TV {eh:.5f}   ({time.time()-t_start:.0f}s)")
+
+    with torch.no_grad():
+        p = propagate_exact(
+            space, lambda t: net_mult_all_states(space, net, t), steps,
+            p0=p0_unif)
+        idx0 = torch.randint(space.M, (args.n_samples,), device=space.device)
+        idx = simulate(space, lambda t, i: net_mult_on_index(space, net, t, i),
+                       args.n_samples, steps, idx0=idx0)
+    viol = int((space.S[idx].sum(dim=1) != space.k).sum())
+    tv = 0.5 * float((p - space.pi).abs().sum())
+    emp = torch.bincount(idx, minlength=space.M).to(torch.float64)
+    tv_emp = 0.5 * float((emp / emp.sum() - space.pi).abs().sum())
+    iid = torch.multinomial(space.pi, args.n_samples, replacement=True)
+    e2 = torch.bincount(iid, minlength=space.M).to(torch.float64)
+    tv_floor = 0.5 * float((e2 / e2.sum() - space.pi).abs().sum())
+
+    print("\n=== GATES ===")
+    print(f"A1  TV <= 0.05 : {'PASS' if tv <= 0.05 else 'FAIL'}  "
+          f"(exact-law TV {tv:.5f})")
+    print(f"A2  constraint : {'PASS' if viol == 0 else 'FAIL'}  "
+          f"({viol} violations in {args.n_samples} samples)")
+    print(f"    empirical TV {tv_emp:.5f}   iid floor {tv_floor:.5f}")
+
+    if getattr(args, "ckpt_dir", ""):
+        pth = C.save_ckpt(args.ckpt_dir, args.tag, net=net,
+                          nets={"control": net, "corrector": net_h},
+                          samples=idx.to(torch.int32),
+                          extra={"config": vars(args), "final_TV": tv,
+                                 "empirical_TV": tv_emp,
+                                 "iid_TV_floor": tv_floor,
+                                 "violations": viol, "ipf1_corrector": it1,
+                                 "source": "uniform",
+                                 "exact_law": p.detach().cpu(),
+                                 "pi": space.pi.detach().cpu(),
+                                 "states": space.S.detach().cpu()})
+        print(f"  ckpt -> {pth}")
+
+    with open(args.out, "w") as f:
+        json.dump({"config": vars(args), "params": n_par + n_par_h,
+                   "source": "uniform", "history": hist, "final_TV": tv,
+                   "empirical_TV": tv_emp, "iid_TV_floor": tv_floor,
+                   "violations": viol, "ipf1_corrector": it1},
+                  f, indent=2, default=str)
+    print(f"  wrote {args.out}")
+    return 0 if (tv <= 0.05 and viol == 0) else 1
+
+
 def main():
     C.use_repo_root()
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    for name in ["exact", "train"]:
+    for name in ["exact", "train", "train-nondirac"]:
         p = sub.add_parser(name)
+        stem = name.replace("-", "_")
         p.add_argument("--L", type=int, default=4)
         p.add_argument("--J", type=float, default=1.0)
         p.add_argument("--tau", type=float, default=2.0)
         p.add_argument("--gamma", type=float, default=10.0)
         p.add_argument("--n-samples", dest="n_samples", type=int, default=200000)
-        p.add_argument("--out", type=str, default=f"json/results_ising_{name}.json")
+        p.add_argument("--out", type=str, default=f"json/results_ising_{stem}.json")
         # Default "ckpt", never "": a run whose checkpoint is not
         # written cannot be re-measured later and must be repeated in full.
         p.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="ckpt")
-        p.add_argument("--tag", type=str, default=f"ising_{name}")
+        p.add_argument("--tag", type=str, default=f"ising_{stem}")
         if name == "exact":
             p.add_argument("--steps-sweep", dest="steps_sweep", type=int,
                            nargs="+", default=[32, 64, 128, 256, 512])
@@ -766,9 +955,17 @@ def main():
                            default=25)
             p.add_argument("--loss", type=str, default="poisson",
                            choices=["poisson", "mse"])
+        if name == "train-nondirac":
+            # The corrector sees a fresh regression target every outer
+            # iteration, so it is given its own budget and its own schedule.
+            p.add_argument("--inner-h", dest="inner_h", type=int, default=40)
+            p.add_argument("--lr-h", dest="lr_h", type=float, default=3e-4)
 
     args = ap.parse_args()
-    return run_exact(args) if args.cmd == "exact" else run_train(args)
+    if args.cmd == "exact":
+        return run_exact(args)
+    return run_train_nondirac(args) if args.cmd == "train-nondirac" \
+        else run_train(args)
 
 
 if __name__ == "__main__":

@@ -756,12 +756,17 @@ def total_variation(p, q):
 # ============================================================================
 
 
-def save_ckpt(ckpt_dir, tag, net=None, samples=None, extra=None):
+def save_ckpt(ckpt_dir, tag, net=None, samples=None, extra=None, nets=None):
     """Write <ckpt_dir>/<tag>.pt with weights, final samples and metadata.
 
     Metric histories live in the results_*.json files; this is for the two
     things those cannot hold -- the learned control itself (for score-field
     plots) and the raw terminal samples (for histograms and bootstrap CIs).
+
+    nets is an optional {name: module} map for runs that train more than one
+    network.  A non-Dirac run learns a control AND a corrector, and the
+    corrector is not reconstructible from the control: dropping it would make
+    the checkpoint unable to reproduce the terminal law it reports.
     """
     import os
 
@@ -788,6 +793,10 @@ def save_ckpt(ckpt_dir, tag, net=None, samples=None, extra=None):
         if x.is_floating_point():
             x = x.to(torch.float64)
         blob["samples"] = x
+    if nets:
+        blob["state_dicts"] = {
+            name: {k: v.detach().cpu() for k, v in m.state_dict().items()}
+            for name, m in nets.items()}
     if extra:
         blob["extra"] = extra
     path = os.path.join(ckpt_dir, f"{tag}.pt")

@@ -150,6 +150,42 @@ class OccupationSpace:
         self.R = torch.exp(self.logf1[self.trans] - self.logf1[:, None, None])
         self.R = torch.where(self.valid, self.R, torch.zeros_like(self.R))
 
+    # -- non-Dirac source ---------------------------------------------------
+    def set_nondirac_source(self, nu0):
+        """nu_0 = sum_c nu0[c] delta_{N e_c}, supported on the m pure modes.
+
+        The source has m atoms, so only m rows of the reference semigroup are
+        ever needed: the whole non-Dirac branch costs one extra (m, |X|) table.
+        """
+        w = torch.as_tensor(nu0, device=self.device, dtype=torch.float64)
+        self.nu0 = w / w.sum()
+        src = []
+        for c in range(self.m):
+            x = np.zeros(self.m, dtype=np.int64)
+            x[c] = self.N
+            src.append(self.index[tuple(x)])
+        self.src_idx = torch.tensor(src, device=self.device)
+        P01 = self.semigroup(self.gamma)
+        self.logP01_src = torch.tensor(
+            np.log(np.maximum(P01[np.asarray(src)], 1e-300)),
+            device=self.device)                                 # (m, M)
+        self.p0_vec = torch.zeros(self.M, device=self.device,
+                                  dtype=torch.float64)
+        self.p0_vec[self.src_idx] = self.nu0
+
+    def rebuild_R(self, log_fhat):
+        """Recompute f_1 = exp(-E/tau)/fhat_1 and the ratio table R from it.
+
+        The Dirac constructor sets fhat_1 = p_base(.|eta_0); with a source
+        distribution that single row is replaced by the corrector.  Nothing
+        downstream changes -- labels_full, labels_sampled and phi_grid all read
+        R and logf1, so the entire label machinery is shared between the two.
+        """
+        lf1 = (-self.E / self.tau) - log_fhat
+        self.logf1 = lf1 - lf1.max()
+        self.R = torch.exp(self.logf1[self.trans] - self.logf1[:, None, None])
+        self.R = torch.where(self.valid, self.R, torch.zeros_like(self.R))
+
     # -- semigroup ----------------------------------------------------------
     def semigroup(self, Gamma):
         return scipy.linalg.expm(float(Gamma) * self.Lhat)
@@ -227,10 +263,15 @@ def step_probs(space, log_mult, dt):
     return p * scale
 
 
-def propagate_exact(space, mult_fn, steps):
+def propagate_exact(space, mult_fn, steps, p0=None):
+    """p0 is the initial law; the default is the Dirac at space.i0.  The
+    non-Dirac branch must evaluate under the SAME source it trained on."""
     dt = 1.0 / steps
-    p = torch.zeros(space.M, device=space.device, dtype=torch.float64)
-    p[space.i0] = 1.0
+    if p0 is not None:
+        p = p0.to(space.device).to(torch.float64).clone()
+    else:
+        p = torch.zeros(space.M, device=space.device, dtype=torch.float64)
+        p[space.i0] = 1.0
     for s in range(steps):
         pj = step_probs(space, mult_fn(s / steps), dt)
         flow = p[:, None] * pj
@@ -240,9 +281,13 @@ def propagate_exact(space, mult_fn, steps):
     return p
 
 
-def simulate(space, mult_fn_states, batch, steps, generator=None):
+def simulate(space, mult_fn_states, batch, steps, generator=None, idx0=None):
     dt = 1.0 / steps
-    idx = torch.full((batch,), space.i0, device=space.device, dtype=torch.long)
+    if idx0 is not None:
+        idx = idx0.to(space.device).long()
+    else:
+        idx = torch.full((batch,), space.i0, device=space.device,
+                         dtype=torch.long)
     for s in range(steps):
         lm = mult_fn_states(s / steps, idx)                      # (B, n_edges)
         rate = (space.gamma / (space.m - 1.0)) * space.eocc[idx] * torch.exp(
@@ -318,6 +363,78 @@ def net_mult_on(space, net, t, idx):
     tt = torch.full((len(idx),), t, device=space.device, dtype=torch.float64)
     a = net(tt, space.S[idx]).to(torch.float64)
     return a[:, space.edge_i, space.edge_j]
+
+
+class SourceCorrector(torch.nn.Module):
+    """log fhat_1(z) = logsumexp_c ( logw_c + log p_base(z | N e_c) ).
+
+    fhat_1(z) = sum_c f_0(N e_c) nu_0(c) p_base(z | N e_c) is a nonnegative
+    combination of m fixed rows, so with a finite source the corrector lives in
+    an m-dimensional cone and this parameterisation CONTAINS the exact answer
+    rather than approximating it: only the m log-weights are free.  R uses
+    fhat_1 through ratios alone, so the overall scale of w is unidentifiable
+    and harmless.
+    """
+
+    def __init__(self, space):
+        super().__init__()
+        self.logP = space.logP01_src                             # (m, M)
+        self.logw = torch.nn.Parameter(torch.log(space.nu0.clone()))
+
+    def forward(self):
+        return torch.logsumexp(self.logw[:, None] + self.logP, dim=0)
+
+
+def exact_sinkhorn(space, iters=20000, tol=1e-15):
+    """Static Schrodinger bridge between nu_0 and pi, solved exactly.
+
+    Gamma(c, z) = u_c K(c, z) v_z with row marginal nu_0 and column marginal
+    pi, K = p_base(. | N e_c).  There are only m = 4 rows, so alternating
+    scaling converges to machine precision in milliseconds and returns the
+    corrector fhat_1 = K^T u that the training loop has to discover -- computed
+    without any reference to the learned control, so it is an independent
+    reference rather than a self-consistency check.
+    """
+    K = torch.exp(space.logP01_src)                              # (m, M)
+    u = torch.ones(space.m, device=space.device, dtype=torch.float64)
+    v = torch.ones(space.M, device=space.device, dtype=torch.float64)
+    for _ in range(iters):
+        u_new = space.nu0 / (K @ v).clamp_min(1e-300)
+        v_new = space.pi / (K.T @ u_new).clamp_min(1e-300)
+        done = ((u_new - u).abs().max() < tol
+                and (v_new - v).abs().max() < tol)
+        u, v = u_new, v_new
+        if done:
+            break
+    row = (u[:, None] * K * v[None, :]).sum(1)
+    col = (u[:, None] * K * v[None, :]).sum(0)
+    err = max(float((row - space.nu0).abs().max()),
+              float((col - space.pi).abs().max()))
+    return u, torch.log((K.T @ u).clamp_min(1e-300)), err
+
+
+def sample_bridge_nd(space, c0, X1_idx, t_idx, K0, K1, generator=None):
+    """Reference bridge with a per-trajectory source atom.  K0 is (T, m, M)."""
+    lw = K0[t_idx, c0]                                                # (B, M)
+    lw = lw + K1[t_idx].gather(2, X1_idx[:, None, None].expand(
+        -1, space.M, 1))[:, :, 0]
+    lw = lw - lw.max(dim=1, keepdim=True).values
+    return torch.multinomial(torch.exp(lw), 1, generator=generator)[:, 0]
+
+
+def labels_grid(sp, cts):
+    """labels_full for the whole time grid at once.  (T, M, n_edges).
+
+    Only the scalar c_t varies with time, so the two state-dependent pieces are
+    built once.  The non-Dirac loop rebuilds this table every outer iteration
+    (R moves when the corrector moves), which would otherwise be a Python loop
+    over all time steps.
+    """
+    T = torch.einsum("ra,rab->rb", sp.Sf, sp.R)
+    first = sp.eocc * (sp.R[:, sp.edge_i, sp.edge_j] - 1.0)
+    first = torch.where(sp.emask, first, torch.zeros_like(first))
+    corr = T[:, sp.edge_j] - T[:, sp.edge_i]
+    return first[None] - cts[:, None, None] * corr[None]
 
 
 def sample_bridge(space, X1_idx, t_idx, K0, K1, generator=None):
@@ -671,6 +788,180 @@ def run_train(args):
     return 0 if (tv <= 0.05 and viol == 0) else 1
 
 
+def run_train_nondirac(args):
+    """Non-Dirac source on the occupation space: nu_0 over the m pure modes.
+
+    Contrast with the Ising non-Dirac run, where the source is uniform over the
+    whole of Omega and the corrector has to be a network.  Here the source is
+    finitely supported, so the exact corrector is an m-dimensional object and
+    the *same* endpoint-pair estimator fits it with m free numbers -- and the
+    exact answer is available by Sinkhorn, so the learned corrector can be
+    checked directly rather than only through the terminal law.
+    """
+    sp = OccupationSpace(m=args.m, N=args.N, d=args.d, tau=args.tau,
+                         gamma=args.gamma)
+    nu0 = torch.tensor([args.nu_skew ** c for c in range(sp.m)],
+                       dtype=torch.float64)
+    sp.set_nondirac_source(nu0)
+    torch.manual_seed(args.seed)
+    net = OccController(sp.m, sp.N, hidden=args.hidden).to(sp.device)
+    corr = SourceCorrector(sp).to(sp.device)
+    n_par = sum(p.numel() for p in net.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    opt_c = torch.optim.Adam(corr.parameters(), lr=args.lr_h)
+    steps = args.steps
+
+    u_ex, logfhat_ex, sink_err = exact_sinkhorn(sp)
+    print(f"m={sp.m} N={sp.N} |X|={sp.M}  params={n_par}+{sp.m}  "
+          f"steps={steps}  source=nu0{np.round(sp.nu0.cpu().numpy(), 4)}  "
+          f"device={sp.device}")
+    print(f"  exact Sinkhorn marginal error {sink_err:.3e}   "
+          f"f_0 (up to scale) {np.round((u_ex / sp.nu0 / (u_ex[0] / sp.nu0[0])).cpu().numpy(), 5)}")
+
+    ts = np.arange(steps) / steps
+    # (T, m, M): the source enters the bridge only through which of the m rows
+    K0 = torch.tensor(np.log(np.maximum(np.stack(
+        [sp.semigroup(sp.gamma * t)[sp.src_idx.cpu().numpy()] for t in ts]),
+        1e-300)), device=sp.device)
+    K1 = torch.tensor(np.log(np.maximum(np.stack(
+        [sp.semigroup(sp.gamma * (1 - t)) for t in ts]), 1e-300)),
+        device=sp.device)
+    cts = torch.tensor([c_of_t(sp, t) for t in ts], device=sp.device)
+
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=args.iters * args.inner, eta_min=args.lr * 0.05)
+
+    buf_c, buf_1, hist = [], [], []
+    t0 = time.time()
+    for it in range(1, args.iters + 1):
+        with torch.no_grad():
+            c0 = torch.multinomial(sp.nu0, args.batch, replacement=True)
+            idx1 = simulate(sp, lambda t, i: net_mult_on(sp, net, t, i),
+                            args.batch, steps, idx0=sp.src_idx[c0])
+        buf_c.append(c0)
+        buf_1.append(idx1)
+        if len(buf_1) > args.buffer:
+            buf_c.pop(0)
+            buf_1.pop(0)
+        pool_c, pool_1 = torch.cat(buf_c), torch.cat(buf_1)
+
+        # --- corrector: exp(h_g) -> E[ p_base(gY|X_0)/p_base(Y|X_0) | Y ] ---
+        for _ in range(args.inner_h):
+            sel = torch.randint(len(pool_1), (args.mb,), device=sp.device)
+            Y, c = pool_1[sel], pool_c[sel]
+            tg = sp.etgt[Y]                                       # (mb, n_edges)
+            with torch.no_grad():
+                q = torch.exp((sp.logP01_src[c].gather(1, tg)
+                               - sp.logP01_src[c, Y][:, None]).clamp(-20, 20))
+            lf = corr()
+            h = (lf[tg] - lf[Y][:, None]).clamp(-20.0, 20.0)
+            mask = sp.emask[Y].to(torch.float64)
+            loss_c = ((torch.exp(h) - h * q) * mask).sum() / mask.sum()
+            opt_c.zero_grad(set_to_none=True)
+            loss_c.backward()
+            opt_c.step()
+
+        with torch.no_grad():
+            sp.rebuild_R(corr())
+            lam_tab = labels_grid(sp, cts)
+
+        # --- controller: identical to the Dirac loop --------------------
+        for _ in range(args.inner):
+            sel = torch.randint(len(pool_1), (args.mb,), device=sp.device)
+            X1, c = pool_1[sel], pool_c[sel]
+            ti = torch.randint(steps, (args.mb,), device=sp.device)
+            with torch.no_grad():
+                Xt = sample_bridge_nd(sp, c, X1, ti, K0, K1)
+                if args.estimator == "full":
+                    lam = lam_tab[ti, X1]
+                else:
+                    lam = sp.labels_sampled(X1, cts[ti], mode=args.estimator,
+                                            n_a=args.n_a)
+                occ = sp.eocc[Xt]
+                y = occ + lam
+            tt = ti.to(torch.float64) / steps
+            a = net(tt, sp.S[Xt]).to(torch.float64)
+            av = a[:, sp.edge_i, sp.edge_j].clamp(-20.0, 20.0)
+            mask = sp.emask[Xt].to(torch.float64)
+            if args.loss == "bregman":
+                per = occ * torch.exp(av) - av * y
+            else:
+                per = (occ * torch.exp(av) - y) ** 2
+            loss = (per * mask).sum() / mask.sum().clamp(min=1.0)
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+            opt.step()
+            sched.step()
+
+        if it % args.eval_every == 0 or it == args.iters:
+            with torch.no_grad():
+                p = propagate_exact(sp, lambda t: net_mult_all(sp, net, t),
+                                    steps, p0=sp.p0_vec)
+                lf = corr()
+                cerr = float(((lf - lf.mean())
+                              - (logfhat_ex - logfhat_ex.mean())).abs().max())
+            tv = 0.5 * float((p - sp.pi).abs().sum())
+            ho = 0.5 * float((occ_hist(sp, p)
+                              - occ_hist(sp, sp.pi)).abs().sum())
+            hist.append({"iter": it, "TV": tv, "occ_hist_TV": ho,
+                         "loss": float(loss), "loss_h": float(loss_c),
+                         "corrector_max_err": cerr})
+            print(f"  it {it:4d}  loss {float(loss):9.4f}  "
+                  f"max|log fhat - exact| {cerr:.2e}   exact-law TV {tv:.5f}"
+                  f"   occ-hist TV {ho:.5f}   ({time.time()-t0:.0f}s)")
+
+    with torch.no_grad():
+        p = propagate_exact(sp, lambda t: net_mult_all(sp, net, t), steps,
+                            p0=sp.p0_vec)
+        c0 = torch.multinomial(sp.nu0, args.n_samples, replacement=True)
+        idx = simulate(sp, lambda t, i: net_mult_on(sp, net, t, i),
+                       args.n_samples, steps, idx0=sp.src_idx[c0])
+    viol = int((sp.S[idx].sum(dim=1) != sp.N).sum())
+    tv = 0.5 * float((p - sp.pi).abs().sum())
+    stats = report_law(sp, p, "final")
+    emp = torch.bincount(idx, minlength=sp.M).to(torch.float64)
+    tv_emp = 0.5 * float((emp / emp.sum() - sp.pi).abs().sum())
+    iid = torch.multinomial(sp.pi, args.n_samples, replacement=True)
+    e2 = torch.bincount(iid, minlength=sp.M).to(torch.float64)
+    tv_floor = 0.5 * float((e2 / e2.sum() - sp.pi).abs().sum())
+
+    print("\n=== GATES ===")
+    print(f"B1  TV <= 0.05 : {'PASS' if tv <= 0.05 else 'FAIL'}  "
+          f"(exact-law TV {tv:.5f})")
+    print(f"B2  constraint : {'PASS' if viol == 0 else 'FAIL'}  "
+          f"({viol} violations in {args.n_samples} samples)")
+    print(f"    empirical TV {tv_emp:.5f}   iid floor {tv_floor:.5f}   "
+          f"corrector max err {cerr:.2e}")
+
+    if args.ckpt_dir:
+        pth = C.save_ckpt(args.ckpt_dir, args.tag, net=net,
+                          nets={"control": net, "corrector": corr},
+                          samples=idx.to(torch.int32),
+                          extra={"config": vars(args), "final_TV": tv,
+                                 "empirical_TV": tv_emp,
+                                 "iid_TV_floor": tv_floor, "violations": viol,
+                                 "corrector_max_err": cerr,
+                                 "sinkhorn_marginal_err": sink_err,
+                                 "nu0": sp.nu0.cpu(),
+                                 "log_fhat_exact": logfhat_ex.cpu(),
+                                 "log_fhat_learned": corr().detach().cpu(),
+                                 "exact_law": p.detach().cpu(),
+                                 "pi": sp.pi.detach().cpu(),
+                                 "states": sp.S.detach().cpu()})
+        print(f"  ckpt -> {pth}")
+    with open(args.out, "w") as f:
+        json.dump({"config": vars(args), "params": n_par + sp.m,
+                   "source": "nondirac", "nu0": sp.nu0.tolist(),
+                   "history": hist, "final_TV": tv, "empirical_TV": tv_emp,
+                   "iid_TV_floor": tv_floor, "violations": viol,
+                   "corrector_max_err": cerr,
+                   "sinkhorn_marginal_err": sink_err, "stats": stats},
+                  f, indent=2, default=str)
+    print(f"  wrote {args.out}")
+    return 0 if (tv <= 0.05 and viol == 0) else 1
+
+
 # ============================================================================
 # SCALE  (m = N = 32 / 128 / 1000)  --  no enumeration anywhere
 # ============================================================================
@@ -743,9 +1034,53 @@ class ScaleOccupation:
         v = torch.log(xi + self.d) - torch.log(q)[None, :]
         return u, v
 
-    def labels_full(self, xi, q, c_t, i_idx, j_idx):
+    def uv_nondirac(self, xi, ah, bh):
+        """u_a, v_b when the closed-form reference ratio is replaced by a
+        learned corrector.  ah, bh are the rank-1 corrector outputs (B, m).
+
+            log R_{b<-a} = log[ mu(xi') / mu(xi) ] - h_{b<-a}
+                         = [ log xi_a   - log(xi_a - 1 + d) - ah_a ]
+                         + [ log(xi_b + d) - log(xi_b + 1)  - bh_b ],
+
+        so a RANK-1 corrector preserves the exact u_a + v_b factorisation that
+        makes labels_full O(m) rather than O(m^2).  That is the whole reason to
+        measure the rank-1 family before replacing it: the Dirac q_a/q_b term
+        is simply swapped for ah_a + bh_b and nothing downstream changes shape.
+        The exact corrector need not be rank-1, so this is an approximation
+        family -- if it fails, that is an architecture limit, not a failure of
+        the intertwining identity.
+
+        Unlike the Dirac branch, ah/bh are unbounded network outputs, so u and
+        v MUST be range-limited here.  labels_full forms
+        T = xi + e^v (U - xi e^u) and then T_j - T_i; if either exponential
+        overflows to +inf that difference is inf - inf = NaN, which then
+        poisons the controller weights and kills the run several hundred
+        iterations later with an unrelated-looking error.  +-60 keeps every
+        intermediate (including e^{u+v} ~ e^120 ~ 1e52) inside float64.
+        """
+        ah = ah.clamp(-20.0, 20.0)
+        bh = bh.clamp(-20.0, 20.0)
+        u = (torch.log(xi.clamp_min(1e-300)) - torch.log(xi - 1.0 + self.d)
+             - ah).clamp(-60.0, 60.0)
+        u = torch.where(xi > 0, u, torch.full_like(u, -1e30))
+        v = (torch.log(xi + self.d) - torch.log(xi + 1.0)
+             - bh).clamp(-60.0, 60.0)
+        return u, v
+
+    def q_atoms(self, Gamma):
+        """q^{(c)}_j = o + r [j == c] for a source concentrated at mode c.
+
+        The reference walk is the complete graph, so one particle started at c
+        is at c with probability o + r and at any other mode with probability o.
+        Two scalars describe every source row, which is what makes the
+        corrector label O(1) per queried transfer even at m = 1000.
+        """
+        r = math.exp(-self.m * Gamma / (self.m - 1.0))
+        return (1.0 - r) / self.m, r
+
+    def labels_full(self, xi, q, c_t, i_idx, j_idx, uv=None):
         """Exact full-sum Lambda_ji(xi) for the queried edges.  O(m)."""
-        u, v = self.uv(xi, q)
+        u, v = self.uv(xi, q) if uv is None else uv
         eu = torch.exp(u.clamp(min=-60.0))
         U = (xi * eu).sum(dim=1, keepdim=True)                    # (B,1)
         ev = torch.exp(v)
@@ -759,8 +1094,9 @@ class ScaleOccupation:
         first = torch.where(xi[ar, i_idx] > 0, first, torch.zeros_like(first))
         return first - c_t * (T[ar, j_idx] - T[ar, i_idx])
 
-    def labels_sampled(self, xi, q, c_t, i_idx, j_idx, mode="occupancy", n_a=1):
-        u, v = self.uv(xi, q)
+    def labels_sampled(self, xi, q, c_t, i_idx, j_idx, mode="occupancy", n_a=1,
+                       uv=None):
+        u, v = self.uv(xi, q) if uv is None else uv
         B = len(xi)
         ar = torch.arange(B, device=xi.device)
         Rji = torch.exp((u[ar, i_idx] + v[ar, j_idx]).clamp(-60.0, 60.0))
@@ -805,10 +1141,15 @@ class ScaleController(torch.nn.Module):
         """t: (B,), eta: (B, m) -> alpha, beta each (B, m)."""
         B, m = eta.shape
         e = eta.to(torch.float32)
-        src = torch.zeros(1, m, device=e.device, dtype=e.dtype)
-        src[0, source] = 1.0
-        per = torch.stack([e / self.N, torch.log1p(e),
-                           src.expand(B, m)], dim=-1)             # (B,m,3)
+        # source=None is the non-Dirac case: the controller must NOT be told
+        # which component the trajectory came from, or it is sampling a
+        # different, source-conditioned problem.  The feature is zeroed rather
+        # than removed so the two branches share one architecture and one
+        # parameter count.
+        src = torch.zeros(B, m, device=e.device, dtype=e.dtype)
+        if source is not None:
+            src[:, source] = 1.0
+        per = torch.stack([e / self.N, torch.log1p(e), src], dim=-1)
         t = t.to(torch.float32)[:, None]
         k = torch.arange(1, self.n_freq + 1, device=e.device,
                          dtype=e.dtype)[None, :]
@@ -824,6 +1165,19 @@ class ScaleController(torch.nn.Module):
         # gauge-fix the shift degeneracy  (alpha_i, beta_j) -> (alpha+s, beta-s)
         s = be.mean(dim=1, keepdim=True)
         return al + s, be - s
+
+
+def leaky_clamp(x, lo, hi, leak=1e-2):
+    """clamp(x, lo, hi) but with a small surviving slope outside the range.
+
+    A hard clamp on the exponent of a Bregman loss is a trap: once the network
+    saturates past the bound the gradient is exactly zero, so the corrector can
+    never come back and the run is dead while still reporting finite numbers.
+    The leak bounds the exponential just as effectively but keeps a restoring
+    gradient.
+    """
+    c = torch.clamp(x, lo, hi)
+    return c + leak * (x - c)
 
 
 def scale_step(sp, eta, alpha, beta, dt, generator=None):
@@ -843,6 +1197,10 @@ def scale_step(sp, eta, alpha, beta, dt, generator=None):
     p = p.clamp(0.0, 0.9)
     dep = torch.binomial(eta.to(torch.float64), p)                # (B, m)
     K = dep.sum(dim=1)                                            # (B,)
+    if not bool(torch.isfinite(K).all()):
+        raise RuntimeError(
+            "scale_step: non-finite departure counts -- the controller "
+            "weights have diverged (check for non-finite training labels)")
     # every departing particle draws its destination from the SAME law
     # softmax(beta), so all arrivals in a row are one Multinomial(K, p_beta).
     # Sample it as K iid categorical draws, padded to Kmax and masked.
@@ -858,9 +1216,15 @@ def scale_step(sp, eta, alpha, beta, dt, generator=None):
     return eta - dep + arr
 
 
-def simulate_scale(sp, net, batch, steps, generator=None):
+def simulate_scale(sp, net, batch, steps, generator=None, c0=None):
+    """c0 is a per-trajectory source component; the default is the Dirac at
+    sp.source.  The controller is never told c0 -- see ScaleController."""
     eta = torch.zeros(batch, sp.m, device=sp.device, dtype=torch.float64)
-    eta[:, sp.source] = sp.N
+    if c0 is None:
+        eta[:, sp.source] = sp.N
+    else:
+        eta.scatter_(1, c0[:, None], float(sp.N))
+    src = sp.source if c0 is None else None
     dt = 1.0 / steps
     for s in range(steps):
         t = torch.full((batch,), s / steps, device=sp.device,
@@ -869,12 +1233,12 @@ def simulate_scale(sp, net, batch, steps, generator=None):
             al = torch.zeros_like(eta)
             be = torch.zeros_like(eta)
         else:
-            al, be = net(t, eta, sp.source)
+            al, be = net(t, eta, src)
         eta = scale_step(sp, eta, al, be, dt, generator=generator)
     return eta
 
 
-def bridge_scale(sp, X1, tvals, generator=None):
+def bridge_scale(sp, X1, tvals, generator=None, c0=None):
     """Exact reference bridge  X_t | X_0 = N e_c, X_1 = xi,  in O(N).
 
     All particles start at c, so expand xi into N endpoint labels and bridge
@@ -889,7 +1253,11 @@ def bridge_scale(sp, X1, tvals, generator=None):
     r1 = torch.exp(-m * sp.gamma * (1.0 - tvals) / (m - 1.0))
     o0 = (1.0 - r0) / m
     o1 = (1.0 - r1) / m
-    c = sp.source
+    # c is the source component: a single mode for the Dirac branch, one per
+    # trajectory for the non-Dirac branch.  Only these two lines and the
+    # "snap back to c" line below depend on which it is.
+    c = torch.full((B, 1), sp.source, device=X1.device, dtype=torch.long) \
+        if c0 is None else c0[:, None]
     isc = (ends == c).to(torch.float64)                            # (B, N)
     w_u = (m * o0 * o1)[:, None].expand(B, N)
     w_c = (r0 * o1)[:, None].expand(B, N)
@@ -899,8 +1267,7 @@ def bridge_scale(sp, X1, tvals, generator=None):
     br = torch.multinomial(W.reshape(-1, 4), 1, generator=generator).view(B, N)
     unif = torch.randint(m, (B, N), device=X1.device, generator=generator)
     y = torch.where(br == 0, unif, ends)
-    y = torch.where((br == 1) | (br == 3),
-                    torch.full_like(y, c), y)
+    y = torch.where((br == 1) | (br == 3), c.expand(B, N), y)
     out = torch.zeros(B, m, device=X1.device, dtype=torch.float64)
     out.scatter_add_(1, y, torch.ones_like(y, dtype=torch.float64))
     return out
@@ -1051,6 +1418,182 @@ def run_scale(args):
     return 0 if (okKS and okW1 and okV) else 1
 
 
+def run_scale_nondirac(args):
+    """Non-Dirac source at scale: nu_0 uniform over the m concentrated states.
+
+    The first attempt deliberately keeps the existing rank-1 architecture for
+    both networks.  A rank-1 corrector is not implied by any exactness argument
+    here -- with a source mixture fhat_1 is a sum of m multinomial rows, not a
+    product -- but it is the family the O(m) simulator and the O(m) label
+    formula already support, so it must be measured before it is replaced.
+    """
+    sp = ScaleOccupation(m=args.m, N=args.N if args.N > 0 else args.m,
+                         d=args.d, tau=args.tau, gamma=args.gamma)
+    torch.manual_seed(args.seed)
+    net = ScaleController(sp.m, sp.N, hidden=args.hidden).to(sp.device)
+    net_h = ScaleController(sp.m, sp.N, hidden=args.hidden).to(sp.device)
+    n_par = sum(p.numel() for p in net.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    opt_h = torch.optim.Adam(net_h.parameters(), lr=args.lr_h)
+    steps = args.steps
+    o, r = sp.q_atoms(sp.gamma)
+    print(f"[scale-nd] m={sp.m} N={sp.N} d={sp.d} gamma={sp.gamma}  "
+          f"params={n_par}x2  steps={steps}  est={args.estimator}  "
+          f"source=Uniform over {sp.m} modes  q=(o {o:.3e}, o+r {o+r:.3e})  "
+          f"device={sp.device}")
+
+    exact = C.sample_inclusion_exact(args.n_samples, sp.m, sp.N, sp.d,
+                                     device=sp.device).to(torch.float64)
+    with torch.no_grad():
+        c0 = torch.randint(sp.m, (args.n_samples,), device=sp.device)
+        ref = simulate_scale(sp, None, args.n_samples, steps, c0=c0)
+    mref = scale_metrics(sp, ref, exact)
+    print(f"  reference (no control):  KS_occ={mref['KS_occ']:.4f}  "
+          f"KS_max={mref['KS_max']:.4f}  W1max/N={mref['W1_max_frac']:.4f}")
+
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=args.iters * args.inner, eta_min=args.lr * 0.05)
+    # The corrector needs its own decay: it is the component that ran away at
+    # m = 32, and a constant high lr_h keeps injecting energy into a loop whose
+    # own targets it moves.
+    sched_h = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt_h, T_max=max(1, args.iters * args.inner_h),
+        eta_min=args.lr_h * 0.05)
+    ones = torch.ones(args.mb, device=sp.device, dtype=torch.float64)
+    ar = torch.arange(args.mb, device=sp.device)
+    buf_c, buf_1, hist = [], [], []
+    n_bad, n_skip = 0, 0
+    t0 = time.time()
+    for it in range(1, args.iters + 1):
+        with torch.no_grad():
+            c0 = torch.randint(sp.m, (args.batch,), device=sp.device)
+            X1 = simulate_scale(sp, net, args.batch, steps, c0=c0)
+        buf_c.append(c0)
+        buf_1.append(X1)
+        if len(buf_1) > args.buffer:
+            buf_c.pop(0)
+            buf_1.pop(0)
+        pool_c, pool_1 = torch.cat(buf_c), torch.cat(buf_1)
+
+        # --- corrector: exp(h_{b<-a}) -> E[ Q_{ba}(c, xi) | xi ] ------------
+        # Q_{ba}(c, xi) = (xi_a / (xi_b + 1)) (q_b^{(c)} / q_a^{(c)}), which is
+        # O(1) because q^{(c)} takes only the two values o and o + r.
+        for _ in range(args.inner_h):
+            sel = torch.randint(len(pool_1), (args.mb,), device=sp.device)
+            x1, c = pool_1[sel], pool_c[sel]
+            a_i = torch.multinomial(x1 / sp.N, 1)[:, 0]
+            b_i = torch.randint(sp.m, (args.mb,), device=sp.device)
+            with torch.no_grad():
+                qa = o + r * (a_i == c).to(torch.float64)
+                qb = o + r * (b_i == c).to(torch.float64)
+                q_lab = (x1[ar, a_i] / (x1[ar, b_i] + 1.0)) * (qb / qa)
+            ah, bh = net_h(ones, x1, None)
+            hv = leaky_clamp(ah.to(torch.float64)[ar, a_i]
+                             + bh.to(torch.float64)[ar, b_i], -15.0, 15.0)
+            keep = (a_i != b_i).to(torch.float64)
+            loss_h = (((torch.exp(hv) - hv * q_lab) * keep).sum()
+                      / keep.sum().clamp(min=1.0))
+            if not bool(torch.isfinite(loss_h)):
+                n_skip += 1
+                opt_h.zero_grad(set_to_none=True)
+                sched_h.step()
+                continue
+            opt_h.zero_grad(set_to_none=True)
+            loss_h.backward()
+            torch.nn.utils.clip_grad_norm_(net_h.parameters(), 1.0)
+            opt_h.step()
+            sched_h.step()
+
+        # --- controller: the Dirac loop with the corrected u, v -------------
+        for _ in range(args.inner):
+            sel = torch.randint(len(pool_1), (args.mb,), device=sp.device)
+            x1, c = pool_1[sel], pool_c[sel]
+            tv = torch.rand(args.mb, device=sp.device, dtype=torch.float64)
+            with torch.no_grad():
+                xt = bridge_scale(sp, x1, tv, c0=c)
+                ct = torch.tensor(
+                    [C.occupation_c_t(sp.m, sp.gamma * (1 - float(z)))
+                     for z in tv.cpu()], device=sp.device)
+                i_idx = torch.multinomial(xt / sp.N, 1)[:, 0]
+                j_idx = torch.randint(sp.m, (args.mb,), device=sp.device)
+                ah, bh = net_h(ones, x1, None)
+                uv = sp.uv_nondirac(x1, ah.to(torch.float64),
+                                    bh.to(torch.float64))
+                if args.estimator == "full":
+                    lam = sp.labels_full(x1, None, ct, i_idx, j_idx, uv=uv)
+                else:
+                    lam = sp.labels_sampled(x1, None, ct, i_idx, j_idx,
+                                            mode=args.estimator, n_a=args.n_a,
+                                            uv=uv)
+                occ = xt[ar, i_idx]
+                y = occ + lam
+                # A single non-finite label would silently NaN every weight
+                # (and only surface ~1000 iterations later inside the
+                # simulator).  Drop those rows instead: y = occ is the
+                # zero-correction label, so they contribute no signal.
+                bad = ~torch.isfinite(y)
+                if bool(bad.any()):
+                    n_bad += int(bad.sum())
+                    y = torch.where(bad, occ, y)
+            al, be = net(tv, xt, None)
+            av = leaky_clamp(al.to(torch.float64)[ar, i_idx]
+                             + be.to(torch.float64)[ar, j_idx], -15.0, 15.0)
+            if args.loss == "bregman":
+                loss = (occ * torch.exp(av) - av * y).mean()
+            else:
+                loss = ((occ * torch.exp(av) - y) ** 2).mean()
+            if not bool(torch.isfinite(loss)):
+                n_skip += 1
+                opt.zero_grad(set_to_none=True)
+                sched.step()
+                continue
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+            opt.step()
+            sched.step()
+
+        if it % args.eval_every == 0 or it == args.iters:
+            with torch.no_grad():
+                c0 = torch.randint(sp.m, (args.n_samples,), device=sp.device)
+                ours = simulate_scale(sp, net, args.n_samples, steps, c0=c0)
+            mm = scale_metrics(sp, ours, exact)
+            mm.update({"iter": it, "loss": float(loss),
+                       "loss_h": float(loss_h), "bad_labels": n_bad,
+                       "skipped_steps": n_skip})
+            hist.append(mm)
+            print(f"  it {it:4d}  loss {float(loss):11.3f}  "
+                  f"loss_h {float(loss_h):8.4f}  KS_occ {mm['KS_occ']:.4f}  "
+                  f"KS_max {mm['KS_max']:.4f}  W1max/N "
+                  f"{mm['W1_max_frac']:.4f}  viol {mm['violations']}  "
+                  f"bad {n_bad}/{n_skip}  ({time.time()-t0:.0f}s)")
+
+    mm = hist[-1]
+    okKS, okW1 = mm["KS_occ"] <= 0.05, mm["W1_max_frac"] <= 0.05
+    okV = mm["violations"] == 0
+    print("\n=== GATES ===")
+    print(f"B2a occupancy KS <= 0.05     : {'PASS' if okKS else 'FAIL'}  "
+          f"({mm['KS_occ']:.4f})")
+    print(f"B2b max-occ W1 <= 5% of N    : {'PASS' if okW1 else 'FAIL'}  "
+          f"({mm['W1_max_frac']:.4f})")
+    print(f"B2c constraint violations = 0: {'PASS' if okV else 'FAIL'}  "
+          f"({mm['violations']}/{args.n_samples})")
+    if args.ckpt_dir:
+        pth = C.save_ckpt(args.ckpt_dir, args.tag, net=net,
+                          nets={"control": net, "corrector": net_h},
+                          samples=ours.to(torch.int32),
+                          extra={"config": vars(args), "metrics": mm,
+                                 "reference": mref, "source": "nondirac",
+                                 "exact_samples": exact.to(torch.int32).cpu()})
+        print(f"  ckpt -> {pth}")
+    with open(args.out, "w") as f:
+        json.dump({"config": vars(args), "params": 2 * n_par,
+                   "source": "nondirac", "reference": mref, "history": hist,
+                   "B2": bool(okKS and okW1 and okV)}, f, indent=2, default=str)
+    print(f"  wrote {args.out}")
+    return 0 if (okKS and okW1 and okV) else 1
+
+
 def run_scalevar(args):
     """B3 at scale: one-sample estimator variance vs the exact full sum."""
     sp = ScaleOccupation(m=args.m, N=args.N if args.N > 0 else args.m,
@@ -1100,7 +1643,8 @@ def main():
     C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["verify", "exact", "var", "train",
-                                    "scale", "scalevar"])
+                                    "train-nondirac", "scale",
+                                    "scale-nondirac", "scalevar"])
     ap.add_argument("--m", type=int, default=4)
     ap.add_argument("--N", type=int, default=0, help="0 means N = m")
     ap.add_argument("--d", type=float, default=0.5)
@@ -1127,12 +1671,20 @@ def main():
     # written cannot be re-measured later and must be repeated in full.
     ap.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="ckpt")
     ap.add_argument("--tag", type=str, default="occ")
+    # non-Dirac only: nu_0(c) propto nu_skew^c over the m pure modes.  1.0 is
+    # the uniform source, whose exact f_0 is constant by mode symmetry; a skew
+    # breaks that symmetry so the corrector has something non-trivial to find.
+    ap.add_argument("--nu-skew", dest="nu_skew", type=float, default=1.0)
+    ap.add_argument("--inner-h", dest="inner_h", type=int, default=4)
+    ap.add_argument("--lr-h", dest="lr_h", type=float, default=1e-2)
     args = ap.parse_args()
     if args.N <= 0:
         args.N = args.m
     return {"verify": run_verify, "exact": run_exact,
             "var": run_var, "train": run_train,
-            "scale": run_scale, "scalevar": run_scalevar}[args.cmd](args)
+            "train-nondirac": run_train_nondirac,
+            "scale": run_scale, "scale-nondirac": run_scale_nondirac,
+            "scalevar": run_scalevar}[args.cmd](args)
 
 
 if __name__ == "__main__":
