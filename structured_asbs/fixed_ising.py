@@ -273,10 +273,19 @@ def step_probs(space, log_mult, dt):
     return p_stay, p_edge
 
 
-def propagate_exact(space, mult_fn, steps):
-    """Exact terminal law of the discretised controlled chain.  No sampling."""
-    p = torch.zeros(space.M, device=space.device)
-    p[space.i0] = 1.0
+def propagate_exact(space, mult_fn, steps, p0=None):
+    """Exact terminal law of the discretised controlled chain.  No sampling.
+
+    p0 is the initial law over Omega; the default is the Dirac at space.i0.
+    The non-Dirac branch passes the uniform law, and the final evaluation MUST
+    use the same source the control was trained under or the reported TV is
+    measuring a different problem.
+    """
+    if p0 is not None:
+        p = p0.to(space.device).clone()
+    else:
+        p = torch.zeros(space.M, device=space.device)
+        p[space.i0] = 1.0
     dt = 1.0 / steps
     for s in range(steps):
         t = s * dt
@@ -289,9 +298,18 @@ def propagate_exact(space, mult_fn, steps):
     return p
 
 
-def simulate(space, mult_fn_states, batch, steps, generator=None):
-    """Sample trajectories.  mult_fn_states(t, idx) -> (B, n_edges) log-mult."""
-    idx = torch.full((batch,), space.i0, device=space.device, dtype=torch.long)
+def simulate(space, mult_fn_states, batch, steps, generator=None, idx0=None):
+    """Sample trajectories.  mult_fn_states(t, idx) -> (B, n_edges) log-mult.
+
+    idx0 is a per-trajectory source state index; the default is the Dirac at
+    space.i0.  Nothing else about the walk changes -- the source enters only
+    through where the trajectories start.
+    """
+    if idx0 is not None:
+        idx = idx0.to(space.device).long()
+    else:
+        idx = torch.full((batch,), space.i0, device=space.device,
+                         dtype=torch.long)
     dt = 1.0 / steps
     base = space.gamma / space.n_edges
     for s in range(steps):
@@ -393,30 +411,82 @@ def net_mult_all_states(space, net, t, chunk=4096):
 # ============================================================================
 
 
-def terminal_labels(space, X1_idx):
-    """Lambda_{g}(X1) for every unordered pair g.  (B, n_pairs)."""
+def terminal_labels(space, X1_idx, log_corr=None):
+    """Lambda_{g}(X1) for every unordered pair g.  (B, n_pairs).
+
+    Dirac source (log_corr None):
+
+        log Lambda_g = -(E(gY) - E(Y))/tau + log kappa_{d(x0,Y)}
+                                           - log kappa_{d(x0,gY)},
+
+    i.e. the base-kernel ratio is known in closed form because there is a
+    single x_0.  Non-Dirac source: that closed form is replaced by the learned
+    corrector, log Lambda_g = -(E(gY) - E(Y))/tau - h_g(Y), which is the ONLY
+    difference between the two branches.  Everything downstream -- the swap
+    controller, the Bregman regression, the exact propagation -- is untouched.
+    """
+    X1, Xg = swapped_states(space, X1_idx)
+    Eg = space.energies_of(Xg)                                 # (B, Np)
+    E1 = space.E[X1_idx].unsqueeze(1)
+    log_lam = -(Eg - E1) / space.tau
+
+    if log_corr is None:
+        dg = space.k - (Xg.to(torch.float64) @ space.x0.to(torch.float64))
+        d1 = space.dist0[X1_idx].unsqueeze(1)
+        log_lam = (log_lam + space.log_kappa_full[d1.long()]
+                   - space.log_kappa_full[dg.long()])
+    else:
+        log_lam = log_lam - log_corr
+    return log_lam
+
+
+def swapped_states(space, X1_idx):
+    """Every gY for the unordered swap pairs g.  (B, n_pairs, n)."""
     X1 = space.S[X1_idx]                                       # (B, n)
     P = space.pairs                                            # (Np, 2)
     Xg = X1.unsqueeze(1).repeat(1, space.n_pairs, 1)           # (B, Np, n)
     pp = torch.arange(space.n_pairs, device=X1.device)
     Xg[:, pp, P[:, 0]] = X1[:, P[:, 1]]
     Xg[:, pp, P[:, 1]] = X1[:, P[:, 0]]
-
-    Eg = space.energies_of(Xg)                                 # (B, Np)
-    E1 = space.E[X1_idx].unsqueeze(1)
-    dg = space.k - (Xg.to(torch.float64) @ space.x0.to(torch.float64))
-    d1 = space.dist0[X1_idx].unsqueeze(1)
-
-    log_lam = (-(Eg - E1) / space.tau
-               + space.log_kappa_full[d1.long()]
-               - space.log_kappa_full[dg.long()])
-    return log_lam
+    return X1, Xg
 
 
-def sample_bridge(space, X1_idx, t_idx, log_kap0, log_kap1, generator=None):
-    """Exact reference-bridge sample X_t | x_0, X_1 by occupancy class."""
+def corrector_labels(space, X0, X1_idx):
+    """log Q_g(X_0, Y) = log p_base(gY | X_0) - log p_base(Y | X_0).
+
+    The reference kernel depends on the endpoints only through the Johnson
+    distance, so this is a difference of two entries of log_kappa_full and
+    needs no enumeration.  Q is the single-sample, unbiased estimator of the
+    corrector ratio C_g(Y) = fhat_1(gY) / fhat_1(Y): regressing it with the
+    Poisson-Bregman loss puts exp(h_g) at the conditional mean E[Q_g | Y],
+    which is exactly C_g(Y).
+
+    Note a swap can be illegal at Y (both sites equal), in which case gY = Y
+    and log Q_g = 0 identically; those columns are masked by the caller.
+    """
+    X1, Xg = swapped_states(space, X1_idx)
+    X0f = X0.to(torch.float64)
+    d1 = (space.k - (X1.to(torch.float64) * X0f).sum(-1)).unsqueeze(1)
+    dg = space.k - (Xg.to(torch.float64) * X0f.unsqueeze(1)).sum(-1)
+    return space.log_kappa_full[dg.long()] - space.log_kappa_full[d1.long()]
+
+
+def sample_bridge(space, X1_idx, t_idx, log_kap0, log_kap1, generator=None,
+                  X0=None):
+    """Exact reference-bridge sample X_t | x_0, X_1 by occupancy class.
+
+    X0 is an optional (B, n) batch of per-trajectory source states.  The
+    br_* tables need no change: their four blocks have sizes
+    (k - m, m, m, n - k - m) which depend on the Johnson distance m alone and
+    not on which x_0 realises it.  The source enters in exactly two places --
+    the distance m, and the per-site block label -- so the combinatorial
+    sampler below is reused verbatim.
+    """
     B, n = X1_idx.shape[0], space.n
-    m = space.dist0[X1_idx]                                    # (B,)
+    if X0 is None:
+        m = space.dist0[X1_idx]                                # (B,)
+    else:
+        m = space.k - (X0 * space.S[X1_idx]).sum(dim=1)        # (B,)
     lw = (space.br_lmult[m]
           + torch.gather(log_kap0[t_idx], 1, space.br_d0[m])
           + torch.gather(log_kap1[t_idx], 1, space.br_d1[m]))  # (B, Lm)
@@ -426,7 +496,8 @@ def sample_bridge(space, X1_idx, t_idx, log_kap0, log_kap1, generator=None):
     sizes = space.br_size[m]                                   # (B, 4)
 
     # block label per site, then a random order that groups by block
-    blk = 2 * (1 - space.x0).unsqueeze(0) + (1 - space.S[X1_idx])
+    x0b = space.x0.unsqueeze(0) if X0 is None else X0
+    blk = 2 * (1 - x0b) + (1 - space.S[X1_idx])
     key = torch.rand(B, n, device=space.device, generator=generator)
     order = torch.argsort(blk.to(key.dtype) * 2.0 + key, dim=1)
     bs = torch.gather(blk, 1, order)
