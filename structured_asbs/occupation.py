@@ -1,5 +1,5 @@
 """
-Experiment B -- occupation / inclusion process  (PLAN.md section 5).
+Experiment B -- occupation / inclusion process.
 
 This is the genuinely NON-BIJECTIVE structured discrete case.  Unlike the
 fixed-composition Ising experiment (where the intertwiner came from a group of
@@ -32,7 +32,11 @@ The controlled (h-transformed) edge rate is
     u*_t(eta - e_i + e_j, eta) = gamma_t/(m-1) * eta_i * phi_t(eta-e_i+e_j)/phi_t(eta)
                                = gamma_t/(m-1) * ( eta_i + E[ A_ji f1(X_1)/f1(X_1) | X_t=eta ] )
 
-and the bracket is exactly the terminal label Lambda_ji of PLAN 5.8.
+and the bracket is exactly the terminal label
+
+    Lambda_ji(xi) = xi_i (R_ji - 1) - c_t sum_{a: xi_a > 0} xi_a (R_ja - R_ia),
+
+evaluated in full for small m and estimated by the samplers below otherwise.
 
 Target: Dirichlet-multinomial (inclusion process) with exact iid sampler, so
 ground truth needs no MCMC.  At m = N = 4 the state space has only
@@ -176,8 +180,10 @@ class OccupationSpace:
 
         uniform    : Lam = xi_i(R_ji - 1) - (1-rho) xi_A (R_jA - R_iA), A~Unif
         occupancy  : Lam = xi_i(R_ji - 1) - c_t N (R_jA - R_iA),        A~xi/N
-        Both are unbiased for the full sum (PLAN 5.9 / 5.10); the second has
-        smaller variance because the xi_a weight is absorbed into the proposal.
+        Both are unbiased for the full sum sum_a xi_a (R_ja - R_ia).  Uniform
+        mode sampling is unbiased because m c_t = 1 - rho_{t,1}, but its
+        variance grows with m; drawing A ~ xi/N instead absorbs the xi_a weight
+        into the proposal and leaves the smaller-variance estimator.
         """
         xi = self.Sf[idx]                                        # (B, m)
         Rr = self.R[idx]                                         # (B, m, m)

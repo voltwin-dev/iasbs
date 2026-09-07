@@ -850,8 +850,11 @@ the top of this README, measured.
 rerun plateaus just above 3.18 — 3.2086 at β = 10³, 3.1873 at 10⁴, 3.1847 at
 10⁶ — and stops moving there.
 
-**Budget matching.** PLAN §9.2 requires matching terminal energy/gradient
-evaluations, and counting them exactly revealed that our default uses
+**Budget matching.** A fair comparison has to match training iterations,
+terminal energy/gradient evaluations, integration steps, generated samples and
+parameter count — and of those the oracle call count is the one that is
+implementation-independent, so it is the one we hold fixed and report
+alongside wall-clock rather than instead of it. Counting exactly revealed that our default uses
 **3,072,000** oracle calls against their **600,000**, a 5.1× advantage. The
 budget-matched run (`--batch 400 --iters 1500`, exactly 600,000 calls, same 199
 steps) gives +0.166 / +0.161 / +0.111 at β = 1.3 / 2 / 5 against their +0.451 /
@@ -869,8 +872,10 @@ at 796 for us; ~780 s per β at 512 steps and ~1560 s at 1024 for them. Every
 ### The step-count ablation
 
 Our error is discretisation and falls with `N`; theirs is not, and does not.
-PLAN §9.3 predicts exactly this but warns *do not claim such a floor before
-measuring it*. Measured at β = 2, where their bias peaks, everything except the
+That is the predicted signature — our controller identity is exact, so only
+the integrator is approximate, while their geometric surrogate should leave a
+nonzero floor — but a floor must not be claimed before it is measured.
+Measured at β = 2, where their bias peaks, everything except the
 step count held fixed:
 
 R-ASBS row from `rasbs/rasbs_steps.sh` → `json/results_rasbs_steps_*.json`; our

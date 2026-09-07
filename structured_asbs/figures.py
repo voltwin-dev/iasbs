@@ -1,5 +1,5 @@
 """Figures for 'ASBS on Structured State Spaces via Markov Semigroup
-Intertwining'  (PLAN section 13).
+Intertwining'.
 
 Every panel is drawn from a results_*.json produced by one of the experiment
 scripts -- nothing is hand-entered, and nothing is read off a published plot.
@@ -146,7 +146,10 @@ def figure3():
 # ============================================================================
 # Figure 4 -- sphere vs R-ASBS
 # ============================================================================
-RASBS_NORTH_ERR = 0.062        # published S^2 number, PLAN 8.1
+# The published R-ASBS S^2 number: they report 0.438 northern-hemisphere mass
+# against an exact 0.500, i.e. an absolute error of 0.062.  It is the one
+# sphere figure their paper states numerically, so it is the headline to beat.
+RASBS_NORTH_ERR = 0.062
 
 
 def figure4():
@@ -394,8 +397,11 @@ def figure5():
     ax[1].legend(fontsize=8)
 
     # C: error vs integration steps at beta = 2, where the R-ASBS bias peaks.
-    # PLAN 9.3 predicts 'ours decreases, R-ASBS shows a surrogate floor' but
-    # forbids claiming the floor before measuring it -- this panel measures it.
+    # The predicted signature is that our error falls as the step size falls,
+    # because our controller identity is exact and only the integrator is
+    # approximate, whereas R-ASBS carries a geometric-surrogate error that
+    # should leave a nonzero floor.  That floor must not be claimed before it
+    # is measured -- this panel measures it.
     BSTEP = 2.0
     tgt2 = rmap[BSTEP]
     sr = []
@@ -454,7 +460,8 @@ def figure5():
 
 
 def table_stiefel():
-    """PLAN 8.2 comparison table, emitted as markdown."""
+    """Stiefel comparison table -- reference MCMC vs R-ASBS vs ours, per beta,
+    emitted as markdown."""
     ref, ra = load("results_stiefel_ref.json"), load("results_rasbs_stiefel.json")
     om = ours_betas()
     ours = {"betas": {f"{b:g}": v for b, v in om.items()}} if om else None

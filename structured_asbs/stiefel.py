@@ -1,6 +1,6 @@
 """Experiment D -- Adjoint Schrodinger Bridge sampling on the Stiefel
 manifold St(4,2), via the canonical Killing readout and the *corrected*
-spin-factor clock  s = r/2  (PLAN.md sections 7.1-7.10).
+spin-factor clock  s = r/2.
 
 Structure mirrors sphere.py:
 
@@ -271,14 +271,21 @@ class StiefelProblem:
         self.ts = np.arange(steps) / steps
         self.r_t1 = np.array([C.heat_clock(t, 1.0, sigma) for t in self.ts])
         self.r01 = float(C.heat_clock(0.0, 1.0, sigma))
-        # PLAN 7.5: EVERY spin-factor evaluation runs at r/2, never r.
+        # EVERY spin-factor evaluation runs at r/2, never r.  The SO(4) heat
+        # kernel lifts to two SU(2) = S^3 factors, and each factor runs at half
+        # the ambient clock r = (1/2) int_0^1 sigma_t^2 dt.  Passing r here
+        # instead of r/2 is the error that verify()'s mandatory first-moment
+        # test exists to catch: it turns exp(-3r) into exp(-6r).
         self.spin_ss = np.array([C.stiefel_spin_factor_time(r)
                                  for r in self.r_t1])
         self.spin_r01 = float(C.stiefel_spin_factor_time(self.r01))
         self.tab = S3Table(self.spin_ss, device=device)
 
-        # SO(2) fibre quadrature (PLAN 7.8) in the double-cover angle psi;
-        # psi in [0, 2pi) sweeps BOTH lifts of the SO(2) stabiliser element.
+        # SO(2) fibre quadrature in the double-cover angle psi.  The quotient
+        # kernel is a one-dimensional integral over the fibre; it uses fixed
+        # Gauss-Legendre nodes rather than an adaptive rule so that the whole
+        # thing stays vectorised and differentiable.  psi in [0, 2pi) sweeps
+        # BOTH lifts of the SO(2) stabiliser element.
         psi, wq = C.periodic_legendre_nodes(nq, device=device)
         self.psi, self.wq = psi, wq
         self.logwq = torch.log(wq)
@@ -322,7 +329,9 @@ class StiefelProblem:
 
     def G(self, Y):
         """Ambient grad_Y log f1(Y),  f1 = exp(-E/tau) / p^{St}_{r01}(.|E0)."""
-        # PLAN 9.2 requires reporting terminal energy/gradient evaluations.
+        # The budget-matched comparison against R-ASBS requires reporting the
+        # number of terminal energy/gradient evaluations, since that oracle
+        # count -- not wall-clock -- is the implementation-independent cost.
         # This is the ONLY place the energy gradient is touched during
         # training, so counting here is exact rather than estimated.
         self.n_oracle += int(Y.shape[0])
@@ -570,7 +579,9 @@ def run_verify(args):
           f"  steps={prob.steps}  fibre nodes={args.nq}")
     ok = True
 
-    # (a) explicit Killing sum == collapsed readout            (PLAN 7.4)
+    # (a) explicit Killing sum == collapsed readout
+    #     Summing the readout over the so(4) basis Omega_ij = E_ij - E_ji must
+    #     reproduce the collapsed closed form (G Y^T - Y G^T) X.
     worst = 0.0
     for _ in range(8):
         X = C.random_stiefel(1, 4, 2, device=dev)[0]
@@ -581,7 +592,9 @@ def run_verify(args):
     print(f"  |explicit - collapsed| readout        = {worst:.3e}")
     ok &= worst < 1e-10
 
-    # (b) readout is tangent at X                              (PLAN 7.3)
+    # (b) readout is tangent at X.  The canonical Killing readout
+    #     grad^c log phi_t(X) = E[(G(Y) Y^T - Y G(Y)^T) X | X_t = X] lands in
+    #     T_X St(4,2), so X^T R + R^T X must vanish.
     X = C.random_stiefel(256, 4, 2, device=dev)
     Y = C.random_stiefel(256, 4, 2, device=dev)
     Gm = torch.randn(256, 4, 2, dtype=X.dtype, device=dev)
@@ -596,7 +609,10 @@ def run_verify(args):
     print(f"  |Omega X - D| / |Omega + Omega^T|     = {e1:.3e} / {e2:.3e}")
     ok &= e1 < 1e-10 and e2 < 1e-12
 
-    # (c) S^3 winding-sum truncation K -> K+2                  (PLAN 7.7)
+    # (c) S^3 winding-sum truncation K -> K+2.  The S^3 heat kernel is the
+    #     winding sum p_s(theta) propto sum_k (theta + 2 pi k)
+    #     exp[-(theta + 2 pi k)^2 / 4s] / sin(theta); widening the truncation
+    #     must not move the answer.
     dl, ds = 0.0, 0.0
     for s in [float(prob.spin_ss.min()), 0.05, float(prob.spin_r01)]:
         th = torch.linspace(1e-6, math.pi - 1e-6, 4001, dtype=torch.float64)
@@ -635,7 +651,9 @@ def run_verify(args):
     print(f"  table |logp| err / rel dlogp/du err   = {tworst:.3e} / {dworst:.3e}")
     ok &= mworst < 1e-10 and tworst < 1e-4 and dworst < 1e-3
 
-    # (e) MANDATORY first moment  E[X_r|X_0] = exp(-3 r) X_0   (PLAN 7.6)
+    # (e) MANDATORY first moment  E[X_r|X_0] = exp(-3 r) X_0.  This is the one
+    #     test that separates the correct s = r/2 spin clock from the product-
+    #     time convention, which would instead give exp(-6 r) X_0.
     print("  first-moment test  E[X_r|E0] = exp(-3r) E0   [MANDATORY]")
     fm_ok = True
     for r in [0.25, 1.0]:
@@ -977,8 +995,11 @@ def run_train(args):
 def run_ref(args):
     """Independent MCMC ground truth on an arbitrary beta grid.
 
-    This fills the 'exact/reference MCMC' column of PLAN 8.2, which the R-ASBS
-    paper leaves as TBD.  Two chains with different seeds are run at every beta
+    This fills the 'exact/reference MCMC' column of the Stiefel comparison
+    table.  The R-ASBS paper reports an expected-energy curve rather than
+    numbers, and pins down only the two limits E[E] = 8 as beta -> 0 and
+    E[E] = 3 as beta -> infinity, so every finite-beta reference value here had
+    to be measured rather than quoted.  Two chains with different seeds are run at every beta
     so the Monte-Carlo error of the reference itself is reported rather than
     assumed: the spread between them bounds how tight a gate can meaningfully
     be set.

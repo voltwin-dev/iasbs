@@ -1,6 +1,6 @@
 #!/bin/bash
 cd "$(dirname "$0")/.."   # repo root: json/, ckpt/ and fig/ live here
-# PLAN 9.3: does R-ASBS show a nonzero geometric-surrogate floor as the
+# Step-count sweep: does R-ASBS show a nonzero geometric-surrogate floor as the
 # integration step count grows?  Measured at beta=2, where their error against
 # the MCMC reference is largest (+0.547 at N=199).
 #

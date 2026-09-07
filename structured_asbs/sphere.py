@@ -1,5 +1,5 @@
 """
-Experiment C -- sphere S^2  (PLAN.md section 6).
+Experiment C -- sphere S^2.
 
 Reference process: Brownian motion on S^2 with generator (1/2) sigma^2 Delta,
 started from a Dirac source x_0.  Integrated heat clock
@@ -19,8 +19,9 @@ Adjoint-Sampling terminal function for a Dirac source:
     G(y)   = grad_y log f_1(y)
            = -(1/tau) grad E(y) - grad_y log p_{r_{0,1}}(x_0 . y).
 
-Killing-field collapsed readout (PLAN 6.4) -- the intertwining identity for
-the rotation group acting on the sphere:
+Killing-field collapsed readout -- the intertwining identity for the rotation
+group acting on the sphere, which turns the sum over so(3) generators into a
+single ambient expectation:
 
     grad_{S^2} log phi_t(x) = E[ (x.Y) G(Y) - Y (x.G(Y)) | X_t = x ],
 
