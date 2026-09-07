@@ -144,12 +144,33 @@ def parallel_transport(a, x_from, x_to):
 # ============================================================================
 # networks
 # ============================================================================
+INIT = "matlab"     # set from --init; "torch" restores the pre-audit behaviour
+
+
+def matlab_init(net):
+    """MATLAB `fullyConnectedLayer` defaults: Glorot weights, ZERO bias.
+
+    torch.nn.Linear instead draws both weight and bias from U(-1/sqrt(fan_in),
+    +1/sqrt(fan_in)).  The nonzero bias is the part that matters here: on a
+    target symmetric under x_3 -> -x_3 it is a fixed directional preference at
+    initialisation, which is exactly what a winner-take-all training loop can
+    amplify into one-pole collapse.  Removing it is a prerequisite for reading
+    anything into this port's collapse behaviour.
+    """
+    for m in net.modules():
+        if isinstance(m, torch.nn.Linear):
+            torch.nn.init.xavier_uniform_(m.weight)
+            torch.nn.init.zeros_(m.bias)
+    return net
+
+
 def mlp_tanh(din, dout, hidden):
     """bimodal: fullyConnected -> tanh -> fullyConnected -> tanh -> out."""
-    return torch.nn.Sequential(
+    net = torch.nn.Sequential(
         torch.nn.Linear(din, hidden), torch.nn.Tanh(),
         torch.nn.Linear(hidden, hidden), torch.nn.Tanh(),
         torch.nn.Linear(hidden, dout))
+    return matlab_init(net) if INIT == "matlab" else net
 
 
 def mlp_gelu_ln(din, dout, hidden=256, blocks=3):
@@ -160,7 +181,8 @@ def mlp_gelu_ln(din, dout, hidden=256, blocks=3):
                    torch.nn.GELU()]
         d = hidden
     layers += [torch.nn.Linear(hidden, dout)]
-    return torch.nn.Sequential(*layers)
+    net = torch.nn.Sequential(*layers)
+    return matlab_init(net) if INIT == "matlab" else net
 
 
 class RFF:
@@ -621,7 +643,14 @@ def main():
     ap.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="ckpt")
     ap.add_argument("--tag", type=str, default="")
     ap.add_argument("--out", type=str, default="")
+    # "matlab" mirrors fullyConnectedLayer (Glorot, zero bias); "torch" is the
+    # nn.Linear default that every results_rasbs_sphere_* JSON predating the
+    # fidelity audit was produced with, kept so those runs stay reproducible.
+    ap.add_argument("--init", choices=["matlab", "torch"], default="matlab")
     args = ap.parse_args()
+
+    global INIT
+    INIT = args.init
 
     if args.check:
         return check()

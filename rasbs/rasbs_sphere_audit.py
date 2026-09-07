@@ -99,7 +99,9 @@ def main():
     ap.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="ckpt")
     ap.add_argument("--tag", type=str, default="")
     ap.add_argument("--out", type=str, default="")
+    ap.add_argument("--init", choices=["matlab", "torch"], default="matlab")
     a = ap.parse_args()
+    P.INIT = a.init
     C.use_repo_root()
     a.tag = a.tag or f"rasbs_sphere_audit_{a.test}"
     a.out = a.out or f"json/results_rasbs_sphere_audit_{a.test}.json"
@@ -135,10 +137,17 @@ def main():
         print(f"  north mass   {north:.4f}   (exact {e_north:.4f})")
         print(f"  <x_3>        {mz:+.5f}  (exact {e_mean:+.5f})")
 
+    # The audit trained a control and drew 100k points; both must survive the
+    # process, or a re-measurement means re-running the whole thing.
+    C.save_ckpt(a.ckpt_dir, a.tag, net=unet, samples=x,
+                extra={"test": a.test, "k": a.k, "init": a.init,
+                       "seed": a.seed, "steps": a.steps})
+
     res = {"test": a.test, "k": a.k, "epochs": a.epochs, "steps": a.steps,
            "seed": a.seed, "n_samples": a.n_samples, "north": north,
            "mean_z": mz, "exact_north": e_north, "exact_mean_z": e_mean,
-           "n_params": n_par, "history": hist, **extra}
+           "n_params": n_par, "init": a.init, "tag": a.tag,
+           "history": hist, **extra}
     _os.makedirs(_os.path.dirname(a.out) or ".", exist_ok=True)
     with open(a.out, "w") as f:
         json.dump(res, f, indent=2)
