@@ -35,7 +35,7 @@ Gate: terminal-law TV must reach the i.i.d. sampling floor.
 | L | states | TV (exact law) | empirical TV | i.i.d. TV floor | violations | status |
 |---|---|---|---|---|---|---|
 | 4 | 2^16 | **0.03470** | 0.06571 | 0.04940 | 0 | **DONE — PASS** |
-| 5 | 2^25 | 0.08368 (it 1875/3000) | — | — | 0 | RUNNING |
+| 5 | 2^25 | 0.07886 (it 2325/3000) | — | — | 0 | RUNNING |
 
 `json/results_ising_nd_L4.json`, `json/results_ising_nd_L5.json`.
 
@@ -316,7 +316,85 @@ exactly the object the intertwining identity hands IASBS for free.
 
 ---
 
-## 6. Reproduction
+## 6. Computational cost
+
+All timings on a single NVIDIA A100 80 GB, float64 throughout. Where runs shared a
+device the contention is noted, because DAM runs are latency-bound (see §6.2) and
+co-scheduling inflates their wall clock roughly linearly.
+
+### 6.1 IASBS
+
+| experiment | iters | steps | wall (s) | s / iter | terminal evals | checkpoint |
+|---|---|---|---|---|---|---|
+| Ising L=4 non-Dirac | 3000 | 256 | **1869** | 0.62 | 0 | `ising_nd_L4.pt` |
+| Ising L=5 non-Dirac | 3000 | 256 | ~37000 (proj.) | 12.3 | 0 | `ising_nd_L5.pt` |
+| Occupation m=4 non-Dirac | — | 128 | **214** | — | 0 | `occ_nd_m4.pt` |
+| Occupation m=32 (seed 0) | 3000 | 128 | **3230** | 1.08 | 0 | `occ_nd_s32_seed0.pt` |
+| Occupation m=32 (seed 1) | 3000 | 128 | **3231** | 1.08 | 0 | `occ_nd_s32_seed1.pt` |
+| Occupation m=128 | 3000 | 128 | **1523** | 0.51 | 0 | `occ_nd_s128.pt` |
+| Occupation m=1000 | 1500 | 256 | **15225** | 10.15 | 0 | `occ_nd_s1000.pt` |
+| Sphere non-Dirac, per seed | 4000 | 128 | **2124 - 3142** | 0.53 - 0.79 | 0 | `sphere_nd_seed{0..4}.pt` |
+| Sphere non-Dirac, 5 seeds | 20000 | 128 | **13820** | 0.69 | 0 | — |
+
+Per-seed sphere wall: 3076 / 2841 / 3142 / 2637 / 2124 s.
+
+Note that occupation m=128 (1523 s) is *cheaper* than m=32 (3230 s) despite the
+larger state space, because the m=32 rerun used the tightened corrector schedule
+described in §2.3.1 with a smaller learning rate; the m=128 leg converged in the
+original schedule. Cost is set by the corrector schedule, not by m, up to m~128.
+At m=1000 the per-iteration cost does rise (10.15 s/iter) because the run uses
+256 simulation steps rather than 128.
+
+### 6.2 DAM
+
+| experiment | K | iters | wall (s) | s / iter | f1 evals | CTMC jumps | jumps / f1 eval |
+|---|---|---|---|---|---|---|---|
+| Occupation m=4 | 1 | 10 | 224.7 | 22.5 | 20,480 | 1,499,657 | **73.2** |
+| Occupation m=4 | 4 | 10 | 163.9 | 16.4 | 51,200 | 1,197,204 | **23.4** |
+| Occupation m=4 | 16 | 400 | 7380.9 | 18.5 | 6,963,200 | 67,417,741 | 9.68 |
+| Occupation m=4 | 16 | 1200 | **11529.3** | 9.6 | **20,889,600** | **185,004,804** | 8.86 |
+| Occupation m=4 | 64 | 400 | 3177.7 | 7.9 | 26,624,000 | 222,041,777 | 8.34 |
+| Ising L=4 | 16 | 1200 | RUNNING | >30 | — | — | — |
+| Occupation-scale m=32 | 16 | 1200 | RUNNING | >30 | — | — | — |
+| Occupation-scale m=128 | 16 | 600 | QUEUED | — | — | — | — |
+| Occupation-scale m=1000 | 16 | 300 | QUEUED | — | — | — | — |
+| Ising L=5 | 16 | 600 | QUEUED | — | — | — | — |
+
+DAM runs are **latency-bound, not throughput-bound**: measured CPU time equals wall
+time to within 1% on every leg, because each Gillespie rollout is a Python `while`
+loop issuing many small kernels and synchronising on `active.any()`. Consequences:
+
+- Batch size is nearly free; the number of `while` iterations is what costs.
+- Co-scheduling two DAM runs on one device roughly *doubles* both wall times rather
+  than overlapping them, which is why the remaining legs are queued serially
+  (`dam/queue_remaining.sh`).
+- The jump-explosion column is the mechanism behind the small-K divergence in §5.2:
+  at K=1 each terminal evaluation costs 73 simulated jumps versus 8.9 at K=16.
+
+### 6.3 Cost of the comparison, head to head
+
+Same benchmark (occupation m=4), same hardware, best setting of each method:
+
+| | IASBS | DAM (K=16, 1200 it) | ratio |
+|---|---|---|---|
+| terminal TV | **0.01248** | 0.01490 | IASBS 1.19x better |
+| terminal f1 evaluations | **0** | 20,889,600 | infinite |
+| simulated CTMC jumps | **0** | 185,004,804 | infinite |
+| wall clock (s) | **214** | 11,529 | **53.9x** |
+
+IASBS is 54x faster in wall clock *and* more accurate, because the adjoint
+`phi_t(x) = E_base[f1(X_1) | X_t = x]` that DAM estimates with 20.9 million
+Monte-Carlo terminal evaluations is available to IASBS in closed form via the
+intertwining identity. The gap is structural, not a matter of tuning.
+
+Caveat stated plainly: the two methods do not solve identical optimisation
+problems, and DAM is a general-purpose algorithm that does not require the
+intertwining structure. The comparison shows what that generality costs on a space
+where the structure *is* available, which is the regime this paper is about.
+
+---
+
+## 7. Reproduction
 
 ```bash
 # IASBS, Ising non-Dirac
@@ -344,22 +422,41 @@ python -m dam.tests_math
 
 ---
 
-## 7. Still running / still to run
+## 8. Still running / still to run
+
+Every IASBS experiment is finished. What remains is entirely DAM-baseline work
+plus one text correction.
 
 **Running**
 
-| job | progress | last metric |
+| job | progress | last metric | projected wall |
+|---|---|---|---|
+| IASBS Ising L=5 non-Dirac | 2325 / 3000 | TV 0.07886 | ~37000 s |
+| DAM Ising L=4, K=16 | <50 / 1200 | — | >36000 s |
+| DAM occupation-scale m=32, K=16 | <50 / 1200 | — | >36000 s |
+
+**Queued** (serially, `dam/queue_remaining.sh`, see §6.2 for why not in parallel)
+
+| job | iters | note |
 |---|---|---|
-| IASBS Ising L=5 non-Dirac | 2075 / 3000 | TV 0.09128 |
+| DAM occupation-scale m=128, K=16 | 600 | budget cut as m grows |
+| DAM occupation-scale m=1000, K=16 | 300 | may not finish; that is a result |
+| DAM Ising L=5, K=16 | 600 | matched against §2.1 |
 
-**Planned**
+**Text only**
 
-- DAM on the Ising ring: L=4 K sweep, and L=5.
-- DAM on the occupation process at m = 32 / 128 / 1000 — the scaling comparison
-  against §2.3, where the per-label rollout cost is expected to dominate.
 - README correction of the R-ASBS mode-collapse description (§4.2).
+
+A note on the queued DAM legs. Their iteration budgets are deliberately smaller
+than the IASBS runs they are compared against, because the per-rollout jump count
+grows with the state space and a matched-iteration DAM run at m=1000 is not
+affordable. If a leg fails to reach its gate inside the reduced budget, the
+reported outcome is the wall clock and the f1-evaluation count at the cutoff,
+labelled as budget-limited rather than as a method failure — the same correction
+already applied to the K=16 m=4 leg in §5.1.
 
 ---
 
-*This file is regenerated as experiments complete. Numbers are copied verbatim from
-the JSON artifacts named in each section.*
+*This file is updated each time an experiment finishes. Numbers are copied verbatim
+from the JSON artifacts named in each section; nothing here is projected except
+where explicitly marked "proj." or ">".*
