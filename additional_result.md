@@ -45,7 +45,7 @@ sector).
 | L | sites n | `\|Omega\| = C(n, n/2)` | TV (exact law) | empirical TV | i.i.d. TV floor | violations | status |
 |---|---|---|---|---|---|---|---|
 | 4 | 16 | 12,870 | **0.03470** | 0.06571 | 0.04940 | **0 / 200,000** | **DONE — PASS** |
-| 5 | 25 | 5,200,300 | 0.07597 (it 2425/3000) | pending | pending | pending | RUNNING |
+| 5 | 25 | 5,200,300 | 0.07528 (it 2500/3000) | pending | pending | pending | RUNNING |
 
 `json/results_ising_nd_L4.json`, `json/results_ising_nd_L5.json`.
 
@@ -350,7 +350,7 @@ co-scheduling inflates their wall clock roughly linearly.
 | experiment | iters | steps | wall (s) | s / iter | adjoint rollouts | checkpoint |
 |---|---|---|---|---|---|---|
 | Ising L=4 non-Dirac | 3000 | 256 | **1869** | 0.62 | 0 | `ising_nd_L4.pt` |
-| Ising L=5 non-Dirac | 3000 | 256 | 29900 @ it 2425, ~37000 proj. | 12.3 | 0 | `ising_nd_L5.pt` (written at loop end) |
+| Ising L=5 non-Dirac | 3000 | 256 | 31144 @ it 2500, ~37000 proj. | 12.3 | 0 | `ising_nd_L5.pt` (written at loop end) |
 | Occupation m=4 non-Dirac | — | 128 | **214** | — | 0 | `occ_nd_m4.pt` |
 | Occupation m=32 (seed 0) | 3000 | 128 | **3230** | 1.08 | 0 | `occ_nd_s32_seed0.pt` |
 | Occupation m=32 (seed 1) | 3000 | 128 | **3231** | 1.08 | 0 | `occ_nd_s32_seed1.pt` |
@@ -413,9 +413,9 @@ robustness to initialisation*, not speed.
 | Occupation m=4 | 16 | 400 | 7380.9 | 18.5 | 6,963,200 | 67,417,741 | 9.68 |
 | Occupation m=4 | 16 | 1200 | **11529.3** | 9.6 | **20,889,600** | **185,004,804** | 8.86 |
 | Occupation m=4 | 64 | 400 | 3177.7 | 7.9 | 26,624,000 | 222,041,777 | 8.34 |
-| Ising L=4 | 16 | 1200 | RUNNING | >30 | — | — | — |
-| Occupation-scale m=32 | 16 | 1200 | RUNNING | >30 | — | — | — |
-| Occupation-scale m=128 | 16 | 600 | QUEUED | — | — | — | — |
+| Ising L=4 | 16 | 1200 | RUNNING, 4244 s at <50 it | **>84** | — | — | — |
+| Occupation-scale m=32 | 16 | 1200 | RUNNING, 4241 s at <50 it | **>84** | — | — | — |
+| Occupation-scale m=128 | 16 | 600 | RUNNING, 2518 s at <50 it | **>50** | — | — | — |
 | Occupation-scale m=1000 | 16 | 300 | QUEUED | — | — | — | — |
 | Ising L=5 | 16 | 600 | QUEUED | — | — | — | — |
 
@@ -569,7 +569,7 @@ plus one text correction.
 
 | job | progress | last metric | projected wall |
 |---|---|---|---|
-| IASBS Ising L=5 non-Dirac | 2425 / 3000 | TV 0.07597 | ~37000 s |
+| IASBS Ising L=5 non-Dirac | 2500 / 3000 | TV 0.07528 | ~37000 s |
 | DAM Ising L=4, K=16 | <50 / 1200 | — | >36000 s |
 | DAM occupation-scale m=32, K=16 | <50 / 1200 | — | >36000 s |
 
