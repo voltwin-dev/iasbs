@@ -22,7 +22,7 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 | 3 | IASBS extends to non-Dirac (Haar) sources without loss | §3.2 — matches the Dirac headline to 3 decimal places |
 | 4 | Reported R-ASBS mode collapse is an initialisation artifact | §4 — collapse vanishes under the authors' own init |
 | 5 | DAM needs millions of Monte-Carlo adjoint rollouts; IASBS needs none | §5, §6.4 — 20.9 M rollout-endpoint f1 evals for DAM's best TV vs 0 for IASBS (IASBS still evaluates the energy; see §6.4) |
-| 6 | DAM has a hard stability cliff, and raising K does not clear it | §5.2 — K=1, K=4 diverge at m=4; §6.2 — K=16 diverges at m=32 and Ising L=4, and K=64 still diverges at m=32 |
+| 6 | DAM is fragile and expensive: it diverges out of the box on every space larger than `\|X\| = 35`, and repairing it needs a per-problem control box, label truncation and 5x the budget | §5.2, §6.2 — divergence at K=1/4 (m=4), K=16 (m=32, Ising L=4), K=64 (m=32); §6.2.1 — the repair reaches TV 0.129 on Ising L=4 for 50.7 M f1 evals, still 3.7x worse than IASBS at zero adjoint rollouts |
 
 ---
 
@@ -698,27 +698,65 @@ an energy level — it has to undo the base process's geometry-dependent
 preference among equal-energy states — and that is exactly the component a
 Monte-Carlo adjoint with 4 effective rollouts out of 16 estimates worst.
 
-**Round 4 (running): the budget test.** Every arm so far had 600 iterations.
-Occupation m=4 needed **1200** iterations at K=16 to reach TV 0.0149, and was
-still at 0.39 at iteration 200, on a state space of `|X| = 35`. Ising L=4 is
-368x larger at `|Omega| = 12,870` and has been given half that budget, so
-"600 iterations was simply not enough" is not yet excluded. Two arms at matched
-wall clock (~110 min each, one GPU each), both on the round-3 G configuration:
-arm **H** at K=16 for 3000 iterations (5x the budget), arm **I** at K=32 for
-1500 iterations (tests whether the ESS ceiling binds instead of the budget --
-if it does, I beats H at equal cost; if the budget binds, H wins).
+**Round 4 — the budget test, and the answer. DAM converges.**
 
-**What this already establishes, regardless of how round 4 lands.** The §5.2
-divergence is not intrinsic to the estimator — it is a bounded-control problem,
-and clipping `log m_hat` at 5 plus a finite rate box removes it entirely on a
-benchmark where the unmodified method reaches -4e12 loss and ESS 1.04. What is
-*not* yet established is that the stabilised run converges, and the honest
-reading of round 2 is that the two requirements pull against each other: the box
-must be small enough to bound the jump explosion and large enough to contain the
-optimum. On Ising L=4 those two constraints are at least compatible in principle
-(6.31 needed, 20 permitted at baseline), and round 3 shows a clamp of 8 is a
-workable box -- the ESS quadruples relative to the diverging baseline. What
-round 3 does not deliver is a descending TV, which is what round 4 tests.
+Every arm so far had 600 iterations. Occupation m=4 needed **1200** at K=16 on a
+space 368x smaller, so "600 was simply not enough" had not been excluded. It was
+the whole story. Both round-4 arms descend monotonically, with a **positive**
+loss and a **rising** ESS for the entire run:
+
+| arm | K | iters | TV trajectory | E-hist TV @ end | ESS start -> end | ESS mean / p10 | f1 evals | jumps | wall |
+|---|---|---|---|---|---|---|---|---|---|
+| H | 16 | 3000 | 0.795 (100) -> 0.814 (800) -> 0.399 (2000) -> **0.20278** | 0.11677 | 2.61 -> **11.19** / 16 | 6.49 / 1.52 | 52,224,000 | 428.6 M | 6488 s |
+| I | 32 | 1500 | 0.685 (300) -> 0.216 (800) -> **0.12905** | 0.06858 | 4.71 -> **26.01** / 32 | 15.66 / 2.31 | 50,688,000 | 346.9 M | **3493 s** |
+
+Constraint violations 0 on both.
+
+**Rounds 1-3 were reading a transient.** Arm H's loss is *negative* until
+iteration ~700 and its TV *rises* to 0.870 at iteration 200 — at 600 iterations
+it looks exactly like the stalled runs of rounds 1-3, and only then does it turn
+around. Every earlier arm was cut off inside that transient. The stabilisers had
+already fixed the method; the diagnosis "stabilised but not learning" was wrong,
+and it was wrong because of a budget that had been sized from a state space 368x
+smaller.
+
+**Both axes bind.** Arm I reaches a *better* TV than H in **half** the wall
+clock. Retention is why: the damped arm ends at 70% of its rollouts at K=16 and
+**81%** at K=32, and that extra retention more than pays for the doubled
+per-iteration cost. So the §5.2 cliff and the round-2 clamp were two of three
+constraints — control-box size, adjoint retention, and gradient budget — and all
+three had to be right at once.
+
+Neither run had flattened at its cutoff: I was still falling 0.0110 per 100
+iterations over its last 200. **Round 5 (running)** takes the K axis out to the
+gate at matched wall clock, ~3.2 h per arm: **J** at K=32 for 5000 iterations,
+**L** at K=64 for 2500.
+
+**Where this leaves claim 6.** The claim as originally written — "DAM has a
+hard stability cliff, and raising K does not clear it" — is **too strong and is
+retracted in that form**. Raising K alone does not clear it, which is what the
+K=64 leg at m=32 showed, but K was never the only axis. Three things had to hold
+simultaneously, and the unmodified method gets two of them wrong:
+
+1. **a bounded control box that still contains the optimum.** Baseline
+   `|a| <= 20` permits a rate multiplier of 4.9e8 and diverges; `|a| <= 3`
+   is stable but excludes the exact optimum of 6.31 and cannot converge;
+   `|a| <= 8` does both.
+2. **a truncated adjoint label.** `|log m_hat| <= 5` in place of 30. At 30 a
+   single label can carry a weight of 1e13 into the gradient, which is the
+   mechanism of §5.2.
+3. **enough gradient steps.** 3000 at K=16, against the 600 that a state space
+   368x smaller had needed.
+
+With all three, DAM on Ising L=4 goes from a diverging run at **-4e12 loss,
+TV 0.973 and ESS 1.04/16** to a converging one at **TV 0.129, ESS 26.01/32**.
+The honest revised claim is therefore not that DAM fails, but that it is
+**fragile and expensive**: it needs a per-problem control box sized against an
+optimum one does not know in advance, a truncation constant, and 50.7 M
+rollout-endpoint evaluations to reach a TV that IASBS beats by **3.7x**
+(0.03470, §2.1) with **zero** adjoint rollouts. The comparison in §6.3 is
+unaffected in direction and is now made against a DAM that actually works on
+this benchmark rather than one that has fallen over.
 
 ### 6.3 Cost of the comparison, head to head
 
@@ -855,9 +893,9 @@ python -m dam.tests_math
 
 ## 8. Still running / still to run
 
-**Running:** DAM stabiliser round 4 (`fix_H_long3000` at K=16 for 3000
-iterations, `fix_I_K32` at K=32 for 1500), Ising L=4, ~110 min per arm on one
-GPU each -- see §6.2.1.
+**Running:** DAM stabiliser round 5 (`fix_J_K32_5000` at K=32 for 5000
+iterations, `fix_L_K64_2500` at K=64 for 2500), Ising L=4, ~3.2 h per arm on one
+GPU each, taking the repaired DAM out to the TV <= 0.05 gate -- see §6.2.1.
 Every IASBS experiment is finished.
 
 **Finished since the last update**
@@ -874,7 +912,7 @@ Every IASBS experiment is finished.
 |---|---|
 | DAM occupation-scale m=128 / m=1000, K=16 | K=16 is measured to diverge at m=32 and on Ising L=4; larger m would only reproduce a foregone divergence |
 | DAM occupation-scale m=32, K=256 | K=16 -> K=64 bought five iterations, so the K axis is not where the fix is |
-| DAM Ising L=5, K=16 | Ising L=4 already diverges at K=16 |
+| DAM Ising L=5, K=16 | Ising L=4 diverges at K=16 unstabilised; the stabilised configuration of §6.2.1 would be the one to try, at an estimated 5x the L=4 cost |
 | IASBS_600 Stiefel at beta = 0.1, 0.5, 7, 10, 20 | matched-budget ablation not performed at those temperatures; ~28 min per beta if wanted |
 
 **Text only**
@@ -882,9 +920,11 @@ Every IASBS experiment is finished.
 - README correction of the R-ASBS mode-collapse description (§4.2).
 
 **Two honest negatives, recorded rather than buried.** IASBS Ising L=5 misses its
-accuracy gate at 0.07228, and no DAM configuration attempted outside the |X| = 35
-occupation problem converged at all, which means the head-to-head of §5.4 and §6.3
-rests on the *one* benchmark where DAM works. That is a real limit on the strength
+accuracy gate at 0.07228, and no *unmodified* DAM configuration attempted outside
+the |X| = 35 occupation problem converged at all — §6.2.1 repairs it on Ising L=4
+but only with a control box sized against the exact optimum, a tighter truncation
+and 5x the gradient budget, so the head-to-head of §5.4 and §6.3 still rests on
+the one benchmark where stock DAM works. That is a real limit on the strength
 of the DAM comparison and is stated as such: on larger discrete spaces the claim is
 not "IASBS beats DAM by 17%", it is "IASBS converges and DAM does not", which is a
 weaker and differently-shaped claim.
