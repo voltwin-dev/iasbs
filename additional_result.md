@@ -21,7 +21,7 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 | 2 | IASBS accuracy does not degrade with state-space size | §2.3 — KS improves monotonically from m=32 to m=1000 |
 | 3 | IASBS extends to non-Dirac (Haar) sources without loss | §3.2 — matches the Dirac headline to 3 decimal places |
 | 4 | Reported R-ASBS mode collapse is an initialisation artifact | §4 — collapse vanishes under the authors' own init |
-| 5 | DAM needs millions of terminal evaluations; IASBS needs none | §5 — 20.9 M f1 evals for DAM's best TV vs 0 for IASBS |
+| 5 | DAM needs millions of Monte-Carlo adjoint rollouts; IASBS needs none | §5, §6.4 — 20.9 M rollout-endpoint f1 evals for DAM's best TV vs 0 for IASBS (IASBS still evaluates the energy; see §6.4) |
 | 6 | DAM has a hard stability cliff below K=16 | §5.2 — K=1 and K=4 diverge, not merely degrade |
 
 ---
@@ -314,16 +314,23 @@ Per terminal evaluation, K=16 is the better spend:
 
 ### 5.4 Cost comparison, the headline number
 
-| method | best TV on occupation m=4 | terminal f1 evaluations | CTMC jumps simulated | wall (s) |
+| method | best TV on occupation m=4 | f1 evals at rollout endpoints | CTMC jumps simulated for the adjoint | wall (s) |
 |---|---|---|---|---|
 | DAM, K=16 | 0.01490 | 20,889,600 | 185,004,804 | 11529.3 |
 | DAM, K=64 | 0.04498 | 26,624,000 | 222,041,777 | 3177.7 |
-| **IASBS** | **0.01248** | **0** | **0** | — |
+| **IASBS** | **0.01248** | **0** | **0** | 214 |
 
 IASBS obtains `phi_t` in closed form through the intertwining identity, so it
-performs **no** adjoint rollouts and **no** terminal evaluations during training.
-DAM's best result is 19% worse in TV and costs **20.9 million** terminal
-evaluations plus 185 million simulated CTMC jumps to get there.
+performs **no** adjoint rollouts and therefore evaluates `f1` at **no** rollout
+endpoints during training. DAM's best result is 19% worse in TV and costs
+**20.9 million** rollout-endpoint evaluations plus 185 million simulated CTMC
+jumps to get there.
+
+The `0` here is the count of Monte-Carlo adjoint work specifically. On this
+benchmark IASBS reads `f1` out of the same precomputed `|Omega| = 35` table DAM
+uses, so its per-label arithmetic is not zero either — it is table lookup with no
+simulation in front of it. §6.4 gives the full instrumented breakdown, including
+the Ising case where IASBS's on-the-fly energy count is *larger* than DAM's.
 
 This is the central comparison of the paper. DAM is not wrong on this benchmark —
 given enough rollouts it converges, and its ESS diagnostics are healthy at K=16.
@@ -340,7 +347,7 @@ co-scheduling inflates their wall clock roughly linearly.
 
 ### 6.1 IASBS
 
-| experiment | iters | steps | wall (s) | s / iter | terminal evals | checkpoint |
+| experiment | iters | steps | wall (s) | s / iter | adjoint rollouts | checkpoint |
 |---|---|---|---|---|---|---|
 | Ising L=4 non-Dirac | 3000 | 256 | **1869** | 0.62 | 0 | `ising_nd_L4.pt` |
 | Ising L=5 non-Dirac | 3000 | 256 | 29900 @ it 2425, ~37000 proj. | 12.3 | 0 | `ising_nd_L5.pt` (written at loop end) |
@@ -397,6 +404,77 @@ IASBS buys a 24x accuracy improvement over the best R-ASBS configuration at abou
 efficiency claim against R-ASBS; the claim in §4 is about *correctness and
 robustness to initialisation*, not speed.
 
+### 6.4 What "0 terminal evaluations" counts — exact accounting
+
+The `f1 evals` column is not a hand-wave, but it is also not "IASBS does no work
+on the target". Precisely what is instrumented, and what is not:
+
+**The counted quantity.** In `dam/core.py:estimate_log_adjoint` the counter is
+literally
+
+```python
+stats["f1_evals"] = B * (K + K_num)
+```
+
+incremented in `dam/discrete.py:318`. It counts **literal calls to
+`adapter.log_f1(x)` evaluated at the endpoint of a simulated CTMC rollout** —
+`K` denominator rollouts started at `(t, x)` plus `K_num` numerator rollouts
+started at `(t, y)`, per label. Every one of those endpoints exists *only*
+because a path was simulated forward to `t = 1` to produce it, and each carries
+the O(1) importance-weight variance analysed in §5.2. So the column measures
+**variance-carrying Monte-Carlo adjoint work**, not arithmetic on `E`.
+
+**IASBS is zero on that quantity and only that quantity.** IASBS performs no
+adjoint rollouts, so it has no rollout endpoints and makes no `log_f1` calls at
+rollout endpoints. It is *not* zero energy evaluations. The full picture:
+
+| quantity | IASBS Ising L=4 | IASBS occupation m=4 | IASBS sphere non-Dirac (per seed) | DAM occupation m=4, K=16 |
+|---|---|---|---|---|
+| extra adjoint rollouts | **0** | **0** | **0** | 20,889,600 |
+| `f1` evals at rollout endpoints | **0** | **0** | **0** | 20,889,600 |
+| CTMC jumps simulated for the adjoint | **0** | **0** | **0** | 185,004,804 |
+| target energy `E` evals, on the fly | 14,745,600,000 | 0 (table) | 0 (enters via gradient only) | 0 (table) |
+| one-off precomputed `E` table | 12,870 states | 35 states | 2,562-node spectral table | 35 states |
+| energy-**gradient** `grad E` evals | **0** | **0** | 32,768,000 | **0** |
+| on-policy endpoint simulation (state-steps) | 1,572,864,000 | 98,304,000 | 4,194,304,000 | (counted as jumps above) |
+
+Row-by-row justification:
+
+- **Ising L=4 does 14.7 billion energy evaluations, more than DAM's f1 count.**
+  `terminal_labels` (`fixed_ising.py:428`) needs
+  `log Lambda_g = -(E(gY) - E(Y))/tau - h_g(Y)`, so it calls
+  `space.energies_of(Xg)` on *every one-swap neighbour* of the endpoint:
+  `mb=1024 x Np=C(16,2)=120 x inner=40 x iters=3000`. We state this plainly
+  because it contradicts any reading of "0" as "IASBS is arithmetically free".
+  The reason it costs 1869 s anyway is that those evaluations are a single fused
+  vectorised reduction over a `(mb, Np, n)` tensor with **no sequential
+  simulation and no sampling variance**, whereas each DAM `f1` eval sits at the
+  end of a Python-level Gillespie `while` loop (§6.2).
+- **Occupation is 0 on the fly because the space is enumerable.** `occupation.py`
+  precomputes `self.E`, `self.logf1` and the full rate table
+  `self.R = exp(logf1[trans] - logf1[:, None, None])` once over all `|Omega| = 35`
+  states, so training is table lookup. DAM on the same problem uses the *same*
+  table for its `log_f1` — its 20.9 M evaluations are table lookups too. The
+  difference is not the cost of one `f1` call, it is that DAM must first
+  **simulate 185 M jumps** to decide which table entries to look up.
+- **The sphere is the one place a gradient is required.** The non-Dirac readout is
+  `G_ND(y) = -grad E(y)/tau - H_psi(y)`, so `sphere.py:767` calls
+  `C.sphere_energy_grad(y1)` once per endpoint per iteration:
+  `batch=8192 x iters=4000 = 32,768,000` per seed, 163,840,000 across 5 seeds.
+  These are analytic closed-form gradients of the bimodal energy, not
+  backpropagated and not Monte-Carlo, but they are real work and are reported.
+- **Both methods simulate on-policy endpoints.** IASBS simulates the controlled
+  process forward to obtain `X_1` for its replay buffer, exactly as DAM does.
+  That cost is common to both and is *not* what the comparison is about. DAM's
+  `K + K_num = 17` extra rollouts *per label* are the differential cost.
+
+**Therefore the defensible claim is the narrow one:** IASBS needs zero
+Monte-Carlo estimation of the adjoint `phi_t`, because the intertwining identity
+supplies `Lambda_g` in closed form from quantities it already has (the endpoint,
+its one-swap neighbours, and a heat-kernel table). Any broader reading — "IASBS
+evaluates no energies", "IASBS does less arithmetic" — is **not** supported, and
+on Ising the second reading is measurably false.
+
 ### 6.2 DAM
 
 | experiment | K | iters | wall (s) | s / iter | f1 evals | CTMC jumps | jumps / f1 eval |
@@ -430,14 +508,20 @@ Same benchmark (occupation m=4), same hardware, best setting of each method:
 | | IASBS | DAM (K=16, 1200 it) | ratio |
 |---|---|---|---|
 | terminal TV | **0.01248** | 0.01490 | IASBS 1.19x better |
-| terminal f1 evaluations | **0** | 20,889,600 | infinite |
-| simulated CTMC jumps | **0** | 185,004,804 | infinite |
+| adjoint rollouts | **0** | 20,889,600 | infinite |
+| f1 evals on rollout endpoints | **0** | 20,889,600 | infinite |
+| CTMC jumps simulated for the adjoint | **0** | 185,004,804 | infinite |
 | wall clock (s) | **214** | 11,529 | **53.9x** |
 
 IASBS is 54x faster in wall clock *and* more accurate, because the adjoint
 `phi_t(x) = E_base[f1(X_1) | X_t = x]` that DAM estimates with 20.9 million
-Monte-Carlo terminal evaluations is available to IASBS in closed form via the
-intertwining identity. The gap is structural, not a matter of tuning.
+Monte-Carlo rollout-endpoint evaluations is available to IASBS in closed form via
+the intertwining identity. The gap is structural, not a matter of tuning.
+
+**The "0" is a specific quantity, not a claim of zero arithmetic.** See §6.4 for
+the exact accounting — IASBS does evaluate the target energy, and on the sphere
+its gradient. What it never does is *simulate a path in order to evaluate `f1` at
+the endpoint*.
 
 Caveat stated plainly: the two methods do not solve identical optimisation
 problems, and DAM is a general-purpose algorithm that does not require the
