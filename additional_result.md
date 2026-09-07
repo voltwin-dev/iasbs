@@ -327,7 +327,7 @@ co-scheduling inflates their wall clock roughly linearly.
 | experiment | iters | steps | wall (s) | s / iter | terminal evals | checkpoint |
 |---|---|---|---|---|---|---|
 | Ising L=4 non-Dirac | 3000 | 256 | **1869** | 0.62 | 0 | `ising_nd_L4.pt` |
-| Ising L=5 non-Dirac | 3000 | 256 | ~37000 (proj.) | 12.3 | 0 | `ising_nd_L5.pt` |
+| Ising L=5 non-Dirac | 3000 | 256 | 29487 @ it 2400, ~37000 proj. | 12.3 | 0 | `ising_nd_L5.pt` (written at loop end) |
 | Occupation m=4 non-Dirac | — | 128 | **214** | — | 0 | `occ_nd_m4.pt` |
 | Occupation m=32 (seed 0) | 3000 | 128 | **3230** | 1.08 | 0 | `occ_nd_s32_seed0.pt` |
 | Occupation m=32 (seed 1) | 3000 | 128 | **3231** | 1.08 | 0 | `occ_nd_s32_seed1.pt` |
@@ -344,6 +344,42 @@ described in §2.3.1 with a smaller learning rate; the m=128 leg converged in th
 original schedule. Cost is set by the corrector schedule, not by m, up to m~128.
 At m=1000 the per-iteration cost does rise (10.15 s/iter) because the run uses
 256 simulation steps rather than 128.
+
+### 6.1.1 R-ASBS baseline (sphere S^2)
+
+R-ASBS timing is only partially recoverable. The R-ASBS result JSONs
+(`json/results_rasbs_*.json`) carry the keys
+`config, final, floor, history, params, commit` and **no timing field**, so the
+numbers below come from the wall-clock tokens printed in the surviving run logs.
+
+| experiment | seeds | wall per seed (s) | total (s) | source |
+|---|---|---|---|---|
+| R-ASBS, `--init matlab`, bimodal target | 5 | **255 / 255 / 261 / 256 / 260** | **1287** | `rasbs/logs/bimodal_mi_s{0..4}.log` |
+| R-ASBS, default init | 5 | not recoverable | — | no log survives |
+
+Two honest qualifications:
+
+- The default-init R-ASBS legs (§4.1, the mode-collapse audit) were run before the
+  logging convention was fixed and their logs were not kept, so no wall clock is
+  available for them. Their per-iteration cost is the same code path as the matlab
+  init legs with identical `--iters`, so ~256 s / seed is the right order, but this
+  is an inference and not a measurement.
+- R-ASBS is a *continuous-space* Riemannian method with a much smaller network and
+  fewer simulation steps than the IASBS sphere configuration, so its 256 s / seed
+  is **not** comparable to the IASBS sphere 2124-3142 s / seed as a like-for-like
+  efficiency statement. The relevant comparison is accuracy at matched settings
+  (§4.3), not wall clock. We report the timings for completeness only.
+
+| method (sphere S^2) | wall / seed (s) | north-mass err | KS |
+|---|---|---|---|
+| IASBS non-Dirac (Haar) | 2124 - 3142 | **0.00111** | **0.02278** |
+| R-ASBS `--init matlab` | 255 - 261 | 0.02703 | 0.08768 |
+| R-ASBS default init | (no log) | 0.49878 | 0.50484 |
+
+IASBS buys a 24x accuracy improvement over the best R-ASBS configuration at about
+11x the wall clock per seed, on a substantially larger network. We make no
+efficiency claim against R-ASBS; the claim in §4 is about *correctness and
+robustness to initialisation*, not speed.
 
 ### 6.2 DAM
 
