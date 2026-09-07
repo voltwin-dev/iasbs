@@ -25,6 +25,8 @@ structured_asbs/          OUR method
 
 rasbs/                    THE BASELINE, kept apart from our code
   rasbs_port.py           faithful PyTorch port of R-ASBS alg2_stiefel.m
+  rasbs_sphere_port.py    port of asbs_sphere_sampler.m + earthquake_sphere_ex.m
+  rasbs_sphere_audit.py   closed-form falsification tests for that port
   rasbs_steps.sh          their beta = 2 step ablation
   rasbs_steps_highbeta.sh their beta = 50/100 step ablation
   regen_f64.sh            float64 rerun at beta = 2
@@ -374,9 +376,15 @@ inverse-CDF sampling draws genuinely iid target points.
 
 ### Results
 
-The R-ASBS column is quoted from their §4.1 text — "R–ASBS allocates 43.8% of
-its particles to the northern hemisphere" — not from a table, and not measured
-by us. We did not rerun their sphere sampler; see the limitation below.
+There are now two R-ASBS columns and **they disagree with each other.** The
+first is quoted from their §4.1 text — "R–ASBS allocates 43.8% of its particles
+to the northern hemisphere". The second is measured, by running
+`rasbs/rasbs_sphere_port.py`, a port of their `asbs_sphere_sampler.m`, over five
+seeds at their own settings (600 epochs, 500 steps, σ = 1, B = 500, the 64/64
+and 48/48 tanh networks, Adam at 2e-3). The port collapses onto **one** pole,
+every time. This is reported before our own results because how much weight the
+rest of the section carries depends on how that disagreement is resolved, and we
+have not resolved it.
 
 Five seeds of the antithetic variant, 200,000 samples each, recomputed from the
 checkpoints by `remeasure.py sphere`, which can emit further metrics on
@@ -384,16 +392,34 @@ request. The exact column is closed form: the z-marginal of π ∝ exp(6x₃²) 
 ∝ exp(6z²) on [−1, 1] with uniform azimuth. The iid column is the finite-sample
 floor at the same n, so anything at that level is sample noise.
 
-| metric | exact | R-ASBS (quoted, §4.1) | ours | iid floor |
-|---|---:|---:|---:|---:|
-| north mass | 0.5 | 0.438 (= 43.8%) | **0.5001 ± 0.0006** | 0.5002 ± 0.0008 |
-| absolute north error | 0 | 0.062 | **0.0006 ± 0.0003** | 0.0006 ± 0.0005 |
-| KS(x₃) | 0 | not reported | **0.0222 ± 0.0004** | 0.0018 ± 0.0004 |
-| Wasserstein-1 on x₃ | 0 | not reported | **0.01239 ± 0.00022** | 0.00118 ± 0.00073 |
-| KS(azimuth) | 0 | not reported | **0.0026 ± 0.0010** | 0.0018 ± 0.0005 |
-| ⟨x₃²⟩ | 0.80771 | not reported | **0.78864 ± 0.00019** | 0.80778 ± 0.00033 |
-| mean energy ⟨E⟩ | 1.15375 | not reported | **1.26816 ± 0.00112** | 1.15333 ± 0.00197 |
-| max norm residual | 0 | not reported | **2.2e-16** | — |
+| metric | exact | R-ASBS (quoted, §4.1) | R-ASBS (our port, 5 seeds) | ours | iid floor |
+|---|---:|---:|---:|---:|---:|
+| north mass | 0.5 | 0.438 (= 43.8%) | 0.0000, 0.0000, 0.9976, 0.0017, 0.0019 | **0.5001 ± 0.0006** | 0.5002 ± 0.0008 |
+| absolute north error | 0 | 0.062 | 0.4988 ± 0.0011 | **0.0006 ± 0.0003** | 0.0006 ± 0.0005 |
+| KS(x₃) | 0 | not reported | 0.50486 ± 0.00110 | **0.0222 ± 0.0004** | 0.0018 ± 0.0004 |
+| Wasserstein-1 on x₃ | 0 | not reported | 0.90224 ± 0.00234 | **0.01239 ± 0.00022** | 0.00118 ± 0.00073 |
+| KS(azimuth) | 0 | not reported | 0.0163 ± 0.0108 | **0.0026 ± 0.0010** | 0.0018 ± 0.0005 |
+| ⟨x₃²⟩ | 0.80771 | not reported | 0.82666 ± 0.00271 | **0.78864 ± 0.00019** | 0.80778 ± 0.00033 |
+| mean energy ⟨E⟩ | 1.15375 | not reported | 1.04007 ± 0.01626 | **1.26816 ± 0.00112** | 1.15333 ± 0.00197 |
+| max norm residual | 0 | not reported | 3.3e-16 | **2.2e-16** | — |
+
+The per-seed north masses are printed rather than averaged because their mean,
+0.200 ± 0.446, describes no run that happened. Four seeds emptied the northern
+hemisphere and one emptied the southern; the ± is the coin flip, not a spread.
+KS(x₃) ≈ 0.505 in every run is precisely the missing half of the mass.
+
+**What the collapsed runs get right is the point.** ⟨x₃²⟩ = 0.8267 against an
+exact 0.8077, and ⟨E⟩ = 1.040 against 1.154 — the radial profile is roughly
+correct, and on ⟨E⟩ the collapsed sampler is *closer to exact than ours is*
+(0.114 low versus our 0.114 high). A report consisting of ⟨E⟩ and a picture of
+one pole would look like a success. Only the hemisphere mass and KS(x₃) show
+that half the distribution is missing, which is why this section gates on them.
+
+Collapse is fast and it is not undertraining: at 100 epochs north mass is
+already 0.0004, at 300 epochs 0.0002. Longer training makes the *profile* worse,
+not better — ⟨E⟩ goes 1.267 (100 epochs) → 1.172 (300) → 1.040 (600), passing
+through the exact 1.154 on its way past it. The sampler spends its training
+budget over-sharpening the single pole it kept.
 
 **The symmetry is exact** — north mass and azimuthal uniformity are both at the
 iid floor. **The radial profile is not** — KS(x₃) is 12× the floor, ⟨x₃²⟩ low
@@ -438,15 +464,47 @@ in the residual.
 **Limitations.**
 
 - **S² is 2-dimensional.** This is a correctness benchmark, not a hard one.
-- **The R-ASBS column is quoted from their paper, not measured.** We cannot run
-  the MATLAB original, so we could not separate their algorithm's behaviour
-  from a porting error of our own, and a claim we cannot check does not belong
-  here. The Stiefel section is where their algorithm is actually rerun.
+- **Our port collapses and their paper says it does not, and we did not settle
+  which is right.** This is the largest open item in the repository. What we
+  checked, and what we did not:
+
+  *Checked.* The port was read line by line against `asbs_sphere_sampler.m`:
+  Haar `X0`, `t = (step−1)dt`, `X + u dt + σ√dt · P_x(noise)` then normalise,
+  `grad_ambient_E = [0, 0, −12x₃]` projected, the geodesic bridge
+  `μ_t = x₀cos(tθ) + u sin(tθ)` with `std = σ√(t(1−t))`, the parallel transport
+  `a_⊥ + a_∥cos φ − ⟨a,u⟩x₁ sin φ`, the corrector `logmap(x₁→x₀)/σ²`, the losses
+  `mean|P(u) + σa|²` and `mean|P(h) − b|²`, and every hyperparameter. It also
+  passes five internal checks (`--check`): Haar uniformity, transport isometry
+  and tangency, ∇E against central differences, `V(1)` against quadrature, and
+  the cotangent series at its switch point. Two seeds collapse to *opposite*
+  poles, which is the signature of a bistable solution rather than a sign error.
+
+  *Not checked.* Their binary. MATLAB is not installed here and their script
+  needs the Deep Learning Toolbox, so there is no cross-check available. Three
+  hypotheses remain live and untested: (a) weight initialisation — MATLAB's
+  `fullyConnectedLayer` uses Glorot weights with **zero bias** while PyTorch's
+  `nn.Linear` gives a nonzero bias, i.e. a preferred ambient direction from
+  epoch 1, which is exactly the seed a winner-take-all loop needs; (b) a seed
+  lottery, if the collapse probability is high but below 1 and their single
+  `rng(1,'twister')` run landed in the balanced basin; (c) drift between the
+  released script and the number in the paper. `rasbs/rasbs_sphere_audit.py`
+  was written to attack a fourth — a symmetry-breaking defect in the port — by
+  driving the same code path with `E = 0` (target is Haar) and `E = −6x₃`
+  (single mode, `north = (e⁶−1)/(e⁶−e⁻⁶)`, `⟨x₃⟩ = coth 6 − 1/6`), but **it was
+  not run to completion**, so it is a designed test, not evidence.
+
+  Until one of these is settled, the quoted 43.8% and the measured collapse are
+  both in the table and neither is presented as *the* R-ASBS result. The Stiefel
+  section, where their algorithm is rerun and the disagreement does not arise,
+  is the stronger comparison.
 
 ```bash
 python structured_asbs/sphere.py verify              # gate C0
 python structured_asbs/sphere.py train --antithetic
 python structured_asbs/remeasure.py sphere           # every table in this section, from ckpt/
+python rasbs/rasbs_sphere_port.py --check            # port self-checks
+python rasbs/rasbs_sphere_port.py --problem bimodal --seed 0   # the collapse
+python rasbs/rasbs_sphere_audit.py --test vmf        # designed, never run to completion
 ```
 
 ---
@@ -479,8 +537,12 @@ multimodal benchmark does not give you:
 - **log Z is closed form**: `log(4π sinh κ / κ) = 595.4409474111932` at κ = 600.
 
 R-ASBS use the same dataset but report only a plot, so there is no number to
-quote; the R-ASBS column here is **pending** until `rasbs/rasbs_sphere_port.py`
-is written and run.
+quote. The R-ASBS column below is therefore **measured, not quoted**:
+`rasbs/rasbs_sphere_port.py` ports their `earthquake_sphere_ex.m` — same κ
+staircase, same 250 steps, same drift clip of 30, same random-Fourier network,
+their uniform Haar source and their tangent-space Gaussian bridge both left
+unrepaired — and is then scored by *our* `earthquake.py` metrics, so both
+columns come off the same ruler.
 
 | | configuration |
 |---|---|
@@ -499,21 +561,48 @@ is written and run.
 
 ### Results
 
-| metric | ours | iid floor | ratio |
-|---|---:|---:|---:|
-| mean energy ⟨E⟩ (ref −594.7238) | **−594.8009** | −594.7307 | — |
-| ΔE | **−0.0771** | −0.0069 | 1.3e−4 relative |
-| KS(E) — **gate E1** | **0.10048** | 0.00327 | **31×** ✗ |
-| mode-histogram TV — **gate E2** | **0.50884** | 0.08910 | **5.7×** ✗ |
-| KS(angle to nearest mode) | **0.08048** | 0.00744 | 11× |
-| mode coverage (ref 0.9737) | **0.7679** | 0.9707 | — |
-| energy distance | **0.30171** | 0.00031 | 970× |
-| \|‖x‖−1\| — **gate E3** | **2.2e−16** | 2.2e−16 | ✓ |
+| metric | ours | R-ASBS (measured) | iid floor | better |
+|---|---:|---:|---:|:--:|
+| ΔE (ref −594.7238 / −594.7293) | **−0.0771** | +0.8466 | −0.0069 / +0.0052 | ours, 11× |
+| KS(E) — **gate E1** | **0.10048** ✗ | 0.22614 ✗ | 0.00327 / 0.00403 | ours, 2.3× |
+| mode-histogram TV — **gate E2** | **0.50884** ✗ | **0.29385** ✗ | 0.08910 / 0.08982 | R-ASBS, 1.7× |
+| KS(angle to nearest mode) | **0.08048** | 0.13445 | 0.00744 / 0.00383 | ours, 1.7× |
+| mode coverage (ref 0.9737 / 0.9722) | **0.7679** | **0.9432** | 0.9707 / 0.9749 | R-ASBS |
+| energy distance | **0.30171** | **0.10079** | 0.00031 / 0.00120 | R-ASBS, 3.0× |
+| \|‖x‖−1\| — **gate E3** | **2.2e−16** ✓ | 3.3e−16 ✓ | 2.2e−16 | tie |
 
-**E1 and E2 fail.** The mean energy is right to 1.3e−4 relative and the
+Two iid floors are listed because each column was scored against its own
+independently drawn 100,000-sample reference; the gap between them (e.g. 0.00327
+vs 0.00403 on KS(E)) is the sampling noise on the floor itself.
+
+**E1 and E2 fail for us.** The mean energy is right to 1.3e−4 relative and the
 constraint is exact, but the *law* is not: the sampler reaches only 77% of the
 3,343 modes against the reference's 97%, and its mode histogram is half a
 TV unit away from uniform-over-modes.
+
+**And this is the one benchmark where R-ASBS beats us**, on exactly the axis we
+fail: mode TV 0.294 against our 0.509, coverage 0.943 against our 0.768, energy
+distance 0.101 against our 0.302. We are better everywhere the *shape* of the
+distribution around a mode is measured — ΔE by 11×, KS(E) by 2.3×, KS(θ) by
+1.7× — and worse everywhere the *allocation of mass across modes* is measured.
+Neither sampler passes E1 or E2.
+
+That split is not a coincidence, and it is the same mechanism that costs them
+the sphere and Stiefel benchmarks. **Their uniform Haar source is a liability
+when the target is concentrated and an asset when it is spread out.** With 3,343
+modes scattered over the whole sphere, initialising every particle uniformly
+means every mode starts with particles near it, and 250 steps of a clipped drift
+never has to move mass between modes. Our Dirac source has to transport all of
+its mass out of a single point, and the transport reaches the modes it reaches:
+it sharpens the profile it has instead of finding the ones it is missing. On
+this target, starting from the answer's support is worth more than being
+unbiased about it.
+
+The honest reading is that these are two different failures, not a ranking:
+theirs is a source-tilted sampler that inherits good coverage from a source it
+should not have, ours is a correctly sourced sampler with a transport that
+abandons modes. Reporting only mode TV would hand them the benchmark; reporting
+only ⟨E⟩ would hand it to us. Both are in the table.
 
 It is not overfitting. Evaluated against the 1,433 **held-out** modes the
 sampler never saw, KS(E) is 0.05457 and coverage 0.88625 — *better* than on the
@@ -555,9 +644,13 @@ with an open cause rather than a diagnosis.
   repository where our sampler does not reach its own threshold.
 - **The exact-control baseline is missing at κ = 600**, so the failure is not
   yet attributed to the learned control as opposed to the integrator.
-- **No R-ASBS column yet.** They use the same dataset but publish only a
-  figure, so a number requires porting their sphere algorithm; that port is not
-  written.
+- **R-ASBS beats us on mode coverage here**, and we have not shown that our
+  Dirac source is the reason — the argument above is a mechanism, not a
+  measurement. The experiment that would settle it (rerun ours from a Haar
+  source and see whether coverage rises to ≈0.94) has not been run.
+- **The R-ASBS column is a port, not their binary.** MATLAB's Deep Learning
+  Toolbox is not available here, so their script cannot be executed for a
+  cross-check; see the porting audit in the Sphere section.
 - **Still S².** Real data, but a 2-dimensional manifold.
 
 ```bash
@@ -566,6 +659,7 @@ python structured_asbs/earthquake.py exact --kappa 20          # quadrature cont
 python structured_asbs/earthquake.py train --kappa 600 --anneal 150 300 450 600 \
     --steps 512 --iters 6000 --tag earthquake_k600 \
     --out json/results_earthquake_k600.json
+python rasbs/rasbs_sphere_port.py --problem quake              # the R-ASBS column
 ```
 
 ---
