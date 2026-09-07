@@ -22,7 +22,7 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 | 3 | IASBS extends to non-Dirac (Haar) sources without loss | §3.2 — matches the Dirac headline to 3 decimal places |
 | 4 | Reported R-ASBS mode collapse is an initialisation artifact | §4 — collapse vanishes under the authors' own init |
 | 5 | DAM needs millions of Monte-Carlo adjoint rollouts; IASBS needs none | §5, §6.4 — 20.9 M rollout-endpoint f1 evals for DAM's best TV vs 0 for IASBS (IASBS still evaluates the energy; see §6.4) |
-| 6 | DAM has a hard stability cliff below K=16 | §5.2 — K=1 and K=4 diverge, not merely degrade |
+| 6 | DAM has a hard stability cliff, and it moves with problem size | §5.2 — K=1, K=4 diverge at m=4; §6.2 — K=16 itself diverges at m=32 |
 
 ---
 
@@ -45,7 +45,7 @@ sector).
 | L | sites n | `\|Omega\| = C(n, n/2)` | TV (exact law) | empirical TV | i.i.d. TV floor | violations | status |
 |---|---|---|---|---|---|---|---|
 | 4 | 16 | 12,870 | **0.03470** | 0.06571 | 0.04940 | **0 / 200,000** | **DONE — PASS** |
-| 5 | 25 | 5,200,300 | 0.07764 (it 2550/3000, best 0.07528) | pending | pending | pending | RUNNING |
+| 5 | 25 | 5,200,300 | 0.08677 (it 2575/3000, best 0.07528) | pending | pending | pending | RUNNING |
 
 `json/results_ising_nd_L4.json`, `json/results_ising_nd_L5.json`.
 
@@ -363,7 +363,7 @@ co-scheduling inflates their wall clock roughly linearly.
 | experiment | iters | steps | wall (s) | s / iter | adjoint rollouts | checkpoint |
 |---|---|---|---|---|---|---|
 | Ising L=4 non-Dirac | 3000 | 256 | **1869** | 0.62 | 0 | `ising_nd_L4.pt` |
-| Ising L=5 non-Dirac | 3000 | 256 | 31947 @ it 2550, ~37000 proj. | 12.3 | 0 | `ising_nd_L5.pt` (written at loop end) |
+| Ising L=5 non-Dirac | 3000 | 256 | 32396 @ it 2575, ~37000 proj. | 12.3 | 0 | `ising_nd_L5.pt` (written at loop end) |
 | Occupation m=4 **Dirac** (head-to-head row) | 1500 | 128 | no log | — | 0 | `occ4_full.pt` |
 | Occupation m=4 non-Dirac | 1500 | 128 | **214** | 0.14 | 0 | `occ_nd_m4.pt` |
 | Occupation m=32 (seed 0) | 3000 | 128 | **3230** | 1.08 | 0 | `occ_nd_s32_seed0.pt` |
@@ -427,11 +427,40 @@ robustness to initialisation*, not speed.
 | Occupation m=4 | 16 | 400 | 7380.9 | 18.5 | 6,963,200 | 67,417,741 | 9.68 |
 | Occupation m=4 | 16 | 1200 | **11529.3** | 9.6 | **20,889,600** | **185,004,804** | 8.86 |
 | Occupation m=4 | 64 | 400 | 3177.7 | 7.9 | 26,624,000 | 222,041,777 | 8.34 |
-| Ising L=4 | 16 | 1200 | **KILLED at 5187 s, <50 it** | **>104** | — | — | — |
-| Occupation-scale m=32 | 16 | 1200 | **KILLED at 5184 s, <50 it** | **>104** | — | — | — |
-| Occupation-scale m=128 | 16 | 600 | RUNNING, 3461 s at <50 it | **>69** | — | — | — |
-| Occupation-scale m=1000 | 16 | 300 | QUEUED | — | — | — | — |
-| Ising L=5 | 16 | 600 | QUEUED | — | — | — | — |
+| Ising L=4, 10-iter diagnostic | 16 | 10 | **21.3** | **2.13** | 174,080 | 936,880 | **5.38** |
+| Occupation-scale m=32, 10-iter diagnostic | 16 | 10 | 123.3 | 12.33 | 174,080 | 26,661,608 | **153.2** |
+| Ising L=4 | 16 | 1200 | RUNNING (relaunched alone, ~45 min proj.) | 2.13 | — | — | — |
+| Occupation-scale m=32 | 64 | 400 | QUEUED (K=16 diverged) | — | — | — | — |
+| Occupation-scale m=128 | 16 | 600 | KILLED at 3695 s, <50 it | >74 | — | — | — |
+| Occupation-scale m=1000 | 16 | 300 | dropped (K=16 expected to diverge) | — | — | — | — |
+| Ising L=5 | 16 | 600 | not run | — | — | — | — |
+
+**The stability cliff moves with m — K=16 is not universally sufficient.** The
+two 10-iteration diagnostics above resolve the earlier no-eval stall into two
+completely different causes:
+
+| | Ising L=4, K=16 | Occupation-scale m=32, K=16 |
+|---|---|---|
+| loss, it 5 -> it 10 | 10.56 -> **7.75** | -2.42e5 -> **-2.94e13** |
+| ESS mean / p10 | 3.68 / **1.52** | 1.93 / **1.00** |
+| jumps per f1 eval | **5.38** | **153.2** |
+| s / iter, uncontended | **2.13** | 12.33 and rising |
+| verdict | **healthy, merely contended** | **DIVERGING** |
+
+Ising L=4 was never diverging. Its loss descends, its jump count per terminal
+evaluation (5.38) is *below* the 8.86 of the converged occupation m=4 leg, and on
+an uncontended device it runs at 2.13 s/iter, so the >104 s/iter measured earlier
+was entirely the co-scheduling penalty of §6.2. It has been relaunched alone.
+
+Occupation-scale m=32 at K=16 shows the exact §5.2 divergence signature, and
+worse than any leg recorded there: 153 jumps per f1 evaluation against 73.2 at
+K=1 and 8.86 at the converged K=16, with the ESS 10th percentile pinned at
+**1.00**, i.e. a single rollout carries all the weight. Since K=16 *converges* at
+m=4 and *diverges* at m=32, the stability cliff of §5.2 is not a fixed constant —
+**the K that DAM requires grows with the state-space size**. m=32 is therefore
+requeued at K=64, and the m=1000 leg at K=16 was dropped rather than run as a
+foregone divergence. This strengthens claim 6: DAM's rollout budget is not merely
+large, it must be re-tuned per problem size, whereas IASBS has no such parameter.
 
 **Budget note on the larger DAM legs.** The Ising L=4 and occupation-scale m=32
 legs were launched at 1200 iterations with `--eval-every 50` on the assumption of
@@ -598,7 +627,7 @@ plus one text correction.
 
 | job | progress | last metric | projected wall |
 |---|---|---|---|
-| IASBS Ising L=5 non-Dirac | 2550 / 3000 | TV 0.07764 | ~37000 s |
+| IASBS Ising L=5 non-Dirac | 2575 / 3000 | TV 0.08677 | ~37000 s |
 | DAM Ising L=4, K=16 | <50 / 1200 | — | >36000 s |
 | DAM occupation-scale m=32, K=16 | <50 / 1200 | — | >36000 s |
 
