@@ -28,23 +28,39 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 
 ## 2. IASBS on discrete structured spaces
 
-### 2.1 Ising ring, non-Dirac (uniform) source — validated against exact IPF
+### 2.1 Fixed-magnetization Ising on an L x L periodic lattice, non-Dirac (uniform) source — validated against exact IPF
 
-Gate: terminal-law TV must reach the i.i.d. sampling floor.
+The state space is **not** the full spin space. It is the fixed-magnetization
+sector of the 2D nearest-neighbour Ising model on an `L x L` periodic square
+lattice (a torus, `common.periodic_lattice_edges`): `n = L^2` binary sites with
+exactly `k = n/2` occupied, so `|Omega| = C(n, n/2)`. Dynamics are
+**magnetization-preserving swaps** (Kawasaki, not Glauber), which is what makes
+this a test of the *bijective* structured-space machinery rather than a generic
+discrete diffusion benchmark. Energy `E = -J sum_<ij> s_i s_j`, `s = 2x - 1`.
 
-| L | states | TV (exact law) | empirical TV | i.i.d. TV floor | violations | status |
-|---|---|---|---|---|---|---|
-| 4 | 2^16 | **0.03470** | 0.06571 | 0.04940 | 0 | **DONE — PASS** |
-| 5 | 2^25 | 0.07886 (it 2325/3000) | — | — | 0 | RUNNING |
+Gate A1: terminal-law TV <= 0.05, ideally at the i.i.d. sampling floor.
+Gate A2: zero magnetization violations (the swap dynamics must never leave the
+sector).
+
+| L | sites n | `\|Omega\| = C(n, n/2)` | TV (exact law) | empirical TV | i.i.d. TV floor | violations | status |
+|---|---|---|---|---|---|---|---|
+| 4 | 16 | 12,870 | **0.03470** | 0.06571 | 0.04940 | **0 / 200,000** | **DONE — PASS** |
+| 5 | 25 | 5,200,300 | 0.07597 (it 2425/3000) | pending | pending | pending | RUNNING |
 
 `json/results_ising_nd_L4.json`, `json/results_ising_nd_L5.json`.
 
 L=4 sits **below** the i.i.d. floor of 0.04940, i.e. the learned terminal law is
 statistically indistinguishable from exact samples at this sample size.
 
-IPF corrector sanity check (L=4): `mean exp(h) = 0.99723` (target 1),
-`max |h| = 0.07224`. The corrector is a small multiplicative perturbation, as the
-intertwining identity predicts.
+L=5 caveat: the empirical TV, the i.i.d. floor and the A2 violation count are
+computed only in the post-loop evaluation block, so they are listed as `pending`
+rather than assumed. The exact-law TV is a deterministic propagation of the
+learned rates over all 5,200,300 states and needs no sampling, which is why it is
+the only column available mid-run.
+
+IPF corrector sanity check: `mean exp(h) = 0.99723` at L=4 and `0.99792` at L=5
+(target 1), with `max |h| = 0.07224` and `0.25522`. The corrector is a small
+multiplicative perturbation, as the intertwining identity predicts.
 
 ### 2.2 Occupation process m=4, non-Dirac — validated against exact IPF
 
@@ -327,7 +343,7 @@ co-scheduling inflates their wall clock roughly linearly.
 | experiment | iters | steps | wall (s) | s / iter | terminal evals | checkpoint |
 |---|---|---|---|---|---|---|
 | Ising L=4 non-Dirac | 3000 | 256 | **1869** | 0.62 | 0 | `ising_nd_L4.pt` |
-| Ising L=5 non-Dirac | 3000 | 256 | 29487 @ it 2400, ~37000 proj. | 12.3 | 0 | `ising_nd_L5.pt` (written at loop end) |
+| Ising L=5 non-Dirac | 3000 | 256 | 29900 @ it 2425, ~37000 proj. | 12.3 | 0 | `ising_nd_L5.pt` (written at loop end) |
 | Occupation m=4 non-Dirac | — | 128 | **214** | — | 0 | `occ_nd_m4.pt` |
 | Occupation m=32 (seed 0) | 3000 | 128 | **3230** | 1.08 | 0 | `occ_nd_s32_seed0.pt` |
 | Occupation m=32 (seed 1) | 3000 | 128 | **3231** | 1.08 | 0 | `occ_nd_s32_seed1.pt` |
@@ -467,7 +483,7 @@ plus one text correction.
 
 | job | progress | last metric | projected wall |
 |---|---|---|---|
-| IASBS Ising L=5 non-Dirac | 2325 / 3000 | TV 0.07886 | ~37000 s |
+| IASBS Ising L=5 non-Dirac | 2425 / 3000 | TV 0.07597 | ~37000 s |
 | DAM Ising L=4, K=16 | <50 / 1200 | — | >36000 s |
 | DAM occupation-scale m=32, K=16 | <50 / 1200 | — | >36000 s |
 
