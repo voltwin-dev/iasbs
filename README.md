@@ -869,6 +869,63 @@ ways — 199 steps at β = 50 and 100 — gives 3.3116 / 3.2614 at 5,000 samples
 at 796 for us; ~780 s per β at 512 steps and ~1560 s at 1024 for them. Every
 `results_*.json` records `train_s` (ours) or `wall_s` (theirs).
 
+### Beyond the mean energy
+
+The table above compares `E[E]` and nothing else, which is the weakest question
+one can ask of a sampler: a badly wrong distribution can still have the right
+mean. `json/results_rasbs_stiefel.json` left `KS_E` as `NaN`, so three further
+statistics were recovered from the stored samples by
+`structured_asbs/_stiefel_extra.py` (no retraining) and written to
+`json/results_stiefel_extra.json`, at the three temperatures where the
+budget-matched ablation also exists.
+
+| β | metric | R-ASBS | IASBS | IASBS₆₀₀ |
+|---:|---|---:|---:|---:|
+| 1.3 | \|ΔE\| | 0.4581 | **0.1548** | 0.1656 |
+| | KS(E) | 0.1407 | **0.0537** | 0.0552 |
+| | E_std / ref (1.1628) | 1.25× | **1.05×** | 1.06× |
+| | \|XᵀX − I\| | 3.2e-07 | **3.5e-14** | 3.4e-14 |
+| 2 | \|ΔE\| | 0.5513 | **0.1372** | 0.1610 |
+| | KS(E) | 0.1857 | **0.0718** | 0.0753 |
+| | E_std / ref (0.7807) | 1.65× | **1.10×** | 1.14× |
+| | \|XᵀX − I\| | 3.1e-07 | **3.3e-14** | 3.3e-14 |
+| 5 | \|ΔE\| | 0.4781 | **0.1100** | 0.1106 |
+| | KS(E) | 0.2750 | **0.1369** | 0.1353 |
+| | E_std / ref (0.2903) | 3.27× | **1.23×** | 1.24× |
+| | \|XᵀX − I\| | 3.1e-07 | **3.2e-14** | 3.4e-14 |
+
+`KS(E)` is the Kolmogorov–Smirnov distance between the sampler's energy law and
+the MCMC reference law, so it sees the whole distribution rather than its first
+moment. IASBS is 2.0–2.6× closer on it, and the budget-matched IASBS₆₀₀ is
+indistinguishable from the full-budget run — at β = 5 it is very slightly
+*better*, which is noise, not a real ordering.
+
+**Sample sizes differ and KS is sensitive to that.** The port evaluates 5,000
+terminal samples, IASBS 100,000, and KS has an O(1/√n) null floor. Scoring exact
+MCMC draws of size 5,000 against the reference CDF gives a floor of **0.011**,
+and subsampling IASBS to the same 5,000 moves its KS only 0.0537 → 0.0597,
+0.0718 → 0.0761, 0.1369 → 0.1374. So the gap is real: R-ASBS sits 13–25× above
+the floor, IASBS 5–12×.
+
+**Dispersion.** Both methods over-disperse the energy, and the gap widens with β:
+by β = 5 R-ASBS is 3.27× too wide against the MCMC reference while IASBS is
+1.23×. Since the mean error is roughly flat in β for both, the second moment is
+where the two methods actually separate.
+
+**Constraint.** Seven orders of magnitude, at every β, because the IASBS update
+is an exact geodesic step on the manifold and the port's is a QR retraction.
+This one is structural rather than statistical: it does not improve with more
+training or more samples.
+
+**A trap worth recording.** IASBS uses `H = diag(1, 2, 5, 8)`; the port uses the
+R-ASBS paper's circulant `H_RASBS`, which has the *same spectrum* but a different
+eigenbasis. St(4,2) is invariant under left `O(4)`, so the law of `E` under the
+Gibbs target is identical for both and every scalar above is comparable — but the
+samples are not interchangeable, and scoring the port's samples with the IASBS
+`H` returns `E ≈ 8.00` at every β, i.e. exactly the β → 0 asymptote, which looks
+like total failure and is in fact a basis mismatch. Each set of samples is scored
+with the `H` it was trained against.
+
 ### The step-count ablation
 
 Our error is discretisation and falls with `N`; theirs is not, and does not.
