@@ -21,7 +21,7 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 | 2 | IASBS accuracy does not degrade with state-space size | §2.3 — KS improves monotonically from m=32 to m=1000 |
 | 3 | IASBS extends to non-Dirac (Haar) sources without loss | §3.2 — matches the Dirac headline to 3 decimal places |
 | 4 | Reported R-ASBS mode collapse is an initialisation artifact | §4 — collapse vanishes under the authors' own init |
-| 5 | DAM needs millions of terminal evaluations; IASBS needs none | §5 — 17 M f1 evals for DAM's best TV vs 0 for IASBS |
+| 5 | DAM needs millions of terminal evaluations; IASBS needs none | §5 — 20.9 M f1 evals for DAM's best TV vs 0 for IASBS |
 | 6 | DAM has a hard stability cliff below K=16 | §5.2 — K=1 and K=4 diverge, not merely degrade |
 
 ---
@@ -245,8 +245,19 @@ Gate: terminal TV <= 0.05, constraint violations = 0.
 | 1 | 10 | 0.41585 | 0.26278 | 1.00 / 1 | 1.00 | 20,480 | 1,499,657 | 224.7 | 1306 | **DIVERGE** |
 | 4 | 10 | 0.42312 | 0.26011 | 2.01 / 4 | 1.00 | 51,200 | 1,197,204 | 163.9 | 134 | **DIVERGE** |
 | 16 | 400 | 0.07170 | — | 9.62 / 16 | 4.26 | 6,963,200 | 67,417,741 | 7380.9 | 0 | FAIL |
-| 16 | 1050 | **0.01696** | 0.00892 | 15.88 / 16 | — | ~17 M | — | 10099 | 0 | **PASS** (RUNNING to 1200) |
+| 16 | 1200 | **0.01490** | 0.00800 | 14.04 / 16 | 8.07 | 20,889,600 | 185,004,804 | 11529.3 | 0 | **PASS** |
 | 64 | 400 | 0.04498 | 0.01827 | 48.75 / 64 | 16.71 | 26,624,000 | 222,041,777 | 3177.7 | 0 | **PASS** |
+
+The K=16 run at 400 iterations is the same configuration as the K=16 run at 1200;
+the only difference is the gradient-step budget. Reporting the 400-iteration number
+alone would have made DAM look like it *cannot* reach the gate, when in fact it was
+still descending monotonically at the cutoff. The honest statement is that DAM
+reaches the gate but needs roughly three times the budget, and 20.9 M terminal
+evaluations, to do so.
+
+TV trajectory (K=16): 0.41674 (it 50) -> 0.39471 (200) -> 0.20222 (250) ->
+0.06995 (300) -> 0.05128 (400) -> 0.02749 (650) -> 0.01974 (850) -> 0.01696 (1050)
+-> **0.01490** (1200). ESS rises with it: 7.86/16 -> 15.88/16.
 
 `json/results_dam_occ4_K{1_diag,4_diag,64}.json`,
 `json/results_dam_occupation_m4_K16.json`, `json/results_dam_occ4_K16_long.json`.
@@ -274,21 +285,34 @@ the divergence** — the two are separate failures.
 
 K=64 first crosses the gate at iteration 300 (TV 0.04855) versus iteration 400 for
 K=16, i.e. it saves ~100 iterations for 4x the per-iteration cost, and its final
-TV (0.04498 at 26.6 M f1 evals) is **worse** than K=16's (0.01696 at ~17 M).
-ESS *fraction* is not improved either: 48.75/64 = 76% for K=64 versus 15.88/16 = 99%
+TV (0.04498 at 26.6 M f1 evals) is **worse** than K=16's (0.01490 at 20.9 M).
+ESS *fraction* is not improved either: 48.75/64 = 76% for K=64 versus 14.04/16 = 88%
 for K=16.
+
+Per terminal evaluation, K=16 is the better spend:
+
+| K | final TV | f1 evals | TV per million f1 evals |
+|---|---|---|---|
+| 16 | 0.01490 | 20,889,600 | 0.00071 |
+| 64 | 0.04498 | 26,624,000 | 0.00169 |
 
 ### 5.4 Cost comparison, the headline number
 
-| method | best TV on occupation m=4 | terminal f1 evaluations | CTMC jumps simulated |
-|---|---|---|---|
-| DAM, K=16 | 0.01696 | ~17,000,000 | ~170,000,000 |
-| DAM, K=64 | 0.04498 | 26,624,000 | 222,041,777 |
-| **IASBS** | **0.01248** | **0** | **0** |
+| method | best TV on occupation m=4 | terminal f1 evaluations | CTMC jumps simulated | wall (s) |
+|---|---|---|---|---|
+| DAM, K=16 | 0.01490 | 20,889,600 | 185,004,804 | 11529.3 |
+| DAM, K=64 | 0.04498 | 26,624,000 | 222,041,777 | 3177.7 |
+| **IASBS** | **0.01248** | **0** | **0** | — |
 
 IASBS obtains `phi_t` in closed form through the intertwining identity, so it
 performs **no** adjoint rollouts and **no** terminal evaluations during training.
-DAM's best result is 36% worse in TV and costs 17 million terminal evaluations.
+DAM's best result is 19% worse in TV and costs **20.9 million** terminal
+evaluations plus 185 million simulated CTMC jumps to get there.
+
+This is the central comparison of the paper. DAM is not wrong on this benchmark —
+given enough rollouts it converges, and its ESS diagnostics are healthy at K=16.
+It is *expensive*, because the adjoint `phi_t` it estimates by Monte Carlo is
+exactly the object the intertwining identity hands IASBS for free.
 
 ---
 
@@ -326,8 +350,7 @@ python -m dam.tests_math
 
 | job | progress | last metric |
 |---|---|---|
-| IASBS Ising L=5 non-Dirac | 1875 / 3000 | TV 0.08368 |
-| DAM occupation m=4, K=16 | 1050 / 1200 | TV 0.01696, ESS 15.88/16 |
+| IASBS Ising L=5 non-Dirac | 2075 / 3000 | TV 0.09128 |
 
 **Planned**
 
