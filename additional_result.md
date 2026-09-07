@@ -177,6 +177,29 @@ parameters (controller + corrector).
 0.02278 vs 0.02165 KS). Removing the Dirac source assumption costs essentially
 nothing.
 
+Three further statistics, recovered from `ckpt/sphere_nd_seed{0..4}.pt` (200,000
+samples per seed) via `remeasure.sphere_metrics` without retraining. The target
+`pi ∝ exp(6 x_3^2)` has an exactly integrable z-marginal, so all three are
+compared against closed form; exact `E[x_3^2] = 0.807709`.
+
+| seed | W1(x_3) | KS(phi) | `\|Delta E[x_3^2]\|` |
+|---|---|---|---|
+| 0 | 0.01205 | 0.00132 | 0.01849 |
+| 1 | 0.01259 | 0.00116 | 0.01923 |
+| 2 | 0.01412 | 0.00213 | 0.01881 |
+| 3 | 0.01259 | 0.00205 | 0.01918 |
+| 4 | 0.01269 | 0.00288 | 0.01890 |
+| **mean** | **0.01281** | **0.00191** | **0.01892** |
+| i.i.d. floor (n = 200,000) | 0.00031 | 0.00224 | 0.00001 |
+
+**KS(phi) is below its own i.i.d. floor.** Azimuthal uniformity is not
+approximated, it is exact: the Killing readout builds the controlled drift out of
+the rotation generators, so the law is invariant under rotation about the z-axis by
+construction and the only azimuthal error is sampling noise. The residual
+`|Delta E[x_3^2]| = 0.019` against a floor of 1e-5 is the honest measure of what
+remains: a small, seed-stable bias in the *polar* marginal, consistent across all
+five seeds at the third decimal.
+
 An ablation without antithetic augmentation is retained at
 `ckpt/sphere_nd_plain_seed0.pt` (north_err 0.4398 wobble, KS 0.0649) — the same
 degradation the Dirac plain run shows, confirming the augmentation is what
@@ -203,14 +226,28 @@ Every seed collapses to a single mode (mass 0 or 1, never 0.5).
 
 ### 4.2 Authors' own `--init matlab`
 
-| seed | north_mass | north_err | KS_z | W1_z |
-|---|---|---|---|---|
-| 0 | 0.49728 | 0.00272 | 0.08040 | 0.06451 |
-| 1 | 0.51026 | 0.01026 | 0.06319 | 0.04328 |
-| 2 | 0.49394 | 0.00606 | 0.06080 | 0.04544 |
-| 3 | 0.42420 | 0.07580 | 0.12787 | 0.14183 |
-| 4 | 0.43537 | 0.06463 | 0.11342 | 0.12319 |
-| **mean** | — | **0.02703** | **0.08768** | — |
+| seed | north_mass | north_err | KS_z | W1_z | KS(phi) | `\|Delta E[x_3^2]\|` |
+|---|---|---|---|---|---|---|
+| 0 | 0.49728 | 0.00272 | 0.08040 | 0.06451 | 0.00980 | 0.09044 |
+| 1 | 0.51026 | 0.01026 | 0.06319 | 0.04328 | 0.00829 | 0.05544 |
+| 2 | 0.49394 | 0.00606 | 0.06080 | 0.04544 | 0.00718 | 0.06288 |
+| 3 | 0.42420 | 0.07580 | 0.12787 | 0.14183 | 0.01397 | 0.08579 |
+| 4 | 0.43537 | 0.06463 | 0.11342 | 0.12319 | 0.01544 | 0.08190 |
+| **mean** | — | **0.03189** | **0.08914** | **0.08365** | **0.01094** | **0.07529** |
+| **sd over seeds** | — | 0.03158 | 0.02699 | 0.04100 | 0.00322 | 0.01365 |
+| i.i.d. floor (n = 100,000) | — | 0.00087 | 0.00268 | 0.00178 | 0.00259 | 0.00069 |
+
+`json/results_rasbs_sphere_matlabinit_s{0..4}.json`,
+`ckpt/rasbs_sphere_matlabinit_s{0..4}.pt`, 100,000 samples per seed.
+
+Two corrections to an earlier version of this table. First, the reported means
+were arithmetically wrong: the five north errors average to **0.03189**, not
+0.02703, and the five KS values to **0.08914**, not 0.08768. The per-seed entries
+were always right, so the ratios in §4.3 have been recomputed from them.
+Second, KS(phi) and the second-moment error were missing; both are functions of
+the stored samples alone and were recovered from the checkpoints without
+retraining, via the same `remeasure.sphere_metrics` used for the IASBS numbers, so
+the definitions are identical on both sides. Exact `E[x_3^2] = 0.807709`.
 
 **Collapse disappears entirely.** The phenomenon is an initialisation artifact, not
 a property of on-policy self-training. Any description of R-ASBS as exhibiting
@@ -219,15 +256,31 @@ is *initialisation-sensitive*.
 
 ### 4.3 Head-to-head on the same target
 
-| method | mean north_err | mean KS_z |
-|---|---|---|
-| R-ASBS, default init | 0.49878 | 0.50484 |
-| R-ASBS, matlab init | 0.02703 | 0.08768 |
-| **IASBS, Dirac, antithetic** | **0.00069** | **0.02165** |
-| **IASBS, Haar (non-Dirac)** | **0.00111** | **0.02278** |
+| method | mean north_err | mean KS_z | mean W1_z | mean KS(phi) | mean `\|Delta E[x_3^2]\|` |
+|---|---|---|---|---|---|
+| R-ASBS, default init | 0.49878 | 0.50484 | — | — | — |
+| R-ASBS, matlab init | 0.03189 | 0.08914 | 0.08365 | 0.01094 | 0.07529 |
+| **IASBS, Dirac, antithetic** | **0.00069** | **0.02165** | **0.01239** | **0.00264** | **0.01907** |
+| **IASBS, Haar (non-Dirac)** | **0.00111** | **0.02278** | **0.01281** | **0.00191** | **0.01892** |
+| i.i.d. floor | 0.00087 / 0.00031 | 0.00268 / 0.00224 | 0.00178 / 0.00031 | 0.00259 / 0.00224 | 0.00069 / 0.00001 |
 
-Against the *strongest* R-ASBS configuration, IASBS is **39x** better in hemisphere
-error and **4.1x** better in KS, with zero constraint violation and no seed variance.
+Floor row: first number at n = 100,000 (the R-ASBS sample size), second at
+n = 200,000 (the IASBS sample size).
+
+Against the *strongest* R-ASBS configuration, IASBS is **46x** better in hemisphere
+error, **4.1x** better in KS(x_3), **6.7x** better in W1(x_3), **4.1x** better in
+azimuthal uniformity and **3.9x** better in the second moment, with zero constraint
+violation and no seed variance. The ratio in hemisphere error was previously quoted
+as 39x from a mis-averaged R-ASBS mean; corrected, it is 46x.
+
+Two qualitative differences matter as much as the ratios. **Seed variance:** the
+R-ASBS seed spread is as large as its mean (north_err 0.03189 +- 0.03158; seeds 3
+and 4 are ~25x worse than seed 0), whereas the IASBS seeds agree to the third
+decimal. **Azimuthal symmetry:** IASBS non-Dirac reaches KS(phi) = 0.00191, which
+is *below* the 0.00224 i.i.d. floor at its sample size, i.e. its azimuthal
+marginal is exactly uniform up to sampling noise, as the Killing readout
+guarantees by construction. R-ASBS sits 4.2x above the corresponding floor, so its
+azimuthal error is a real bias rather than sampling noise.
 
 ---
 
