@@ -605,6 +605,89 @@ loop issuing many small kernels and synchronising on `active.any()`. Consequence
 - The jump-explosion column is the mechanism behind the small-K divergence in §5.2:
   at K=1 each terminal evaluation costs 73 simulated jumps versus 8.9 at K=16.
 
+### 6.2.1 Trying to fix the divergence
+
+Reporting that DAM diverges is only fair if the obvious repairs were attempted.
+Four stabilisers were added to `dam/core.py` and `dam/discrete.py`, all off by
+default so every number above is reproduced bit-for-bit (`dam.tests_math`:
+11 / 11 gates still pass):
+
+| flag | what it bounds |
+|---|---|
+| `--a-clamp C` | `\|a_theta\| <= C`, i.e. the escape-rate multiplier `<= e^C` (default 20) |
+| `--m-clip C` | `\|log m_hat\| <= C` in the gKL loss (default 30) |
+| `--ess-min E` | drop labels whose denominator ESS `< E`; the mean is over survivors |
+| `--coef-cap R` | winsorise the `r/q` prefactor at `R x` its own batch median |
+
+Target: the feedback loop of §5.2 — a large `log m_hat` produces a large
+gradient on `a`, which raises the escape rate, which multiplies the jumps per
+rollout, which degrades the ESS, which enlarges `log m_hat`. Each flag cuts a
+different link.
+
+**Round 1 — all four arms kill the divergence (Ising L=4, K=16, 60 iterations).**
+
+| arm | settings | loss @ it 60 | TV @ it 60 | E-hist TV, it 30 -> 60 | ESS mean / p10 | jumps | wall |
+|---|---|---|---|---|---|---|---|
+| baseline | — | **-4.15e12** (it 40) | **0.97347** | 0.75170 -> 0.84403 | **1.04** | — | 286 s to it 40 |
+| A | `a-clamp 3 m-clip 5` | +22.99 | 0.76746 | 0.71368 -> 0.70286 | 2.91 / 1.15 | 9.61 M | 130 s |
+| B | `ess-min 4 coef-cap 10` | -17,449 | 0.77547 | 0.73822 -> 0.70352 | 2.94 / 1.13 | 9.18 M | 128 s |
+| C | `a-clamp 5 m-clip 10 lr 2e-4` | -1.00 | 0.77391 | 0.76129 -> 0.75425 | **3.37 / 1.34** | **7.52 M** | 127 s |
+| D | all four, `lr 3e-4` | +14.32 | 0.78462 | 0.75982 -> 0.73932 | 3.23 / 1.27 | 7.83 M | 128 s |
+
+The divergence is gone on every arm: the loss magnitude drops from **1e12 to
+1e1-1e4**, the ESS holds at 2.5-3.4 out of 16 instead of collapsing to 1.04, TV
+stops running *away* from the target, and the cost explosion disappears — 60
+iterations in ~130 s where the baseline needed 286 s to reach iteration 40.
+Constraint violations remain 0 throughout.
+
+None of them learned, but at 60 iterations that is not yet evidence of a stall:
+the one DAM leg that does converge (occupation m=4, K=16) was also flat at
+TV 0.41674 at iteration 50 and 0.39471 at 200, breaking down to 0.06995 only by
+iteration 300.
+
+**Round 2 — 600 iterations, past the point where the m=4 leg had converged.**
+
+| arm | settings | best E-hist TV | E-hist TV @ it 600 | TV @ it 600 | ESS mean / p10 | wall |
+|---|---|---|---|---|---|---|
+| A2 | `a-clamp 3 m-clip 5` | **0.15866** (it 325) | 0.30301 | 0.76576 | 3.38 / 1.07 | 1359 s |
+| E | `a-clamp 3 m-clip 5 lr 3e-4` | 0.61324 | 0.61939 | 0.77506 | 2.35 / 1.02 | 1413 s |
+
+A2 is genuinely learning something the baseline never did — the energy histogram
+falls 0.632 (it 225) -> **0.159** (it 325) against a baseline that never went
+below 0.677 — and the ESS *improves* with training, 1.99 -> 4.71 / 16. But it
+then bounces back to 0.303 and the full TV never leaves 0.76-0.83.
+
+**Round 2 diagnosis: the clamp was set below the target.** Reading the exact
+control multiplier off `FI.ExactControl` shows it grows sharply towards `t = 1`:
+
+| t | 0.000 | 0.250 | 0.500 | 0.750 | 0.938 | 0.992 |
+|---|---|---|---|---|---|---|
+| `max \|a_exact\|` | 0.185 | 0.576 | 1.431 | 2.629 | 4.205 | **6.308** |
+| `q99 \|a_exact\|` | 0.114 | 0.277 | 0.687 | 1.573 | 3.062 | 4.861 |
+
+`a-clamp 3` therefore makes the optimal controller **literally unrepresentable**
+over the last fifth of the time axis. The learned-vs-exact multiplier error in
+the round-2 artifacts sits exactly where the clamp binds — RMSE 0.69-0.84 for
+`t <= 0.75`, but **2.09 RMSE and 8.10 max** at `t = 0.992` — and the bounce in
+A2's energy histogram is what a run does on approach to a boundary it cannot
+cross. Round 1's apparent success was partly an artifact of the same thing:
+a controller pinned to a small box cannot diverge, but it also cannot converge.
+
+Round 3 (running) sets the clamp *above* the target, `a-clamp 8` (27% headroom
+over 6.308, permitting a rate multiplier of 3.0e3 versus the baseline's 4.9e8),
+keeping `m-clip 5`, with and without the round-1 outlier removal.
+
+**What this already establishes, regardless of how round 3 lands.** The §5.2
+divergence is not intrinsic to the estimator — it is a bounded-control problem,
+and clipping `log m_hat` at 5 plus a finite rate box removes it entirely on a
+benchmark where the unmodified method reaches -4e12 loss and ESS 1.04. What is
+*not* yet established is that the stabilised run converges, and the honest
+reading of round 2 is that the two requirements pull against each other: the box
+must be small enough to bound the jump explosion and large enough to contain the
+optimum. On Ising L=4 those two constraints are at least compatible in principle
+(6.31 needed, 20 permitted at baseline); whether the optimiser finds it is what
+round 3 measures.
+
 ### 6.3 Cost of the comparison, head to head
 
 Same benchmark (occupation m=4), same hardware, best setting of each method:
@@ -740,8 +823,9 @@ python -m dam.tests_math
 
 ## 8. Still running / still to run
 
-**Nothing is running.** Every IASBS experiment is finished and every DAM leg has
-either converged or diverged.
+**Running:** DAM stabiliser round 3 (`fix_F_clamp8`, `fix_G_clamp8damp`), Ising
+L=4 K=16, 600 iterations each, ~23 min per arm on one GPU each -- see §6.2.1.
+Every IASBS experiment is finished.
 
 **Finished since the last update**
 

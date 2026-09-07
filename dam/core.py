@@ -211,7 +211,7 @@ def estimate_log_adjoint(adapter, net, t, x, y, K, steps, generator=None,
 LOG_M_CLIP = 30.0
 
 
-def gkl_loss(a, log_m, r, log_q, clip=LOG_M_CLIP):
+def gkl_loss(a, log_m, r, log_q, clip=LOG_M_CLIP, keep=None, coef_cap=None):
     """Edge-sampled generalized-KL matching objective.
 
     Per edge the paper matches u_theta to w = r * m_hat under
@@ -238,13 +238,30 @@ def gkl_loss(a, log_m, r, log_q, clip=LOG_M_CLIP):
     [1e-13, 1e13], which is far outside any physically meaningful range yet
     keeps the loss finite.  Truncation biases the estimator, so the fraction of
     clipped labels is reported alongside the result rather than hidden.
+
+    Stabilisers (all disabled by default, so the published numbers are
+    reproduced bit-for-bit unless a flag is passed)
+    ---------------------------------------------
+    `keep` masks out labels whose adjoint estimate is untrustworthy (ESS
+    filtering); the mean is then taken over the surviving labels only, so the
+    loss scale does not depend on how many were dropped.  `coef_cap` winsorises
+    the `r/q` prefactor at `coef_cap x` its own batch median: `q` is a sampled
+    edge probability, so `1/q` has an unbounded right tail and one rare edge can
+    otherwise dominate the whole minibatch gradient.
     """
     lm = log_m.to(torch.float64)
     if clip is not None:
         lm = lm.clamp(-clip, clip)
     m = torch.exp(lm).detach()
     coef = (r.to(torch.float64) * torch.exp(-log_q.to(torch.float64))).detach()
-    return (coef * (torch.exp(a) - m * a)).mean()
+    if coef_cap is not None and coef_cap > 0:
+        med = coef.median().clamp_min(TINY)
+        coef = coef.clamp(max=float(coef_cap) * med)
+    per = coef * (torch.exp(a) - m * a)
+    if keep is not None:
+        kf = keep.to(per.dtype)
+        return (per * kf).sum() / kf.sum().clamp_min(1.0)
+    return per.mean()
 
 
 def gkl_literal(a, log_m, r, log_q):

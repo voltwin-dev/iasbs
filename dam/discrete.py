@@ -276,15 +276,24 @@ class ScaleAdapter:
         return int((eta.sum(dim=1).round().long() != self.sp.N).sum())
 
 
+def _ac(args):
+    """Adapter kwargs: override the per-adapter a_theta clamp only if asked."""
+    return {"clamp": args.a_clamp} if args.a_clamp > 0 else {}
+
+
 # ============================================================================
 # shared DAM training step
 # ============================================================================
-def dam_step(ad, net, opt, sched, Xt, ti, steps, K, K_num, clip=10.0):
+def dam_step(ad, net, opt, sched, Xt, ti, steps, K, K_num, clip=10.0,
+             m_clip=LOG_M_CLIP, ess_min=0.0, coef_cap=0.0):
     """One generalized-KL matching update at the reciprocal states Xt.
 
     Returns (loss, stats).  The proposal q and the adjoint label are produced
     entirely under no_grad -- differentiating through the proposal is one of
     the explicit failure modes listed in the plan.
+
+    `m_clip`, `ess_min` and `coef_cap` are the divergence stabilisers; their
+    defaults reproduce the original estimator exactly.  See `gkl_loss`.
     """
     t = ti.to(torch.float64) / steps
     with torch.no_grad():
@@ -299,9 +308,16 @@ def dam_step(ad, net, opt, sched, Xt, ti, steps, K, K_num, clip=10.0):
         log_m, st = estimate_log_adjoint(ad, net, t, Xt, Y, K, steps,
                                          K_num=K_num)
         r = ad.base_rate_on_edge(Xt, edge)
-        st["clipped"] = int((log_m.abs() > LOG_M_CLIP).sum())
+        st["clipped"] = int((log_m.abs() > m_clip).sum())
+        keep = None
+        if ess_min > 0:
+            keep = st["ess"] >= float(ess_min)
+            st["dropped"] = int((~keep).sum())
+            if not bool(keep.any()):        # nothing trustworthy this minibatch
+                return float("nan"), st
     a = ad.a_on_edge(net, t, Xt, edge)
-    loss = gkl_loss(a, log_m, r, log_q)
+    loss = gkl_loss(a, log_m, r, log_q, clip=m_clip, keep=keep,
+                    coef_cap=coef_cap)
     opt.zero_grad(set_to_none=True)
     loss.backward()
     torch.nn.utils.clip_grad_norm_(net.parameters(), clip)
@@ -341,7 +357,7 @@ def run_ising(args):
     sp = FI.FixedIsingSpace(L=args.L, J=args.J, tau=args.tau, gamma=args.gamma)
     torch.manual_seed(args.seed)
     net = FI.SwapController(sp.n, hidden=args.hidden).to(sp.device)
-    ad = IsingAdapter(sp)
+    ad = IsingAdapter(sp, **_ac(args))
     n_par = sum(p.numel() for p in net.parameters())
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     steps = args.steps
@@ -373,7 +389,8 @@ def run_ising(args):
             with torch.no_grad():
                 Xt = FI.sample_bridge(sp, pool[sel], ti, lk0, lk1)
             loss, st = dam_step(ad, net, opt, sched, Xt, ti, steps, args.K,
-                                args.K_num)
+                                args.K_num, m_clip=args.m_clip,
+                                ess_min=args.ess_min, coef_cap=args.coef_cap)
             _acc(store, st)
 
         if it % args.eval_every == 0 or it == args.iters:
@@ -418,7 +435,7 @@ def run_occupation(args):
                             gamma=args.gamma)
     torch.manual_seed(args.seed)
     net = OC.OccController(sp.m, sp.N, hidden=args.hidden).to(sp.device)
-    ad = OccAdapter(sp)
+    ad = OccAdapter(sp, **_ac(args))
     n_par = sum(p.numel() for p in net.parameters())
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     steps = args.steps
@@ -454,7 +471,8 @@ def run_occupation(args):
             with torch.no_grad():
                 Xt = OC.sample_bridge(sp, pool[sel], ti, K0, K1)
             loss, st = dam_step(ad, net, opt, sched, Xt, ti, steps, args.K,
-                                args.K_num)
+                                args.K_num, m_clip=args.m_clip,
+                                ess_min=args.ess_min, coef_cap=args.coef_cap)
             _acc(store, st)
 
         if it % args.eval_every == 0 or it == args.iters:
@@ -497,7 +515,7 @@ def run_scale(args):
                             d=args.d, tau=args.tau, gamma=args.gamma)
     torch.manual_seed(args.seed)
     net = OC.ScaleController(sp.m, sp.N, hidden=args.hidden).to(sp.device)
-    ad = ScaleAdapter(sp)
+    ad = ScaleAdapter(sp, **_ac(args))
     n_par = sum(p.numel() for p in net.parameters())
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     steps = args.steps
@@ -536,7 +554,8 @@ def run_scale(args):
                 Xt = OC.bridge_scale(sp, pool[sel],
                                      ti.to(torch.float64) / steps)
             loss, st = dam_step(ad, net, opt, sched, Xt, ti, steps, args.K,
-                                args.K_num)
+                                args.K_num, m_clip=args.m_clip,
+                                ess_min=args.ess_min, coef_cap=args.coef_cap)
             _acc(store, st)
 
         if it % args.eval_every == 0 or it == args.iters:
@@ -568,6 +587,9 @@ def _finish(args, ad, net, sp, p, samples, tv, viol, hist, store, n_par, wall,
     diag["wall_sec"] = round(wall, 1)
     diag["K"] = args.K
     diag["K_num"] = args.K_num
+    diag["stab"] = {"a_clamp": args.a_clamp, "m_clip": args.m_clip,
+                    "ess_min": args.ess_min,
+                    "coef_cap": args.coef_cap, "lr": args.lr}
 
     print("\n=== GATES ===")
     ok = viol == 0
@@ -631,6 +653,15 @@ def main():
     ap.add_argument("--buffer", type=int, default=8)
     ap.add_argument("--hidden", type=int, default=0, help="0 = benchmark default")
     ap.add_argument("--lr", type=float, default=1e-3)
+    # --- divergence stabilisers (defaults reproduce the original run) ---
+    ap.add_argument("--a-clamp", dest="a_clamp", type=float, default=0.0,
+                    help="bound on |a_theta|; 0 keeps the adapter default (20)")
+    ap.add_argument("--m-clip", dest="m_clip", type=float, default=LOG_M_CLIP,
+                    help="truncation of |log m_hat| in the gKL loss")
+    ap.add_argument("--ess-min", dest="ess_min", type=float, default=0.0,
+                    help="drop labels whose denominator ESS is below this")
+    ap.add_argument("--coef-cap", dest="coef_cap", type=float, default=0.0,
+                    help="winsorise r/q at this multiple of its batch median")
     ap.add_argument("--eval-every", dest="eval_every", type=int, default=50)
     ap.add_argument("--n-samples", dest="n_samples", type=int, default=20000)
     ap.add_argument("--seed", type=int, default=0)
