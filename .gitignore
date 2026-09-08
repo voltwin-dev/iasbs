@@ -1,6 +1,8 @@
-# Trained controls: 2.5 GB of .pt, regenerable with `python <exp>.py train`.
+# Trained controls: 3.7 GB of .pt, regenerable with `python <exp>.py train`.
+# Only the ckpt/ directory is ignored.  A .pt sitting anywhere else IS tracked,
+# so a checkpoint trained on another machine can be pushed to the repo root and
+# then moved into ckpt/ locally.
 ckpt/
-*.pt
 
 # Run logs.
 *.log
