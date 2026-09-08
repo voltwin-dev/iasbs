@@ -1099,7 +1099,7 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 | 3 | IASBS extends to non-Dirac (Haar) sources without loss | §3.2 — matches the Dirac headline to 3 decimal places |
 | 4 | Reported R-ASBS mode collapse is an initialisation artifact | §4 — collapse vanishes under the authors' own init |
 | 5 | DAM needs millions of Monte-Carlo adjoint rollouts; IASBS needs none | §5, §6.4 — 20.9 M rollout-endpoint f1 evals for DAM's best TV vs 0 for IASBS (IASBS still evaluates the energy; see §6.4) |
-| 6 | DAM is fragile and expensive: it diverges out of the box on every space larger than `\|X\| = 35`, and repairing it needs a per-problem control box, label truncation and 5x the budget | §5.2, §6.2 — divergence at K=1/4 (m=4), K=16 (m=32, Ising L=4), K=64 (m=32); §6.2.1 — the repair reaches TV 0.0617 on Ising L=4 for 169 M f1 evals and 975 M jumps, still 1.8x worse than IASBS at zero adjoint rollouts |
+| 6 | DAM is fragile and expensive: it diverges out of the box on every space larger than `\|X\| = 35`, and repairing it needs a per-problem control box, label truncation and 5x the budget | §5.2, §6.2 — divergence at K=1/4 (m=4), K=16 (m=32, Ising L=4), K=64 (m=32); §6.2.1 — the repair reaches TV 0.0634 on Ising L=4 for 237 M f1 evals and 1.34 B jumps, and transfers to occupation m=32 (KS_occ 0.0128, gate PASS, 5.85 B jumps), still 1.8-3x worse than IASBS at zero adjoint rollouts |
 
 ---
 
@@ -1829,15 +1829,96 @@ cutoff, 0.06435 -> 0.06168 over its last 250 iterations, with the loss positive
 and the ESS still creeping up. Extrapolating that rate puts TV = 0.05 near
 iteration 6100.
 
-**Round 6 (running), ~4.4 h per arm.** Arm **M** takes K=32 to 7000 iterations,
-~15% past the extrapolated crossing. Arm **N** is the transfer test, and it is
-the more important of the two: the repair has only ever been exercised on Ising
-L=4, so N applies the identical control box and truncation to
-**occupation-scale m=32 at K=64**, the other benchmark that diverged (at
-iteration 15, with 153 jumps per f1 evaluation and ESS p10 pinned at 1.00).
-Note that the clamp there *cannot* be sized against a known optimum —
+**Round 6 — the extrapolation fails, and the repair transfers.** Arm **M** takes
+K=32 to 7000 iterations, ~15% past the extrapolated crossing. Arm **N** is the
+transfer test, and it is the more important of the two: the repair had only ever
+been exercised on Ising L=4, so N applies the identical control box and
+truncation to **occupation-scale m=32 at K=64**, the other benchmark that
+diverged (at iteration 15, with 153 jumps per f1 evaluation and ESS p10 pinned
+at 1.00). Note that the clamp there *cannot* be sized against a known optimum —
 `ScaleOccupation` has no `ExactControl` to read one off — which is exactly the
 practical difficulty the revised claim 6 asserts.
+
+| arm | target | K | iters | headline | gate | ESS end | ESS mean / p10 | f1 evals | jumps | wall |
+|---|---|---|---|---|---|---|---|---|---|---|
+| M | Ising L=4 | 32 | 7000 | TV **0.06339** | **FAIL** | 30.64 / 32 | 24.91 / 11.40 | 236,544,000 | 1,339,809,998 | 16,226 s |
+| N | occupation m=32 | 64 | 1000 | KS_occ **0.0128** | **PASS** | 55.58 / 64 | 31.39 / 1.10 | 66,560,000 | 5,849,804,432 | 16,572 s |
+
+Constraint violations 0 on both.
+
+**M: the TV = 0.05 crossing was an extrapolation artifact. DAM plateaus at
+~0.062 on Ising L=4.** Round 5 read a 0.0110-per-100-iteration descent off arm J
+and projected the gate at iteration 6100. Running to 7000 shows that rate does
+not persist:
+
+| it | 4000 | 4500 | 5000 | 5500 | 6000 | 6500 | 7000 |
+|---|---|---|---|---|---|---|---|
+| TV | 0.08227 | 0.08055 | 0.06934 | 0.06731 | 0.06784 | 0.06193 | **0.06339** |
+| E-hist TV | 0.05425 | 0.05636 | 0.05033 | 0.05087 | 0.05172 | 0.04901 | 0.05206 |
+| ESS / 32 | 28.86 | 29.47 | 29.85 | 30.04 | 30.56 | 30.63 | 30.64 |
+
+From iteration 5000 onward TV oscillates in **0.062-0.069** with no trend, and
+the last 2000 iterations move it by 0.006 — well inside the eval-to-eval noise of
+±0.005. Arm J's 0.06168 at 5000 iterations is, within noise, the same number M
+reaches at 7000; the extra 2000 iterations bought nothing and cost 67.6 M
+additional f1 evaluations. **DAM does not reach the gate on Ising L=4 at any
+budget tried**, and the run is healthy while it fails to — loss positive
+throughout, ESS at 96% retention and still creeping up. This is a floor, not a
+transient, and it is where the §6.2.1 story ends for this benchmark: TV 0.062
+against IASBS's **0.03470** at 1.8x, now measured rather than extrapolated.
+
+**N: the repair transfers, and converts a divergence into a gate pass.** This is
+the strongest DAM result in the repository and it should be read as such. The
+unstabilised K=64 leg at m=32 diverged by iteration 15 (loss -3.0e4, ESS 1.18/64,
+KS_occ never leaving the uncontrolled band). The identical configuration with the
+§6.2.1 control box converges:
+
+| it | 25 | 125 | 225 | 325 | 425 | 625 | 825 | 1000 |
+|---|---|---|---|---|---|---|---|---|
+| loss | +134.4 | -43.8 | -1029.9 | +163.4 | +121.5 | +118.3 | +118.7 | +121.0 |
+| KS_occ | 0.2024 | 0.1865 | 0.0395 | 0.0200 | 0.0138 | 0.0139 | 0.0105 | **0.0128** |
+| ESS / 64 | 3.03 | 2.45 | 2.70 | 9.88 | 27.62 | 48.80 | 53.42 | **55.58** |
+
+Against the uncontrolled reference of KS_occ 0.2040, KS_max 0.8024, W1max/N
+0.1007, arm N ends at **0.0128 / 0.0399 / 0.0068** — a 16x reduction on KS_occ,
+0 violations, and 87% rollout retention. It clears its `KS_occ <= 0.05` gate.
+
+Two qualifications keep this honest. First, **it is still 3x worse than IASBS**,
+which reaches KS_occ **0.0043**, KS_max 0.0305, W1max/N 0.0052 on the same
+target. Second, the cost is not comparable: **5.85 billion simulated jumps** and
+66.6 M f1 evaluations over 4.6 h, against zero adjoint rollouts for IASBS. The
+ESS 10th percentile of **1.10** also says the healthy mean of 31.4 hides a tail
+of batches carried by a single rollout. But the direction is unambiguous — on
+this benchmark the stabilised method works, and any claim that DAM simply
+diverges on occupation m=32 is now false.
+
+**Round 7 — the two spaces the repair does not reach.** Arm **P** applies the
+same control box to **Ising L=5** (`|Omega| = 5,200,300`, 404x arm M's space);
+arm **O** takes occupation-scale to **m=128** at K=32.
+
+| arm | target | K | iters | headline | gate | ESS mean / p10 | f1 evals | jumps | wall |
+|---|---|---|---|---|---|---|---|---|---|
+| P | Ising L=5 | 32 | 1200 | TV **0.80981** | **FAIL** | 5.60 / 1.35 | 40,550,400 | 382,184,192 | 3,822 s |
+| O | occupation m=128 | 32 | 25 / 600 (killed) | KS_occ 0.2083 | — | 1.52 / 32 | — | — | 2,227 s |
+
+**P is under-budgeted, not cleanly divergent, and is reported as inconclusive.**
+Its TV falls 0.850 -> 0.815 -> 0.810 over iterations 750-1200 and its ESS *rises*
+6.27 -> 8.14 / 32, which is the shape of a run still inside its transient; arm H
+on the 404x smaller L=4 space had negative loss until iteration ~700 and needed
+3000 iterations total. P's loss is still negative at iteration 1200 (-5.31).
+1200 iterations at L=5 is therefore the same mistake rounds 1-3 made, and the
+result licenses no claim beyond "the L=4 budget does not transfer to L=5". For
+scale, IASBS reaches **0.07228** on this target (§2.1) in 3000 iterations with no
+rollouts.
+
+**O was starved of rollouts and was killed at iteration 25.** At m=128 with
+K=32 the ESS was **1.52 / 32** from the first evaluation, and KS_occ 0.2083 was
+*worse than the uncontrolled reference* of 0.2053 — the control was actively
+harmful. Arm N needed K=64 to hold m=32; O used half that on a space 4x larger.
+At 89 s/iteration the full 600 iterations would have taken ~14 h to confirm a
+starvation visible in 37 minutes, so it was terminated. **This is a
+misconfiguration on our side, not a DAM result**, and no claim is drawn from it.
+The informative version of the experiment is O rerun at K=64.
 
 **Where this leaves claim 6.** The claim as originally written — "DAM has a
 hard stability cliff, and raising K does not clear it" — is **too strong and is
@@ -1859,12 +1940,25 @@ With all three, DAM on Ising L=4 goes from a diverging run at **-4e12 loss,
 TV 0.973 and ESS 1.04/16** to a converging one at **TV 0.06168, ESS 30.47/32**.
 The honest revised claim is therefore not that DAM fails, but that it is
 **fragile and expensive**: it needs a per-problem control box sized against an
-optimum one does not know in advance, a truncation constant, and **169 million**
-rollout-endpoint evaluations plus 975 million simulated jumps to reach a TV that
+optimum one does not know in advance, a truncation constant, and **237 million**
+rollout-endpoint evaluations plus 1.34 billion simulated jumps to reach a TV that
 IASBS beats by **1.8x** (0.03470, §2.1) with **zero** adjoint rollouts, in
-11,428 s against IASBS's 1,869 s. The comparison in §6.3 is
+16,226 s against IASBS's 1,869 s. The comparison in §6.3 is
 unaffected in direction and is now made against a DAM that actually works on
 this benchmark rather than one that has fallen over.
+
+Rounds 6 and 7 add one qualification in each direction. **Against DAM:** the
+TV = 0.05 crossing projected in round 5 does not exist — arm M plateaus at
+0.062-0.069 from iteration 5000 to 7000, so DAM misses this gate at every budget
+tried rather than merely needing more compute. **For DAM:** the repair
+*transfers*. Arm N carries the identical control box to occupation-scale m=32 and
+converts a run that diverged by iteration 15 into one that **passes** its gate at
+KS_occ 0.0128, with 87% rollout retention and 0 violations. So the fragility is
+real but narrower than "DAM falls over": the stabilised method is a working
+sampler on two of the four spaces tried, at 1.8-3x worse accuracy than IASBS and
+several orders of magnitude more sampling work. The two spaces it does not reach
+(Ising L=5, occupation m=128) were both under-resourced rather than cleanly
+divergent, and neither supports a claim in either direction yet.
 
 #### 6.3 Cost of the comparison, head to head
 
@@ -2001,12 +2095,14 @@ python -m dam.tests_math
 
 ### 8. Still running / still to run
 
-**Running:** DAM stabiliser round 6 -- `fix_M_K32_7000` (Ising L=4, K=32, 7000
-iterations, ~15% past the extrapolated TV = 0.05 crossing) and `fix_N_occs32`
-(occupation-scale m=32, K=64, 1000 iterations, the transfer test of the repair
-onto the *other* benchmark that diverged). ~4.4 h per arm on one GPU each --
-see §6.2.1.
-Every IASBS experiment is finished.
+**Running:** nothing. Every IASBS experiment is finished, and DAM stabiliser
+rounds 6 and 7 have completed -- see §6.2.1.
+
+**To rerun:** `fix_O_occs128` at **K=64**. The round-7 attempt used K=32 on
+occupation-scale m=128 and starved the adjoint estimator (ESS 1.52/32 at
+iteration 25, KS_occ worse than the uncontrolled reference); it was killed at
+37 minutes rather than spend ~14 h confirming a misconfiguration. Arm N needed
+K=64 to hold m=32, so K=64 is the floor for m=128.
 
 **Finished since the last update**
 
