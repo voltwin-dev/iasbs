@@ -42,8 +42,7 @@ dam/                      THE OTHER BASELINE (Discrete Adjoint Matching)
   discrete.py             the three benchmark adapters + CLI
   tests_math.py           gradient identity, path-weight identity, estimator
   run_dam.sh              every DAM leg reported in section 6.2
-  run_ising_L5.sh         Ising L=5 leg          (running, section 8)
-  run_occs128_K64.sh      occupation m=128 leg   (running, section 8)
+  run_occs128_K64.sh      occupation m=128 leg   (running, see section 8)
 
 rasbs/                    THE BASELINE, kept apart from our code
   rasbs_port.py           faithful PyTorch port of R-ASBS alg2_stiefel.m
