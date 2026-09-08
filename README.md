@@ -19,11 +19,32 @@ structured_asbs/          OUR method
   sphere.py               Exp C  S^2                       (scalar Killing readout)
   stiefel.py              Exp D  St(4,2)                   (matrix Killing readout)
   earthquake.py           Exp E  S^2, real data            (vMF mixture, 3343 modes)
+  fixed_support.py        Appendix A.2  fixed-support space X^(r)_{n,k} + GB1
   tests_math.py           standalone mathematical unit tests
   figures.py              all paper figures + the comparison table
   gallery.py              sample gallery -- the samples, not their metrics
   remeasure.py            re-derives the Ising and sphere tables from ckpt/
+  _stiefel_extra.py       KS(E) and E_err for the Stiefel sweep, from ckpt/
+  _rasbs_extra.py         KS(phi) and second-moment error for R-ASBS, from ckpt/
   scripts/                the shell scripts that produced our json/ entries
+    rerun_ckpt.sh           Ising + occupation trains and scaling legs
+    rerun_sphere.sh         sphere exact + plain/anti/sym, 5 seeds each
+    run_occ.sh              occupation estimator ablation (1-sample legs)
+    run_scale.sh            occupation scaling + variance probes
+    run_scalefix.sh         Stiefel beta = 50/100 at 199 steps
+    run_anneal.sh           Stiefel beta 50 -> 100 anneal
+    run_anneal_chain.sh     Stiefel beta 50 -> 65 -> 80 -> 100 chain
+    run_anneal_b100.sh      single beta = 100 leg from the beta = 50 control
+    run_anneal_b100_fine.sh same at 796 steps
+
+dam/                      THE OTHER BASELINE (Discrete Adjoint Matching)
+  core.py                 gKL loss, adjoint estimator, control box
+  discrete.py             the three benchmark adapters + CLI
+  tests_math.py           gradient identity, path-weight identity, estimator
+  run_dam.sh              every DAM leg reported in section 6.2
+  run_ising_L5.sh         Ising L=5 leg          (running, section 8)
+  run_occs128_K64.sh      occupation m=128 leg   (running, section 8)
+  run_occs1000_K64.sh     occupation m=1000 leg  (queued,  section 8)
 
 rasbs/                    THE BASELINE, kept apart from our code
   rasbs_port.py           faithful PyTorch port of R-ASBS alg2_stiefel.m
@@ -31,7 +52,8 @@ rasbs/                    THE BASELINE, kept apart from our code
   rasbs_sphere_audit.py   closed-form falsification tests for that port
   rasbs_steps.sh          their beta = 2 step ablation
   rasbs_steps_highbeta.sh their beta = 50/100 step ablation
-  regen_f64.sh            float64 rerun at beta = 2
+  regen_f64.sh            float64 rerun at beta = 2, for the fig-7 residual panel
+  run_fidelity_audit.sh   --init matlab audits + the five repaired seeds
 ```
 
 Code is split by *whose method it is*; artifacts are not. Most figures plot
@@ -202,6 +224,8 @@ count with the iid floor marked, not the learned run's single number. **Both
 figures are 4×4 only** — neither `figures.py` nor `gallery.py` has a 5×5 code
 path, so the 5×5 subsection below is tables only.
 
+**Repro:** `bash structured_asbs/scripts/rerun_ckpt.sh` (its Ising legs) -> `json/results_ising_{poisson,poisson256,mse}.json` + `ckpt/ising_{poisson,poisson256,mse}.pt`; `python structured_asbs/fixed_ising.py exact` -> `json/results_ising_exact.json` (closed form, no checkpoint); `python structured_asbs/remeasure.py ising` re-derives every table above from `ckpt/ising_poisson256.pt`.
+
 ### Scaling the exact check: the 5×5 lattice
 
 The 4×4 lattice is small enough that "exact" costs nothing. The point of
@@ -294,6 +318,8 @@ python structured_asbs/fixed_ising.py train --L 5 --steps 512 --iters 6000 \
 python structured_asbs/remeasure.py ising5
 ```
 
+**Repro:** `structured_asbs/fixed_ising.py train --L 5 ...` and `... exact` (the block above) -> `json/results_ising_t1_L5.json`, `json/results_ising_t1_L5_s512.json`, `json/results_ising_t1_L5_exact.json` + `ckpt/ising_t1_L5.pt`, `ckpt/ising_t1_L5_s512.pt`.
+
 ---
 
 ## Occupation
@@ -368,6 +394,8 @@ occupancy weighting cuts the variance about 4× against one sample
 measurement at m = N = 128 and 1000 is in `results_occ_var128.json` and
 `results_occ_var1000.json`, and also passes.
 
+**Repro:** `bash structured_asbs/scripts/rerun_ckpt.sh` (its occupation legs) -> `json/results_occ_{full,uniform,occupancy,mse}.json` + `ckpt/occ4_{full,uniform,occupancy,mse}.pt`; `bash structured_asbs/scripts/run_occ.sh` adds the 1-sample estimator ablation `json/results_occ_{occ1,unif1}.json`.
+
 ### Scaling to 10⁶⁰⁰ states
 
 Same network (136,450 parameters) and the same code at every size; only the
@@ -415,6 +443,8 @@ python structured_asbs/occupation.py train --estimator occupancy \
 python structured_asbs/occupation.py train --loss mse \
     --tag occ4_mse --out json/results_occ_mse.json
 ```
+
+**Repro:** `bash structured_asbs/scripts/run_scale.sh` -> `json/results_occ_s{32,128,1000}.json` plus the variance probes `json/results_occ_var{,128,1000}.json`; `rerun_ckpt.sh` runs the same three legs with `--ckpt-dir ckpt` and writes `ckpt/occ_s{32,128,1000}.pt`.
 
 ---
 
@@ -586,6 +616,8 @@ python rasbs/rasbs_sphere_port.py --check            # port self-checks
 python rasbs/rasbs_sphere_port.py --problem bimodal --seed 0   # the collapse
 python rasbs/rasbs_sphere_audit.py --test vmf        # designed, never run to completion
 ```
+
+**Repro:** `bash structured_asbs/scripts/rerun_sphere.sh` -> `json/results_sphere_exact.json`, `json/results_sphere_train_{plain,anti,sym}.json` + `ckpt/sphere_{plain,anti,sym}_seed{0..4}.pt`; `python structured_asbs/remeasure.py sphere` re-derives every table above from those checkpoints.
 
 ---
 
@@ -760,6 +792,8 @@ python structured_asbs/earthquake.py train --kappa 600 --anneal 150 300 450 600 
 python rasbs/rasbs_sphere_port.py --problem quake              # the R-ASBS column
 ```
 
+**Repro:** `structured_asbs/earthquake.py train` then `verify` (the block above) -> `json/results_earthquake_k600.json` and `json/results_earthquake.json` + `ckpt/earthquake_k600.pt`. The R-ASBS column is `python rasbs/rasbs_sphere_port.py --problem quake` -> `json/results_rasbs_sphere_quake.json` + `ckpt/rasbs_sphere_quake.pt`.
+
 ---
 
 ## Stiefel
@@ -869,6 +903,8 @@ ways — 199 steps at β = 50 and 100 — gives 3.3116 / 3.2614 at 5,000 samples
 at 796 for us; ~780 s per β at 512 steps and ~1560 s at 1024 for them. Every
 `results_*.json` records `train_s` (ours) or `wall_s` (theirs).
 
+**Repro:** `bash structured_asbs/scripts/run_scalefix.sh` (beta = 50, 100 at 199 steps), `run_anneal.sh` (50 -> 100 anneal), `run_anneal_chain.sh` (50 -> 65 -> 80 -> 100) and `run_anneal_b100_fine.sh` (796 steps) -> `json/results_stiefel_{fill,scalefix,anneal_b50,anneal_b100,anneal_b100_fine}.json` and `json/results_chain_b{65,80,100}.json` + `ckpt/stiefel_{fill,scalefix,anneal,anneal_fine}_b*_seed0.pt`, `ckpt/chain_b*_seed0.pt` (each with its `_mcmc.pt` reference). The R-ASBS column is `python rasbs/rasbs_port.py` -> `json/results_rasbs_stiefel.json` + `ckpt/rasbs_b*.pt`.
+
 ### Beyond the mean energy
 
 The table above compares `E[E]` and nothing else, which is the weakest question
@@ -925,6 +961,8 @@ samples are not interchangeable, and scoring the port's samples with the IASBS
 `H` returns `E ≈ 8.00` at every β, i.e. exactly the β → 0 asymptote, which looks
 like total failure and is in fact a basis mismatch. Each set of samples is scored
 with the `H` it was trained against.
+
+**Repro:** `python structured_asbs/_stiefel_extra.py` -> `json/results_stiefel_extra.json`. No training: it scores `ckpt/rasbs_b{1.3,2,5}.pt` against the same MCMC references `ckpt/stiefel_grid_b*_mcmc.pt` that IASBS is scored against.
 
 ### The step-count ablation
 
@@ -994,6 +1032,8 @@ worth recording:
 - **Refinement fixes the mean, not the law.** At β = 100 and 3184 steps ΔE is
   +0.019 and the spread 2.1× the reference's, but KS(E) = 0.258 still fails the
   gate every other β passes.
+
+**Repro:** `bash rasbs/rasbs_steps.sh` and `bash rasbs/rasbs_steps_highbeta.sh` -> `json/results_rasbs_steps_{32,64,128,256,512}.json`, `json/results_rasbs_highbeta_steps_{199,512,1024}.json` + `ckpt/rasbs_*.pt`; our row is `python structured_asbs/stiefel.py sweep` -> `json/results_stiefel_sweep.json` + `ckpt/stiefel_d3_sweep_steps*.pt`.
 
 ### Figures
 
@@ -1072,6 +1112,8 @@ ablations above pass it explicitly. Both were originally written without it,
 which silently discarded the eleven controls they trained; the numbers in this
 section survived only because they were already in `json/`. The default was
 changed so that the omission cannot recur.
+
+**Repro:** `python structured_asbs/figures.py` draws every figure and the comparison table from the committed `json/` and `ckpt/` files; `python structured_asbs/gallery.py` draws the sample galleries. The float64 orthogonality panel needs `bash rasbs/regen_f64.sh` -> `json/results_rasbs_b2_f64.json`, `json/results_stiefel_b2_f64.json` + float64 `ckpt/rasbs_b2.pt`, `ckpt/stiefel_grid_b2_seed0.pt`.
 
 ---
 
@@ -1154,6 +1196,8 @@ multiplicative perturbation, as the intertwining identity predicts, but the L=5
 excursion is 3.5x the L=4 one — the corrector is working measurably harder, which
 is the same direction as the A1 miss.
 
+**Repro:** `structured_asbs/fixed_ising.py train-nondirac --L 4` and `--L 5` (see §7) -> `json/results_ising_nd_L4.json`, `json/results_ising_nd_L5.json` + `ckpt/ising_nd_L4.pt`, `ckpt/ising_nd_L5.pt`.
+
 #### 2.2 Occupation process m=4, non-Dirac — validated against exact IPF
 
 Gate: TV at or below the i.i.d. floor; Sinkhorn marginal error at machine precision.
@@ -1170,6 +1214,8 @@ showing the method is not tuned to a symmetric source.
 
 Component breakdown (uniform): occupancy-histogram TV 0.00614, max-occupancy TV
 0.00744, mean energy 1.88671.
+
+**Repro:** `structured_asbs/occupation.py train-nondirac --m 4` (and `--nu-skew` for the skewed source) -> `json/results_occ_nd_m4.json`, `json/results_occ_nd_m4_skew.json` + `ckpt/occ_nd_m4.pt`, `ckpt/occ_nd_m4_skew.pt`.
 
 #### 2.3 Occupation process — scaling in m
 
@@ -1215,6 +1261,8 @@ inside the binomial departure sampler. Two distinct defects, both now fixed in
 
 Both seeds then passed all three gates with `bad_labels = 0`, `skipped_steps = 0`.
 
+**Repro:** `structured_asbs/occupation.py scale-nondirac --m {32,128,1000}` (see §7 for the m=1000 flags) -> `json/results_occ_nd_s{32_seed0,32_seed1,128,1000}.json` + `ckpt/occ_nd_s{32_seed0,32_seed1,128,1000}.pt`.
+
 ---
 
 ### 3. IASBS on the sphere S^2
@@ -1240,6 +1288,8 @@ a **37x** reduction in hemisphere error over the plain estimator.
 Per-seed (antithetic): north_err = 0.00109 / 0.00040 / 0.00040 / 0.00045 / 0.00113;
 KS_z = 0.02199 / 0.02113 / 0.02253 / 0.02076 / 0.02185. Constraint violation 0.0 on
 every seed.
+
+**Repro:** `bash structured_asbs/scripts/rerun_sphere.sh` -> `json/results_sphere_train_{anti,sym,plain}.json` + `ckpt/sphere_{anti,sym,plain}_seed{0..4}.pt`.
 
 #### 3.2 Non-Dirac (Haar) source, 5 seeds, 4000 iterations — **DONE**
 
@@ -1297,6 +1347,8 @@ An ablation without antithetic augmentation is retained at
 degradation the Dirac plain run shows, confirming the augmentation is what
 stabilises both branches.
 
+**Repro:** `structured_asbs/sphere.py train-nondirac` (see §7) -> `json/results_sphere_nd.json` + `ckpt/sphere_nd_seed{0..4}.pt`; the plain-init control is `ckpt/sphere_nd_plain_seed0.pt`. The three extra statistics come from `python structured_asbs/remeasure.py sphere` reading those checkpoints.
+
 ---
 
 ### 4. R-ASBS baseline on S^2 — the mode-collapse claim
@@ -1315,6 +1367,8 @@ Bimodal target, kappa = 600, 600 epochs, 500 steps, 5 seeds.
 | **mean** | — | **0.49878** | **0.50484** |
 
 Every seed collapses to a single mode (mass 0 or 1, never 0.5).
+
+**Repro:** `python rasbs/rasbs_sphere_port.py --problem bimodal --seed {0..4}` -> `json/results_rasbs_sphere_bimodal{,_s1,_s2,_s3,_s4}.json` + `ckpt/rasbs_sphere_bimodal*.pt`; the epoch controls are `json/results_rasbs_sphere_bimodal_e{100,300}.json`.
 
 #### 4.2 Authors' own `--init matlab`
 
@@ -1346,6 +1400,8 @@ a property of on-policy self-training. Any description of R-ASBS as exhibiting
 "spontaneous mode collapse" must be retracted; the honest statement is that R-ASBS
 is *initialisation-sensitive*.
 
+**Repro:** `bash rasbs/run_fidelity_audit.sh` -> `json/results_rasbs_sphere_matlabinit_s{0..4}.json` and the two closed-form audits `json/results_rasbs_audit_{uniform,vmf}_mi.json` + `ckpt/rasbs_sphere_matlabinit_s{0..4}.pt`, `ckpt/rasbs_audit_{uniform,vmf}_mi.pt`; `python structured_asbs/_rasbs_extra.py` adds KS(phi) and the second-moment error from those same checkpoints, without retraining.
+
 #### 4.3 Head-to-head on the same target
 
 | method | mean north_err | mean KS_z | mean W1_z | mean KS(phi) | mean `\|Delta E[x_3^2]\|` |
@@ -1373,6 +1429,8 @@ is *below* the 0.00224 i.i.d. floor at its sample size, i.e. its azimuthal
 marginal is exactly uniform up to sampling noise, as the Killing readout
 guarantees by construction. R-ASBS sits 4.2x above the corresponding floor, so its
 azimuthal error is a real bias rather than sampling noise.
+
+**Repro:** no new run — the table scores `json/results_rasbs_sphere_matlabinit_s{0..4}.json` against `json/results_sphere_nd.json`.
 
 ---
 
@@ -1418,8 +1476,7 @@ TV trajectory (K=16): 0.41674 (it 50) -> 0.39471 (200) -> 0.20222 (250) ->
 0.06995 (300) -> 0.05128 (400) -> 0.02749 (650) -> 0.01974 (850) -> 0.01696 (1050)
 -> **0.01490** (1200). ESS rises with it: 7.86/16 -> 15.88/16.
 
-`json/results_dam_occ4_K{1_diag,4_diag,64}.json`,
-`json/results_dam_occupation_m4_K16.json`, `json/results_dam_occ4_K16_long.json`.
+**Repro:** `bash dam/run_dam.sh occ4` -> `json/results_dam_occupation_m4_K16.json` (400 it), `json/results_dam_occ4_K16_long.json` (1200 it), `json/results_dam_occ4_K64.json` + the identically-named `ckpt/dam_occ4_K16_long.pt`, `ckpt/dam_occ4_K64.pt`, `ckpt/dam_occupation_m4_K16.pt`.
 
 #### 5.2 Diminishing returns above K=16
 
@@ -1435,6 +1492,8 @@ Per terminal evaluation, K=16 is the better spend:
 |---|---|---|---|
 | 16 | 0.01490 | 20,889,600 | 0.00071 |
 | 64 | 0.04498 | 26,624,000 | 0.00169 |
+
+**Repro:** as §5.1 — `bash dam/run_dam.sh occ4`.
 
 #### 5.3 Cost comparison, the headline number
 
@@ -1474,6 +1533,8 @@ given enough rollouts it converges, and its ESS diagnostics are healthy at K=16.
 It is *expensive*, because the adjoint `phi_t` it estimates by Monte Carlo is
 exactly the object the intertwining identity hands IASBS for free.
 
+**Repro:** IASBS side `json/results_occ_full.json` + `ckpt/occ4_full.pt` (`bash structured_asbs/scripts/rerun_ckpt.sh`); DAM side `bash dam/run_dam.sh occ4`.
+
 ---
 
 ### 6. Computational cost
@@ -1505,6 +1566,8 @@ described in §2.3.1 with a smaller learning rate; the m=128 leg converged in th
 original schedule. Cost is set by the corrector schedule, not by m, up to m~128.
 At m=1000 the per-iteration cost does rise (10.15 s/iter) because the run uses
 256 simulation steps rather than 128.
+
+**Repro:** no separate run — every wall-clock figure is the `wall`/`time` field of the json artifact named in the section that reports the corresponding accuracy number.
 
 #### 6.1.1 R-ASBS baseline (sphere S^2)
 
@@ -1541,6 +1604,8 @@ IASBS buys a 24x accuracy improvement over the best R-ASBS configuration at abou
 11x the wall clock per seed, on a substantially larger network. We make no
 efficiency claim against R-ASBS; the claim in §4 is about *correctness and
 robustness to initialisation*, not speed.
+
+**Repro:** `python rasbs/rasbs_sphere_port.py` and `bash rasbs/run_fidelity_audit.sh`; timings are stored in `json/results_rasbs_sphere_*.json`.
 
 #### 6.2 DAM
 
@@ -1671,10 +1736,11 @@ loop issuing many small kernels and synchronising on `active.any()`. Consequence
 
 - Batch size is nearly free; the number of `while` iterations is what costs.
 - Co-scheduling two DAM runs on one device roughly *doubles* both wall times rather
-  than overlapping them, which is why the legs are queued serially
-  (`dam/queue_gpu0.sh`).
+  than overlapping them, which is why `dam/run_dam.sh` queues the legs serially.
 - The jumps-per-f1-eval column is the cost multiplier that makes the larger
   spaces expensive: 8.9 on occupation m=4, **87.9** on occupation-scale m=32.
+
+**Repro:** `bash dam/run_dam.sh` runs all seven legs above serially (~19 h on one A100); `bash dam/run_dam.sh occ4` | `ising` | `occs32` runs one group. Artifacts: `json/results_dam_{occupation_m4_K16,occ4_K16_long,occ4_K64,ising_L4_K32_5000,ising_L4_K64_2500,ising_L4_K32_7000,occs32_K64_1000}.json` + the identically-named `ckpt/*.pt`. The exact-control table is read off `fixed_ising.ExactControl`, which needs no training.
 
 #### 6.3 Cost of the comparison, head to head
 
@@ -1705,6 +1771,8 @@ Caveat stated plainly: the two methods do not solve identical optimisation
 problems, and DAM is a general-purpose algorithm that does not require the
 intertwining structure. The comparison shows what that generality costs on a space
 where the structure *is* available, which is the regime this paper is about.
+
+**Repro:** IASBS side `json/results_occ_full.json` + `ckpt/occ4_full.pt`; DAM side `json/results_dam_occ4_K16_long.json` + `ckpt/dam_occ4_K16_long.pt` (`bash dam/run_dam.sh occ4`).
 
 ---
 
@@ -1779,33 +1847,71 @@ its one-swap neighbours, and a heat-kernel table). Any broader reading — "IASB
 evaluates no energies", "IASBS does less arithmetic" — is **not** supported, and
 on Ising the second reading is measurably false.
 
+**Repro:** the counter is `stats["f1_evals"]` in `dam/core.py:estimate_log_adjoint`; `python -m dam.tests_math` checks the identity it accumulates.
+
 ---
 
 ### 7. Reproduction
 
+Every result section above ends with a **Repro:** line naming the script that
+made it, the `json/results_*.json` it wrote and the `ckpt/*.pt` it left behind.
+The index below is the same information grouped by script.
+
+| script | produces | checkpoints |
+|---|---|---|
+| `structured_asbs/scripts/rerun_ckpt.sh` | `results_ising_{poisson,poisson256,mse}`, `results_occ_{full,uniform,occupancy,mse}`, `results_occ_s{32,128,1000}` | `ising_*.pt`, `occ4_*.pt`, `occ_s*.pt` |
+| `structured_asbs/scripts/run_occ.sh` | `results_occ_{occ1,unif1}` (1-sample estimator ablation) | — |
+| `structured_asbs/scripts/run_scale.sh` | `results_occ_s{32,128,1000}`, `results_occ_var{128,1000}` | — |
+| `structured_asbs/scripts/rerun_sphere.sh` | `results_sphere_exact`, `results_sphere_train_{plain,anti,sym}` | `sphere_{plain,anti,sym}_seed{0..4}.pt` |
+| `structured_asbs/scripts/run_scalefix.sh` | `results_stiefel_{scalefix,fill}` | `stiefel_{scalefix,fill}_b*_seed0.pt` (+ `_mcmc.pt`) |
+| `structured_asbs/scripts/run_anneal*.sh` | `results_stiefel_anneal_b{50,100,100_fine}`, `results_chain_b{65,80,100}` | `stiefel_anneal*_b*_seed0.pt`, `chain_b*_seed0.pt` |
+| `structured_asbs/remeasure.py {ising,sphere}` | re-derives those two sections' tables | reads only |
+| `structured_asbs/_stiefel_extra.py` | `results_stiefel_extra` | reads only |
+| `structured_asbs/_rasbs_extra.py` | printed table in §4.3 | reads only |
+| `structured_asbs/figures.py`, `gallery.py` | everything in `fig/` | reads only |
+| `rasbs/rasbs_steps.sh`, `rasbs_steps_highbeta.sh` | `results_rasbs_steps_*`, `results_rasbs_highbeta_steps_*` | `rasbs_*.pt` |
+| `rasbs/run_fidelity_audit.sh` | `results_rasbs_sphere_matlabinit_s{0..4}`, `results_rasbs_audit_{uniform,vmf}_mi` | matching `.pt` |
+| `rasbs/regen_f64.sh` | `results_{rasbs_b2,stiefel_b2}_f64` (float64, for the fig-7 residual panel) | float64 `rasbs_b2.pt`, `stiefel_grid_b2_seed0.pt` |
+| `dam/run_dam.sh` | all seven §6.2 legs: `results_dam_*` | `ckpt/dam_*.pt`, same names |
+
+The runs that have no wrapper script are single commands:
+
 ```bash
-# IASBS, Ising non-Dirac
+# IASBS, Ising non-Dirac (§2.1) -> ckpt/ising_nd_L4.pt
 python structured_asbs/fixed_ising.py train-nondirac --L 4 --steps 256 --iters 3000 \
     --n-samples 200000 --tag ising_nd_L4 --out json/results_ising_nd_L4.json
 
-# IASBS, occupation scaling
+# IASBS, occupation non-Dirac scaling (§2.3) -> ckpt/occ_nd_s1000.pt
 python structured_asbs/occupation.py scale-nondirac --m 1000 --steps 256 --iters 1500 \
     --mb 512 --n-samples 4000 --tag occ_nd_s1000 --out json/results_occ_nd_s1000.json
 
-# IASBS, sphere non-Dirac (Haar)
+# IASBS, sphere non-Dirac (Haar) (§3.2) -> ckpt/sphere_nd_seed{0..4}.pt
 python structured_asbs/sphere.py train-nondirac --steps 128 --iters 4000 --inner 16 \
     --inner-h 4 --batch 8192 --mb 16384 --mb-h 4096 --hidden 256 --lr 1e-3 \
     --ema 0.9995 --antithetic --seeds 5 --eval-every 200 --n-samples 200000 \
     --tag sphere_nd --out json/results_sphere_nd.json
 
-# DAM baseline
-python -m dam.discrete occupation --m 4 --K 16 --steps 128 --iters 1200 --inner 4 \
-    --mb 256 --batch 512 --eval-every 50 --n-samples 20000 \
-    --tag dam_occ4_K16_long --out json/results_dam_occ4_K16_long.json
+# IASBS, Stiefel step ablation (§"The step-count ablation") -> ckpt/stiefel_d3_sweep_steps*.pt
+python structured_asbs/stiefel.py sweep --out json/results_stiefel_sweep.json
 
-# DAM correctness tests (gradient identity, path-weight identity, adjoint estimator)
-python -m dam.tests_math
+# IASBS, earthquakes (§Earthquakes) -> ckpt/earthquake_k600.pt
+python structured_asbs/earthquake.py train --tag earthquake_k600 \
+    --out json/results_earthquake_k600.json
+
+# R-ASBS Stiefel baseline (§Stiefel) -> ckpt/rasbs_b*.pt
+python rasbs/rasbs_port.py --out json/results_rasbs_stiefel.json
+
+# R-ASBS sphere baseline (§4.1) -> ckpt/rasbs_sphere_bimodal*.pt
+python rasbs/rasbs_sphere_port.py --problem bimodal --seed 0 \
+    --tag rasbs_sphere_bimodal --out json/results_rasbs_sphere_bimodal.json
+
+# Correctness tests -- no artifacts, no GPU time worth mentioning
+python structured_asbs/tests_math.py     # 27 gates, incl. the Appendix A.2 space
+python -m dam.tests_math                 # 11 gates for the DAM baseline
 ```
+
+Each `json/results_*.json` carries the full `config` block it was produced with,
+so any flag not spelled out above can be read back off the artifact itself.
 
 ---
 
