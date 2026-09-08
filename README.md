@@ -44,7 +44,6 @@ dam/                      THE OTHER BASELINE (Discrete Adjoint Matching)
   run_dam.sh              every DAM leg reported in section 6.2
   run_ising_L5.sh         Ising L=5 leg          (running, section 8)
   run_occs128_K64.sh      occupation m=128 leg   (running, section 8)
-  run_occs1000_K64.sh     occupation m=1000 leg  (queued,  section 8)
 
 rasbs/                    THE BASELINE, kept apart from our code
   rasbs_port.py           faithful PyTorch port of R-ASBS alg2_stiefel.m
@@ -1917,19 +1916,19 @@ so any flag not spelled out above can be read back off the artifact itself.
 
 ### 8. Still running / still to run
 
-**Running:** three DAM legs, all with the §6.2 control box.
+**Running:** two DAM legs, both with the §6.2 control box.
 
 | job | status |
 |---|---|
-| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, ~25 h |
-| DAM Ising L=5, K=32, 5000 it | running on GPU1, ~4.5 h |
-| DAM occupation-scale m=1000, K=64, 200 it | queued behind the L=5 leg on GPU1 |
+| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, 131 s/it, ETA ~18 h |
+| DAM Ising L=5, K=32, 5000 it | running on GPU1, 3.1 s/it, ETA ~4.3 h |
 
 **Not run, and why**
 
 | job | reason |
 |---|---|
 | DAM occupation-scale m=32, K=256 | the K axis saturates around K=32-64 (§6.2), so more rollouts per label is not where accuracy comes from |
+| DAM occupation-scale m=1000 | per-iteration cost scales superlinearly in m — 16.6 s at m=32 and 131 s at m=128, both at K=64 — which puts a 200-iteration leg at m=1000 near 190 h on one A100. Not a useful spend |
 | IASBS_600 Stiefel at beta = 0.1, 0.5, 7, 10, 20 | matched-budget ablation not performed at those temperatures; ~28 min per beta if wanted |
 
 **Text only**
