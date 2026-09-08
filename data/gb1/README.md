@@ -5,8 +5,10 @@ Source: Wu N.C., Dai L., Olson C.A., Lloyd-Smith J.O., Sun R. (2016),
 **eLife 5:e16965**, DOI [10.7554/eLife.16965](https://doi.org/10.7554/eLife.16965).
 Licensed CC-BY 4.0.
 
-The two supplementary workbooks are **not** committed (see `.gitignore`); they
-are ~9 MB and are redistributable only from the publisher.  Fetch them with:
+Both supplementary workbooks are committed here (7.0 MB total) so the experiment
+runs without a network fetch.  eLife publishes them under CC-BY 4.0, which
+permits redistribution with attribution; the citation above is that attribution.
+To re-download them from the publisher instead:
 
 ```bash
 mkdir -p data/gb1
