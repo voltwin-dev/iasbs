@@ -9,3 +9,8 @@ torch==2.5.1
 numpy==2.4.6
 scipy==1.17.1
 matplotlib==3.11.1
+
+# Only needed for the GB1 fixed-support experiment (Appendix A.2): reads the
+# two eLife 2016;5:e16965 supplementary .xlsx workbooks.  Not imported by any
+# other experiment.
+openpyxl==3.1.5

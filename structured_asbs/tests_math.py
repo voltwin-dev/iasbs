@@ -536,6 +536,16 @@ def test_stiefel_spin_clock(fast=False):
 # ============================================================================
 
 
+# ============================================================================
+# [A2.*] Appendix A.2 fixed-support tests (structured_asbs/_a2_tests.py)
+# ============================================================================
+
+from structured_asbs._a2_tests import A2_TESTS  # noqa: E402
+
+for _name, _fn in A2_TESTS:
+    test(_name)(_fn)
+
+
 def main():
     C.use_repo_root()
     ap = argparse.ArgumentParser()

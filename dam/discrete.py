@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import common as C                                              # noqa: E402
 from structured_asbs import fixed_ising as FI                    # noqa: E402
 from structured_asbs import occupation as OC                     # noqa: E402
+from structured_asbs import fixed_support as FS                   # noqa: E402
 from dam.core import (rollout_ctmc, estimate_log_adjoint, gkl_loss,
                       rates_ns, TINY, LOG_M_CLIP)                # noqa: E402
 
@@ -108,6 +109,70 @@ class IsingAdapter:
 
     def violations(self, idx):
         return int((self.sp.S[idx].sum(dim=1) != self.sp.k).sum())
+
+
+
+class FixedSupportAdapter:
+    """Appendix A.2 fixed-support chain (toy Potts ring and GB1 HD=3).
+
+    Every legal edge -- relabel or support move -- carries base rate
+    gamma / E, so the base escape rate is exactly gamma and the controlled
+    rate is (gamma / E) exp(a_theta), matching the Ising adapter contract.
+    """
+
+    name = "fixed-support"
+
+    def __init__(self, space, clamp=20.0):
+        self.sp = space
+        self.clamp = clamp
+        self.base = space.gamma / space.n_edges
+
+    def _a_all(self, net, t, idx):
+        sp = self.sp
+        if not torch.is_tensor(t):
+            t = torch.full((idx.shape[0],), float(t), device=sp.device)
+        elif t.dim() == 0:
+            t = t.expand(idx.shape[0])
+        out = net(sp.states_t[idx], t).to(torch.float64)
+        return torch.gather(out, 1, sp.edge_out_t[idx])
+
+    def rate_state(self, net, t, idx):
+        sp = self.sp
+        av = self._a_all(net, t, idx).clamp(-self.clamp, self.clamp)
+        u = self.base * torch.exp(av)
+        R = u.sum(dim=1)
+        Rb = torch.full_like(R, float(sp.gamma))
+        return rates_ns(R, Rb, u=u, av=av)
+
+    def sample_edge(self, rt, generator=None):
+        B = rt.u.shape[0]
+        ar = torch.arange(B, device=rt.u.device)
+        e = torch.multinomial(rt.u, 1, generator=generator)[:, 0]
+        log_a = rt.av[ar, e]
+        log_q = (torch.log(rt.u[ar, e].clamp_min(TINY))
+                 - torch.log(rt.R_model.clamp_min(TINY)))
+        return e, log_a, log_q
+
+    def apply_edge(self, idx, e, mask):
+        return torch.where(mask, self.sp.tgt_t[idx, e], idx)
+
+    def a_on_edge(self, net, t, idx, e):
+        ar = torch.arange(idx.shape[0], device=self.sp.device)
+        return self._a_all(net, t, idx)[ar, e].clamp(-self.clamp, self.clamp)
+
+    def base_rate_on_edge(self, idx, e):
+        return torch.full((idx.shape[0],), self.base, device=self.sp.device,
+                          dtype=torch.float64)
+
+    def log_f1(self, idx):
+        return self.sp.logf1_t[idx]
+
+    def source_state(self, batch):
+        return torch.full((batch,), self.sp.i0, device=self.sp.device,
+                          dtype=torch.long)
+
+    def violations(self, idx):
+        return int(((self.sp.S[idx] != 0).sum(dim=1) != self.sp.k).sum())
 
 
 class OccAdapter:
@@ -419,6 +484,73 @@ def run_ising(args):
                    headline={"TV": tv}, extra_diag={"log_multiplier_RMSE": rmse})
 
 
+
+def run_fixed_support(args):
+    sp, meta, fit = FS.build_space(args)
+    sp.i0 = sp.x0_idx
+    torch.manual_seed(args.seed)
+    net = FS.FixedSupportController(sp.n, sp.r, sp.out_dim,
+                                    hidden=args.hidden).to(sp.device)
+    ad = FixedSupportAdapter(sp, **_ac(args))
+    n_par = sum(p.numel() for p in net.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    steps = args.steps
+    sp.build_kappa_grid(steps)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=max(1, args.iters * args.inner), eta_min=args.lr * 0.05)
+    print(f"[DAM fixed-support] target={args.target} |X|={sp.M}  "
+          f"params={n_par}  steps={steps}  K={args.K}  device={sp.device}",
+          flush=True)
+
+    buf, hist, store = [], [], _new_store()
+    t0 = time.time()
+    for it in range(1, args.iters + 1):
+        x0 = ad.source_state(args.batch)
+        X1, _, jj = rollout_ctmc(ad, net, x0,
+                                 torch.zeros(args.batch, device=sp.device),
+                                 steps)
+        store["jumps"] += int(jj.sum())
+        buf.append(X1)
+        if len(buf) > args.buffer:
+            buf.pop(0)
+        pool = torch.cat(buf)
+
+        for _ in range(args.inner):
+            sel = torch.randint(len(pool), (args.mb,), device=sp.device)
+            ti = torch.randint(steps, (args.mb,), device=sp.device)
+            with torch.no_grad():
+                Xt = sp.sample_bridge(pool[sel], ti)
+            loss, st = dam_step(ad, net, opt, sched, Xt, ti, steps, args.K,
+                                args.K_num, m_clip=args.m_clip,
+                                ess_min=args.ess_min, coef_cap=args.coef_cap)
+            _acc(store, st)
+
+        if it % args.eval_every == 0 or it == args.iters:
+            with torch.no_grad():
+                p = FS.propagate_exact(
+                    sp, lambda t: FS.net_mult_all_states(sp, net, t), steps)
+            tv = 0.5 * float((p - sp.pi_t).abs().sum())
+            hist.append({"iter": it, "TV": tv, "loss": loss,
+                         "ess": store["ess"][-1]})
+            print(f"  it {it:4d}  loss {loss:11.4f}  TV {tv:.5f}  "
+                  f"ESS {store['ess'][-1]:.2f}/{args.K}  "
+                  f"({time.time()-t0:.0f}s)", flush=True)
+
+    with torch.no_grad():
+        p = FS.propagate_exact(
+            sp, lambda t: FS.net_mult_all_states(sp, net, t), steps)
+        idx, _, _ = rollout_ctmc(ad, net, ad.source_state(args.n_samples),
+                                 torch.zeros(args.n_samples, device=sp.device),
+                                 steps)
+    tv = 0.5 * float((p - sp.pi_t).abs().sum())
+    viol = ad.violations(idx)
+    rep = FS.report(sp, p, samples=idx, fitness=fit)
+    return _finish(args, ad, net, sp, p=p, samples=idx, tv=tv, viol=viol,
+                   hist=hist, store=store, n_par=n_par, wall=time.time() - t0,
+                   headline={"TV": tv}, extra_diag={"report": rep,
+                                                    "meta": meta})
+
+
 def _mult_rmse_ising(sp, net, steps):
     ctrl = FI.ExactControl(sp, steps)
     out = []
@@ -634,7 +766,14 @@ def _finish(args, ad, net, sp, p, samples, tv, viol, hist, store, n_par, wall,
 def main():
     C.use_repo_root()
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["ising", "occupation", "occupation-scale"])
+    ap.add_argument("cmd", choices=["ising", "occupation", "occupation-scale",
+                                    "fixed-support"])
+    ap.add_argument("--target", type=str, default="toy",
+                    choices=["toy", "gb1", "gb1-product2"])
+    ap.add_argument("--gb1-measured", dest="gb1_measured", type=str,
+                    default="data/gb1/elife-16965-supp1-v4.xlsx")
+    ap.add_argument("--gb1-imputed", dest="gb1_imputed", type=str,
+                    default="data/gb1/elife-16965-supp2-v4.xlsx")
     ap.add_argument("--L", type=int, default=4)
     ap.add_argument("--J", type=float, default=1.0)
     ap.add_argument("--m", type=int, default=4)
@@ -678,6 +817,11 @@ def main():
         args.gamma = 10.0 if args.gamma is None else args.gamma
         args.hidden = args.hidden or 512
         key = f"dam_ising_L{args.L}_K{args.K}"
+    elif args.cmd == "fixed-support":
+        args.tau = 1.0 if args.tau is None else args.tau
+        args.gamma = 10.0 if args.gamma is None else args.gamma
+        args.hidden = args.hidden or 512
+        key = f"dam_fixed_support_{args.target.replace('-','_')}_K{args.K}"
     else:
         args.tau = 1.0 if args.tau is None else args.tau
         args.gamma = 4.0 if args.gamma is None else args.gamma
@@ -687,7 +831,8 @@ def main():
     args.tag = args.tag or key
 
     return {"ising": run_ising, "occupation": run_occupation,
-            "occupation-scale": run_scale}[args.cmd](args)
+            "occupation-scale": run_scale,
+            "fixed-support": run_fixed_support}[args.cmd](args)
 
 
 if __name__ == "__main__":

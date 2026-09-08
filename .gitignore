@@ -12,3 +12,7 @@ rasbs_ref/
 
 __pycache__/
 *.pyc
+
+# GB1 supplementary workbooks (eLife 2016;5:e16965), ~9 MB, redistributable
+# only from the publisher.  Fetch with data/gb1/README.md instructions.
+data/gb1/*.xlsx
