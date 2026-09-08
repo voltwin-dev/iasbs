@@ -4,10 +4,11 @@
 # `while` loop, so DAM is latency-bound and co-scheduling two legs on one device
 # roughly doubles both wall times instead of overlapping them.
 #
-#   bash dam/run_dam.sh            # all seven legs, ~19 h total on one A100
+#   bash dam/run_dam.sh            # all eight legs, ~23 h total on one A100
 #   bash dam/run_dam.sh occ4       # only the occupation m=4 legs   (~ 6 h)
 #   bash dam/run_dam.sh ising      # only the Ising L=4 legs        (~10 h)
 #   bash dam/run_dam.sh occs32     # only occupation-scale m=32     (~4.6 h)
+#   bash dam/run_dam.sh isingL5    # only Ising L=5                 (~4.3 h)
 #
 # Writes json/results_<tag>.json and ckpt/<tag>.pt for each leg.
 set -u
@@ -70,6 +71,15 @@ if [ "$WHICH" = all ] || [ "$WHICH" = occs32 ]; then
 run dam_occs32_K64_1000 occupation-scale --m 32 --K 64 --steps 128 --iters 1000 \
     --inner 4 --mb 256 --batch 512 --hidden 128 --lr 1e-3 $STAB \
     --eval-every 25 --n-samples 10000 --seed 0
+fi
+
+# ---------------------------------------------------------------- Ising L=5
+# Section 6.2.  |Omega| = 5,200,300, 404x the L=4 space; identical control box
+# and the 5000 iterations that L=4 needed to reach its floor.
+if [ "$WHICH" = all ] || [ "$WHICH" = isingL5 ]; then
+run dam_ising_L5_K32_5000 ising --L 5 --K 32 --steps 128 --iters 5000 \
+    --inner 4 --mb 256 --batch 512 --hidden 512 --lr 1e-3 $STAB \
+    --eval-every 250 --n-samples 20000 --seed 0
 fi
 
 echo "=== [$(date -u '+%F %T UTC')] DONE ($WHICH)"

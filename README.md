@@ -1643,6 +1643,7 @@ off — which is the practical difficulty claim 6 asserts.
 | Ising L=4 | 64 | 2500 | 6,950 | 2.78 | 166,400,000 | 924,000,000 | 5.55 |
 | Ising L=4 | 32 | 7000 | 16,226 | 2.32 | 236,544,000 | 1,339,809,998 | 5.66 |
 | Occupation-scale m=32 | 64 | 1000 | 16,572 | 16.6 | 66,560,000 | 5,849,804,432 | 87.9 |
+| Ising L=5 | 32 | 5000 | 15,391 | 3.08 | 168,960,000 | 1,372,615,519 | 8.12 |
 
 **Accuracy.**  Constraint violations are 0 on every row.
 
@@ -1655,10 +1656,11 @@ off — which is the practical difficulty claim 6 asserts.
 | Ising L=4 | 64 | 2500 | TV 0.08103 (E-hist 0.06567) | FAIL | 58.62 / 64 | 42.47 / 8.36 |
 | Ising L=4 | 32 | 7000 | TV 0.06339 (E-hist 0.05206) | FAIL | 30.64 / 32 | 24.91 / 11.40 |
 | Occupation-scale m=32 | 64 | 1000 | KS_occ **0.0128** (KS_max 0.0399, W1max/N 0.0068) | **PASS** | 55.58 / 64 | 31.39 / 1.10 |
+| Ising L=5 | 32 | 5000 | TV 0.39956 (E-hist 0.19000) | FAIL | 13.39 / 32 | 8.53 / 2.01 |
 
 IASBS on the same targets, for reference: occupation m=4 TV **0.0117**
-(Dirac **0.012730**), Ising L=4 TV **0.03470**, occupation-scale m=32
-KS_occ **0.0043** (KS_max 0.0305, W1max/N 0.0052).
+(Dirac **0.012730**), Ising L=4 TV **0.03470**, Ising L=5 TV **0.07228**,
+occupation-scale m=32 KS_occ **0.0043** (KS_max 0.0305, W1max/N 0.0052).
 
 **Ising L=4: DAM plateaus at TV ~0.062 and never reaches the TV <= 0.05 gate.**
 The 7000-iteration run is healthy throughout — loss positive, ESS at 96%
@@ -1700,6 +1702,26 @@ target.  And the cost is not comparable: **5.85 billion simulated jumps** and
 ESS 10th percentile of **1.10** also says the healthy mean of 31.4 hides a tail
 of batches carried by a single rollout.
 
+**Ising L=5 is where the gap becomes an order of magnitude.** The 404x larger
+constraint set (`|Omega| = 5,200,300` against 12,870) gets the identical control
+box and 5000 iterations, which is what L=4 needed to reach its floor. It
+converges — loss positive from iteration ~3250, ESS rising monotonically
+6.91 -> **13.39 / 32**, 0 violations — but only to:
+
+| it | 3250 | 3500 | 4000 | 4250 | 4500 | 4750 | 5000 |
+|---|---|---|---|---|---|---|---|
+| TV | 0.49883 | 0.46154 | 0.41855 | 0.41352 | 0.41032 | 0.40511 | **0.39956** |
+| E-hist TV | 0.28391 | 0.23797 | 0.19383 | 0.21109 | 0.19141 | 0.19710 | 0.19000 |
+| ESS / 32 | 10.18 | 11.18 | 11.64 | 12.78 | 13.35 | 12.60 | 13.39 |
+
+TV **0.39956** against IASBS's **0.07228** on the same target (§2.1) — a factor
+of **5.5** — for 169 M f1 evaluations, 1.37 billion simulated jumps and 4.3 h.
+Unlike L=4 this one has *not* flattened: it is still falling ~0.005 per 250
+iterations at the cutoff, so a larger budget would improve it. That is the point.
+The budget L=4 needed to reach 0.062 leaves L=5 at 0.400, and the 32x-per-space
+scaling of the gradient budget that would close it is a cost IASBS does not pay:
+IASBS reaches 0.07228 at L=5 in 3000 iterations with zero adjoint rollouts.
+
 **Budget is the dominant axis, and it scales with the state space.**  Occupation
 m=4 (`|X| = 35`) converges in 1200 iterations at K=16.  Ising L=4
 (`|Omega| = 12,870`, 368x larger) needs 3000 at K=16 just to leave its transient
@@ -1739,7 +1761,7 @@ loop issuing many small kernels and synchronising on `active.any()`. Consequence
 - The jumps-per-f1-eval column is the cost multiplier that makes the larger
   spaces expensive: 8.9 on occupation m=4, **87.9** on occupation-scale m=32.
 
-**Repro:** `bash dam/run_dam.sh` runs all seven legs above serially (~19 h on one A100); `bash dam/run_dam.sh occ4` | `ising` | `occs32` runs one group. Artifacts: `json/results_dam_{occupation_m4_K16,occ4_K16_long,occ4_K64,ising_L4_K32_5000,ising_L4_K64_2500,ising_L4_K32_7000,occs32_K64_1000}.json` + the identically-named `ckpt/*.pt`. The exact-control table is read off `fixed_ising.ExactControl`, which needs no training.
+**Repro:** `bash dam/run_dam.sh` runs all eight legs above serially (~23 h on one A100); `bash dam/run_dam.sh occ4` | `ising` | `occs32` | `isingL5` runs one group. Artifacts: `json/results_dam_{occupation_m4_K16,occ4_K16_long,occ4_K64,ising_L4_K32_5000,ising_L4_K64_2500,ising_L4_K32_7000,occs32_K64_1000,ising_L5_K32_5000}.json` + the identically-named `ckpt/*.pt`. The exact-control table is read off `fixed_ising.ExactControl`, which needs no training.
 
 #### 6.3 Cost of the comparison, head to head
 
@@ -1916,12 +1938,11 @@ so any flag not spelled out above can be read back off the artifact itself.
 
 ### 8. Still running / still to run
 
-**Running:** two DAM legs, both with the §6.2 control box.
+**Running:** one DAM leg, with the §6.2 control box.
 
 | job | status |
 |---|---|
-| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, 131 s/it, ETA ~18 h |
-| DAM Ising L=5, K=32, 5000 it | running on GPU1, 3.1 s/it, ETA ~4.3 h |
+| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, 131 s/it |
 
 **Not run, and why**
 
