@@ -1,0 +1,148 @@
+{
+  "method": "DAM",
+  "benchmark": "fixed-support",
+  "config": {
+    "cmd": "fixed-support",
+    "target": "gb1",
+    "gb1_measured": "data/gb1/elife-16965-supp1-v4.xlsx",
+    "gb1_imputed": "data/gb1/elife-16965-supp2-v4.xlsx",
+    "L": 4,
+    "J": 1.0,
+    "m": 4,
+    "N": 4,
+    "d": 0.5,
+    "tau": 1.4,
+    "gamma": 10.0,
+    "K": 16,
+    "K_num": 1,
+    "steps": 256,
+    "iters": 400,
+    "inner": 4,
+    "batch": 512,
+    "mb": 256,
+    "buffer": 8,
+    "hidden": 512,
+    "lr": 0.001,
+    "a_clamp": 0.0,
+    "m_clip": 30.0,
+    "ess_min": 0.0,
+    "coef_cap": 0.0,
+    "eval_every": 50,
+    "n_samples": 2000,
+    "seed": 0,
+    "out": "json/results_dam_fs_gb1_k3_K16_B.json",
+    "ckpt_dir": "ckpt",
+    "tag": "dam_fs_gb1_k3_K16_B",
+    "init_from": "ckpt/dam_fs_gb1_k3_K16_A.pt"
+  },
+  "params": 766844,
+  "headline": {
+    "TV": 0.2703950890482738
+  },
+  "dam": {
+    "ess_mean": 8.436777950110775,
+    "ess_p10": 4.888967058258714,
+    "rollout_jumps": 42548716,
+    "f1_evals": 6963200,
+    "clipped_labels": 0,
+    "nonfinite_weights": 0,
+    "wall_sec": 2510.9,
+    "K": 16,
+    "K_num": 1,
+    "stab": {
+      "a_clamp": 0.0,
+      "m_clip": 30.0,
+      "ess_min": 0.0,
+      "coef_cap": 0.0,
+      "lr": 0.001
+    }
+  },
+  "violations": 0,
+  "history": [
+    {
+      "iter": 50,
+      "TV": 0.33990679699744764,
+      "loss": 7.639253444868468,
+      "ess": 7.788413464904952
+    },
+    {
+      "iter": 100,
+      "TV": 0.31543484021583235,
+      "loss": 8.497449364977268,
+      "ess": 8.117634134024819
+    },
+    {
+      "iter": 150,
+      "TV": 0.3284480087220783,
+      "loss": 9.268692326167287,
+      "ess": 8.175123149797956
+    },
+    {
+      "iter": 200,
+      "TV": 0.3118244344181902,
+      "loss": 8.85449530614635,
+      "ess": 8.397186827902878
+    },
+    {
+      "iter": 250,
+      "TV": 0.2884773508970216,
+      "loss": 8.120124511323851,
+      "ess": 8.681108229652143
+    },
+    {
+      "iter": 300,
+      "TV": 0.2759058493718056,
+      "loss": 8.713452927259953,
+      "ess": 9.42262666449112
+    },
+    {
+      "iter": 350,
+      "TV": 0.2740724284024007,
+      "loss": 7.113779478854132,
+      "ess": 9.372792526350189
+    },
+    {
+      "iter": 400,
+      "TV": 0.2703950890482738,
+      "loss": 8.615121752134245,
+      "ess": 9.63310441715149
+    }
+  ],
+  "report": {
+    "tv": 0.2703950890482738,
+    "kl": 0.30006279436176553,
+    "hellinger": 0.2575127039953146,
+    "mean_energy": 1.5390292796719247,
+    "target_mean_energy": 0.6267988018240843,
+    "mass_err": 1.3322676295501878e-15,
+    "argmax_state": 8645,
+    "argmax_p": 0.0008636811378817666,
+    "argmax_pi": 0.0007730694489175143,
+    "mean_fitness": 0.9613126793046752,
+    "target_mean_fitness": 1.350597823943017,
+    "tv_emp": 0.7239130226648092,
+    "violations": 0
+  },
+  "meta": {
+    "target": "gb1",
+    "name": "fixed_support_gb1_k3",
+    "n": 4,
+    "k": 3,
+    "r": 20,
+    "tau": 1.4,
+    "gamma": 10.0,
+    "doi": "10.7554/eLife.16965",
+    "measured": 149361,
+    "imputed": 10639,
+    "sector": 27436,
+    "wt": "VDGV",
+    "eps": 0.0001,
+    "alphabet": "ACDEFGHIKLMNPQRSTVWY",
+    "E_min": -1.836580894588803,
+    "E_max": 9.210340371976182,
+    "E_mean": 4.958196023542688,
+    "E_std": 2.5893353596846937,
+    "pi_max": 0.0008560051388512868,
+    "entropy": 8.822791104518814
+  }
+}

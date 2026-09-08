@@ -492,6 +492,13 @@ def run_fixed_support(args):
     net = FS.FixedSupportController(sp.n, sp.r, sp.out_dim,
                                     hidden=args.hidden).to(sp.device)
     ad = FixedSupportAdapter(sp, **_ac(args))
+    if getattr(args, "init_from", ""):
+        # Weights only, so DAM can run the same temperature-annealed GB1
+        # schedule that is the IASBS default (see run_gb1_anneal.sh).
+        blob = torch.load(args.init_from, map_location=sp.device,
+                          weights_only=False)
+        net.load_state_dict(blob["state_dict"])
+        print(f"  warm start <- {args.init_from} (weights only)", flush=True)
     n_par = sum(p.numel() for p in net.parameters())
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     steps = args.steps
@@ -807,6 +814,7 @@ def main():
     ap.add_argument("--out", type=str, default="")
     ap.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="ckpt")
     ap.add_argument("--tag", type=str, default="")
+    ap.add_argument("--init-from", dest="init_from", type=str, default="")
     args = ap.parse_args()
 
     if args.N <= 0:

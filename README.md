@@ -43,6 +43,7 @@ dam/                      THE OTHER BASELINE (Discrete Adjoint Matching)
   discrete.py             the three benchmark adapters + CLI
   tests_math.py           gradient identity, path-weight identity, estimator
   run_dam.sh              every DAM leg reported in section 6.2
+  run_dam_a2.sh           the two Appendix A.2 legs of section 2.6 (toy, GB1 annealed)
   run_occs128_K64.sh      occupation m=128 leg   (running, see section 8)
 
 rasbs/                    THE BASELINE, kept apart from our code
@@ -1434,6 +1435,75 @@ plus `--gb1-measured data/gb1/elife-16965-supp1-v4.xlsx --gb1-imputed
 data/gb1/elife-16965-supp2-v4.xlsx`) -> `json/results_fs_gb1_k3_dirac.json`,
 `json/results_fs_gb1_k3_nd.json` + `ckpt/fs_gb1_k3_{dirac,nd}.pt`.
 
+#### 2.6 DAM on the same two A.2 spaces — matched head-to-head
+
+The Appendix A.2 rows above are the only place in this repo where DAM and IASBS
+solve the *same* constrained sampling problem on a space large enough for the
+comparison to mean something (81,081 and 27,436 states, both with an exactly
+computable terminal law).  DAM was given the identical schedules: 1200 flat
+`tau = 1` iterations on the toy, and the same temperature-annealed
+`2.0 -> 1.4 -> 1.0` chain on GB1 that is the IASBS default of section 2.5.2
+(3 x 400 iterations, warm started through `--init-from`).  Both methods hit the
+same 20,000-sample constraint audit at the end.
+
+| space | method | source | exact-law TV | A1 | A2 | iters | f1 evals at rollout endpoints | CTMC jumps simulated | wall (s) | s / it |
+|---|---|---|---|---|---|---|---|---|---|---|
+| toy, \|X\|=81,081 | **IASBS** | **Dirac** | **0.00774** | **PASS** | **PASS** (0 / 20,000) | 3000 | **0** | **0** | 3098 | 1.03 |
+| toy | IASBS | four-atom | 0.00776 | PASS | PASS (0 / 20,000) | 3000 | 0 | 0 | 3294 | 1.10 |
+| toy | DAM, K=16 | Dirac | 0.08285 | FAIL | PASS (0 / 20,000) | 1200 | 20,889,600 | 118,996,727 | 7508 | 6.26 |
+| GB1 k=3, \|X\|=27,436 | **IASBS** | **Dirac** | **0.13568** | FAIL | **PASS** (0 / 20,000) | 3 x 1000 | **0** | **0** | 5814 | 1.94 |
+| GB1 k=3 | IASBS | four-atom | 0.13226 | FAIL | PASS (0 / 20,000) | 3 x 1000 | 0 | 0 | 6079 | 2.03 |
+| GB1 k=3 | DAM, K=16 | Dirac | 0.26472 | FAIL | PASS (0 / 20,000) | 3 x 400 | 20,889,600 | 127,340,484 | 7512 | 6.26 |
+
+**Accuracy.** DAM is **10.7x** worse than Dirac IASBS on the toy (0.08285 vs
+0.00774) and **1.95x** worse on GB1 (0.26472 vs 0.13568), and it misses the A1
+gate on the toy space that IASBS clears with a 6.5x margin.  On GB1 neither
+method reaches A1, so that row is a hardness statement about the target rather
+than a separation - but the gap between them is still a factor of two.
+
+**Cost.** The separation is not bought with compute.  DAM spends
+**20.9 million** rollout-endpoint `f1` evaluations and **119 / 127 million**
+simulated CTMC jumps on the adjoint on each space; IASBS performs **zero** of
+either, because the intertwining identity gives `phi_t` in closed form on the
+orbit quotient (C = 15 orbits for the toy, C = 7 for GB1).  Per wall-clock
+second DAM is also 6x slower per iteration on the identical device, since each
+rollout is a Python-level Gillespie `while` loop.  Both sides were run two legs
+at a time on one A100, so the wall column is comparably loaded on both.
+
+**Constraints.** This is the one thing the two methods agree on exactly: 0
+support-cardinality violations in 20,000 samples for every run in the table, and
+terminal-law mass error at machine precision (6.7e-16 toy, 2.2e-15 GB1 for DAM).
+The A.2 machinery is a property of the state space and the reference chain, not
+of the loss, so it transfers to DAM unchanged.
+
+Secondary quantities on the toy: DAM KL 0.02942 and Hellinger 0.08532 against
+IASBS 0.00020 and 0.00709; mean energy -2.29261 vs target -2.37526 (IASBS
+-2.36170); modal-state mass 0.00088 vs `pi = 0.00093`.  DAM's ESS is healthy
+throughout (13.15 / 16 mean, 9.58 p10, 0 clipped labels, 0 non-finite weights),
+so the gap is the estimator's variance, not a stability failure.
+
+Per-stage DAM on the annealed GB1 chain, each stage measured against its own
+`tau` (compare the IASBS table in section 2.5.2):
+
+| stage | tau | iters | DAM TV | IASBS Dirac TV | jumps | wall (s) |
+|---|---|---|---|---|---|---|
+| A | 2.0 | 400 | 0.25745 | 0.10566 | 41,657,667 | 2508 |
+| B | 1.4 | 400 | 0.27040 | 0.11564 | 42,548,716 | 2511 |
+| C | **1.0** | 400 | **0.26472** | **0.13568** | 43,134,101 | 2493 |
+
+DAM's annealed chain is flat: it does not pick up the stage-A advantage that
+IASBS gets from the softer target (0.257 vs 0.106), so warm starting through the
+temperature ladder carries almost nothing forward for it.  DAM's GB1 mean fitness
+is 1.45539 against the target's 1.83499, i.e. it *under*-weights the fit tail,
+where annealed IASBS overshoots slightly (1.85499); DAM's modal-state overweight
+is 1.18x (`p = 0.00144` vs `pi = 0.00122`).
+
+**Repro:** `bash dam/run_dam_a2.sh both` ->
+`json/results_dam_fs_toy_v2_K16.json`,
+`json/results_dam_fs_gb1_k3_K16_{A,B,C}.json` +
+`ckpt/dam_fs_toy_v2_K16.pt`, `ckpt/dam_fs_gb1_k3_K16_{A,B,C}.pt`; the reported
+GB1 row is stage `C`.
+
 ---
 
 ### 3. IASBS on the sphere S^2
@@ -2066,6 +2136,7 @@ The index below is the same information grouped by script.
 | `rasbs/run_fidelity_audit.sh` | `results_rasbs_sphere_matlabinit_s{0..4}`, `results_rasbs_audit_{uniform,vmf}_mi` | matching `.pt` |
 | `rasbs/regen_f64.sh` | `results_{rasbs_b2,stiefel_b2}_f64` (float64, for the fig-7 residual panel) | float64 `rasbs_b2.pt`, `stiefel_grid_b2_seed0.pt` |
 | `dam/run_dam.sh` | all seven §6.2 legs: `results_dam_*` | `ckpt/dam_*.pt`, same names |
+| `dam/run_dam_a2.sh` | the two A.2 legs of §2.6: `results_dam_fs_*` | `ckpt/dam_fs_*.pt`, same names |
 
 The runs that have no wrapper script are single commands:
 
@@ -2128,7 +2199,7 @@ so any flag not spelled out above can be read back off the artifact itself.
 
 - README correction of the R-ASBS mode-collapse description (§4.2).
 
-**Done since the last update.** Appendix A.2 fixed-support toy, both sources (§2.4): exact-law TV 0.00774 / 0.00776, A1 and A2 both PASS. Appendix A.2 GB1 k=3, both sources (§2.5): exact-law TV 0.21465 / 0.19501 at 3000 iterations, A1 FAIL and A2 PASS. The temperature-annealed schedule of §2.5.2, now the GB1 default at the same 3000-iteration budget, brings those to 0.13568 / 0.13226.
+**Done since the last update.** Appendix A.2 fixed-support toy, both sources (§2.4): exact-law TV 0.00774 / 0.00776, A1 and A2 both PASS. DAM on the same two A.2 spaces (§2.6), on matched schedules: TV 0.08285 on the toy (A1 FAIL) and 0.26472 on annealed GB1, for 20.9 M rollout-endpoint f1 evals and 119 / 127 M simulated jumps each, against 0 for IASBS. Appendix A.2 GB1 k=3, both sources (§2.5): exact-law TV 0.21465 / 0.19501 at 3000 iterations, A1 FAIL and A2 PASS. The temperature-annealed schedule of §2.5.2, now the GB1 default at the same 3000-iteration budget, brings those to 0.13568 / 0.13226.
 
 **One honest negative, recorded rather than buried.** IASBS Ising L=5 misses its
 accuracy gate at TV 0.07228 (§2.1). Its A2 constraint gate passes, 0 / 200,000.
