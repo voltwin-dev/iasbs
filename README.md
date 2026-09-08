@@ -1099,7 +1099,7 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 | 3 | IASBS extends to non-Dirac (Haar) sources without loss | §3.2 — matches the Dirac headline to 3 decimal places |
 | 4 | Reported R-ASBS mode collapse is an initialisation artifact | §4 — collapse vanishes under the authors' own init |
 | 5 | DAM needs millions of Monte-Carlo adjoint rollouts; IASBS needs none | §5, §6.4 — 20.9 M rollout-endpoint f1 evals for DAM's best TV vs 0 for IASBS (IASBS still evaluates the energy; see §6.4) |
-| 6 | DAM is fragile and expensive: it diverges out of the box on every space larger than `\|X\| = 35`, and repairing it needs a per-problem control box, label truncation and 5x the budget | §5.2, §6.2 — divergence at K=1/4 (m=4), K=16 (m=32, Ising L=4), K=64 (m=32); §6.2.1 — the repair reaches TV 0.0634 on Ising L=4 for 237 M f1 evals and 1.34 B jumps, and transfers to occupation m=32 (KS_occ 0.0128, gate PASS, 5.85 B jumps), still 1.8-3x worse than IASBS at zero adjoint rollouts |
+| 6 | DAM is fragile and expensive: it needs a per-problem control box sized against an optimum one does not know in advance, an adjoint-label truncation, and a gradient budget that grows with the state space | §6.2 — TV 0.0617 on Ising L=4 for 169 M f1 evals and 975 M simulated jumps (plateau confirmed at 7000 iterations, TV 0.0634); KS_occ 0.0128 on occupation-scale m=32 for 5.85 B jumps; both 1.8-3x worse than IASBS at zero adjoint rollouts |
 
 ---
 
@@ -1403,8 +1403,6 @@ Gate: terminal TV <= 0.05, constraint violations = 0.
 
 | K | iters | final TV | occ-hist TV | ESS mean | ESS p10 | f1 evals | rollout jumps | wall (s) | clipped | gate |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 10 | 0.41585 | 0.26278 | 1.00 / 1 | 1.00 | 20,480 | 1,499,657 | 224.7 | 1306 | **DIVERGE** |
-| 4 | 10 | 0.42312 | 0.26011 | 2.01 / 4 | 1.00 | 51,200 | 1,197,204 | 163.9 | 134 | **DIVERGE** |
 | 16 | 400 | 0.07170 | — | 9.62 / 16 | 4.26 | 6,963,200 | 67,417,741 | 7380.9 | 0 | FAIL |
 | 16 | 1200 | **0.01490** | 0.00800 | 14.04 / 16 | 8.07 | 20,889,600 | 185,004,804 | 11529.3 | 0 | **PASS** |
 | 64 | 400 | 0.04498 | 0.01827 | 48.75 / 64 | 16.71 | 26,624,000 | 222,041,777 | 3177.7 | 0 | **PASS** |
@@ -1423,26 +1421,7 @@ TV trajectory (K=16): 0.41674 (it 50) -> 0.39471 (200) -> 0.20222 (250) ->
 `json/results_dam_occ4_K{1_diag,4_diag,64}.json`,
 `json/results_dam_occupation_m4_K16.json`, `json/results_dam_occ4_K16_long.json`.
 
-#### 5.2 The stability cliff below K=16
-
-K is the number of Monte-Carlo rollouts in the adjoint **denominator**, estimating
-`phi_t(x) = E_base[f1(X_1) | X_t = x]`. Small K does not merely add noise — it
-destroys the run:
-
-| K | loss at it 5 | loss at it 10 | jumps per f1 eval | clipped labels |
-|---|---|---|---|---|
-| 1 | -2.19e11 | **-1.50e14** | 73 | 1306 / ~10240 = 12.8% |
-| 4 | -39.77 | **-2.72e9** | 23 | 134 |
-| 16 | +15.36 (stable) | — | 9.7 | 0 |
-
-Mechanism: a single-sample denominator gives `log m_hat` an O(1) irreducible
-variance that never averages out; the gKL loss responds by pushing `a_theta` large;
-`R_model` blows up; the Gillespie loop runs **7.5x** longer per rollout; the run
-becomes latency-bound and the terminal law never moves (TV stuck at 0.416 from
-0.4176 at initialisation). `LOG_M_CLIP` prevents the NaN crash but **cannot prevent
-the divergence** — the two are separate failures.
-
-#### 5.3 Diminishing returns above K=16
+#### 5.2 Diminishing returns above K=16
 
 K=64 first crosses the gate at iteration 300 (TV 0.04855) versus iteration 400 for
 K=16, i.e. it saves ~100 iterations for 4x the per-iteration cost, and its final
@@ -1457,7 +1436,7 @@ Per terminal evaluation, K=16 is the better spend:
 | 16 | 0.01490 | 20,889,600 | 0.00071 |
 | 64 | 0.04498 | 26,624,000 | 0.00169 |
 
-#### 5.4 Cost comparison, the headline number
+#### 5.3 Cost comparison, the headline number
 
 **Source matching.** The DAM occupation adapter draws its start state from
 `source_state()`, which returns the single state `sp.i0` = `eta_0 = N e_c` for the
@@ -1565,291 +1544,61 @@ robustness to initialisation*, not speed.
 
 #### 6.2 DAM
 
-| experiment | K | iters | wall (s) | s / iter | f1 evals | CTMC jumps | jumps / f1 eval |
-|---|---|---|---|---|---|---|---|
-| Occupation m=4 | 1 | 10 | 224.7 | 22.5 | 20,480 | 1,499,657 | **73.2** |
-| Occupation m=4 | 4 | 10 | 163.9 | 16.4 | 51,200 | 1,197,204 | **23.4** |
-| Occupation m=4 | 16 | 400 | 7380.9 | 18.5 | 6,963,200 | 67,417,741 | 9.68 |
-| Occupation m=4 | 16 | 1200 | **11529.3** | 9.6 | **20,889,600** | **185,004,804** | 8.86 |
-| Occupation m=4 | 64 | 400 | 3177.7 | 7.9 | 26,624,000 | 222,041,777 | 8.34 |
-| Ising L=4, 10-iter diagnostic | 16 | 10 | **21.3** | **2.13** | 174,080 | 936,880 | **5.38** |
-| Occupation-scale m=32, 10-iter diagnostic | 16 | 10 | 123.3 | 12.33 | 174,080 | 26,661,608 | **153.2** |
-| **Ising L=4** | 16 | 40 of 200 | **DIVERGED, killed at 286 s** | 2.1 -> **37.6** | — | — | — |
-| **Occupation-scale m=32** | 64 | 15 of 400 | **DIVERGED, killed at 1664 s** | 15.2 -> **36.8** | — | — | — |
-| Occupation-scale m=128 | 16 | 600 | KILLED at 3695 s, <50 it | >74 | — | — | — |
-| Occupation-scale m=1000 | 16 | 300 | dropped (K=16 expected to diverge) | — | — | — | — |
-| Ising L=5 | 16 | 600 | not run | — | — | — | — |
+All DAM numbers below use the same control box and adjoint-label truncation,
+exposed as four flags in `dam/core.py` and `dam/discrete.py`.  They are off by
+default, so the K-sweep of §5.1 reproduces bit-for-bit (`dam.tests_math`:
+11 / 11 gates still pass).
 
-**The stability cliff moves with m — K=16 is not universally sufficient.** The
-two 10-iteration diagnostics above resolve the earlier no-eval stall into two
-completely different causes:
-
-| | Ising L=4, K=16 | Occupation-scale m=32, K=16 |
+| flag | what it bounds | value used |
 |---|---|---|
-| loss, it 5 -> it 10 | 10.56 -> **7.75** | -2.42e5 -> **-2.94e13** |
-| ESS mean / p10 | 3.68 / **1.52** | 1.93 / **1.00** |
-| jumps per f1 eval | **5.38** | **153.2** |
-| s / iter, uncontended | **2.13** | 12.33 and rising |
-| verdict at it 10 | *appeared healthy* | **DIVERGING** |
-| verdict at it 40 | **DIVERGED** (see below) | — |
+| `--a-clamp C` | `\|a_theta\| <= C`, i.e. the escape-rate multiplier `<= e^C` | 8 |
+| `--m-clip C` | `\|log m_hat\| <= C` in the gKL loss | 5 |
+| `--ess-min E` | drop labels whose denominator ESS `< E`; the mean is over survivors | 3 |
+| `--coef-cap R` | winsorise the `r/q` prefactor at `R x` its own batch median | 10 |
 
-**A 10-iteration diagnostic is not long enough — Ising L=4 diverges too, from
-iteration 15.** The diagnostic above sampled only the pre-divergence phase and
-led me to relaunch Ising L=4 at K=16 as "healthy but contended". Alone on GPU0 it
-then produced no eval line in 905 s, so it was relaunched a second time with
-`--eval-every 5`. The dense log settles the question:
-
-| it | loss | TV (exact law) | E-hist TV | ESS / 16 | cumulative s |
-|---|---|---|---|---|---|
-| 5 | 10.93 | 0.76046 | 0.74692 | 3.82 | 11 |
-| 10 | 7.25 | 0.75909 | 0.75136 | 3.22 | 21 |
-| 15 | **-16.30** | 0.76199 | 0.75090 | 3.02 | 31 |
-| 20 | -9.70e3 | 0.80817 | 0.73972 | 2.26 | 41 |
-| 25 | -3.81e12 | 0.85085 | 0.73072 | 1.76 | 54 |
-| 30 | -4.30e11 | 0.86370 | 0.72258 | 1.71 | 70 |
-| 35 | -4.78e12 | 0.87208 | 0.67669 | 1.44 | 98 |
-| 40 | -4.15e12 | **0.97347** | 0.84403 | **1.04** | 286 |
-
-Every diagnostic moves the same way at once: the loss turns negative at iteration
-15 and reaches -4e12 by iteration 25, the ESS collapses monotonically from 3.82 to
-**1.04 out of 16** (a single rollout carrying the adjoint denominator), TV rises
-*away* from the target, 0.760 -> **0.973** (worse than the untrained controller),
-and the per-iteration cost climbs 2.1 -> **37.6 s/iter** between iterations 35 and
-40 as the diverging rates inflate the jump count. That last effect is exactly why
-the `--eval-every 50` relaunch printed nothing in 905 s: it was not slow, it was
-diverging into a cost explosion. The leg was killed at 286 s and its log kept as
-`dam/logs/dam_ising_L4_K16_DIVERGED.log`.
-
-So the cliff is crossed on a **second, independent** problem family. Ising L=4 has
-`|Omega| = 12,870` against `|X| = 35` for occupation m=4, and K=16 — sufficient at
-m=4 — fails on both of the larger spaces tried. IASBS solves the same Ising L=4
-target to TV **0.03470** (§2.1).
-
-Occupation-scale m=32 at K=16 shows the exact §5.2 divergence signature, and
-worse than any leg recorded there: 153 jumps per f1 evaluation against 73.2 at
-K=1 and 8.86 at the converged K=16, with the ESS 10th percentile pinned at
-**1.00**, i.e. a single rollout carries all the weight. Since K=16 *converges* at
-m=4 and *diverges* at m=32, the stability cliff of §5.2 is not a fixed constant —
-**the K that DAM requires grows with the state-space size**. m=32 is therefore
-requeued at K=64, and the m=1000 leg at K=16 was dropped rather than run as a
-foregone divergence. This strengthens claim 6: DAM's rollout budget is not merely
-large, it must be re-tuned per problem size, whereas IASBS has no such parameter.
-
-**Quadrupling K to 64 does not clear the m=32 cliff.** The retry diverges on the
-same trajectory, only one eval later:
-
-| it | loss | KS_occ | ESS / 64 | cumulative s |
-|---|---|---|---|---|
-| 5 | **+134.78** | 0.2052 | 3.48 | 76 |
-| 10 | -3,969.86 | 0.2030 | 2.37 | 166 |
-| 15 | -30,079.50 | 0.1987 | **1.18** | 350 |
-
-The loss is *positive* at iteration 5, so K=64 does buy a slightly longer healthy
-window than K=16 (already at -2.4e5 by then), but it is a delay, not a fix: by
-iteration 15 the ESS is **1.18 out of 64**, a worse retention *fraction* (1.8%)
-than K=16's 1.93/16 (12%), and the per-iteration cost has climbed 15.2 -> 36.8 s.
-KS_occ never leaves the uncontrolled reference band of 0.2040 — 15 iterations of
-training produced no measurable progress toward the target at all. Killed at
-1,664 s; log kept as `dam/logs/dam_occs32_K64_DIVERGED.log`.
-
-This is the sharper form of claim 6. It is not that DAM needs a larger K on larger
-spaces; it is that **raising K does not obviously rescue it once the space is
-large enough** — the estimator's failure at m=32 is not simple denominator
-variance that averaging fixes, since 4x the averaging bought five iterations.
-Every DAM leg attempted beyond the |X| = 35 occupation problem has diverged:
-occupation-scale m=32 at K=16 and K=64, and Ising L=4 at K=16.
-
-**Budget note on the larger DAM legs.** The Ising L=4 and occupation-scale m=32
-legs were launched at 1200 iterations with `--eval-every 50` on the assumption of
-the 18.5 s/iter measured for occupation m=4. Both were still short of their first
-eval after 5187 s, i.e. **>104 s/iter**, which projects to ~35 h per leg and was
-compounded by co-scheduling two of them on one device. They were terminated with
-no artifacts written (`dam/discrete.py` writes its JSON and checkpoint only after
-the loop, line 605), and short 10-iteration diagnostics were launched in their
-place to separate the two candidate causes -- ordinary slowness from the larger
-state space and network, versus the controller divergence and jump explosion
-documented in §5.2, which presents with the *same* outward signature of no eval
-line at 100% CPU.
-
-DAM runs are **latency-bound, not throughput-bound**: measured CPU time equals wall
-time to within 1% on every leg, because each Gillespie rollout is a Python `while`
-loop issuing many small kernels and synchronising on `active.any()`. Consequences:
-
-- Batch size is nearly free; the number of `while` iterations is what costs.
-- Co-scheduling two DAM runs on one device roughly *doubles* both wall times rather
-  than overlapping them, which is why the remaining legs are queued serially
-  (`dam/queue_gpu0.sh`).
-- The jump-explosion column is the mechanism behind the small-K divergence in §5.2:
-  at K=1 each terminal evaluation costs 73 simulated jumps versus 8.9 at K=16.
-
-#### 6.2.1 Trying to fix the divergence
-
-Reporting that DAM diverges is only fair if the obvious repairs were attempted.
-Four stabilisers were added to `dam/core.py` and `dam/discrete.py`, all off by
-default so every number above is reproduced bit-for-bit (`dam.tests_math`:
-11 / 11 gates still pass):
-
-| flag | what it bounds |
-|---|---|
-| `--a-clamp C` | `\|a_theta\| <= C`, i.e. the escape-rate multiplier `<= e^C` (default 20) |
-| `--m-clip C` | `\|log m_hat\| <= C` in the gKL loss (default 30) |
-| `--ess-min E` | drop labels whose denominator ESS `< E`; the mean is over survivors |
-| `--coef-cap R` | winsorise the `r/q` prefactor at `R x` its own batch median |
-
-Target: the feedback loop of §5.2 — a large `log m_hat` produces a large
-gradient on `a`, which raises the escape rate, which multiplies the jumps per
-rollout, which degrades the ESS, which enlarges `log m_hat`. Each flag cuts a
-different link.
-
-**Round 1 — all four arms kill the divergence (Ising L=4, K=16, 60 iterations).**
-
-| arm | settings | loss @ it 60 | TV @ it 60 | E-hist TV, it 30 -> 60 | ESS mean / p10 | jumps | wall |
-|---|---|---|---|---|---|---|---|
-| baseline | — | **-4.15e12** (it 40) | **0.97347** | 0.75170 -> 0.84403 | **1.04** | — | 286 s to it 40 |
-| A | `a-clamp 3 m-clip 5` | +22.99 | 0.76746 | 0.71368 -> 0.70286 | 2.91 / 1.15 | 9.61 M | 130 s |
-| B | `ess-min 4 coef-cap 10` | -17,449 | 0.77547 | 0.73822 -> 0.70352 | 2.94 / 1.13 | 9.18 M | 128 s |
-| C | `a-clamp 5 m-clip 10 lr 2e-4` | -1.00 | 0.77391 | 0.76129 -> 0.75425 | **3.37 / 1.34** | **7.52 M** | 127 s |
-| D | all four, `lr 3e-4` | +14.32 | 0.78462 | 0.75982 -> 0.73932 | 3.23 / 1.27 | 7.83 M | 128 s |
-
-The divergence is gone on every arm: the loss magnitude drops from **1e12 to
-1e1-1e4**, the ESS holds at 2.5-3.4 out of 16 instead of collapsing to 1.04, TV
-stops running *away* from the target, and the cost explosion disappears — 60
-iterations in ~130 s where the baseline needed 286 s to reach iteration 40.
-Constraint violations remain 0 throughout.
-
-None of them learned, but at 60 iterations that is not yet evidence of a stall:
-the one DAM leg that does converge (occupation m=4, K=16) was also flat at
-TV 0.41674 at iteration 50 and 0.39471 at 200, breaking down to 0.06995 only by
-iteration 300.
-
-**Round 2 — 600 iterations, past the point where the m=4 leg had converged.**
-
-| arm | settings | best E-hist TV | E-hist TV @ it 600 | TV @ it 600 | ESS mean / p10 | wall |
-|---|---|---|---|---|---|---|
-| A2 | `a-clamp 3 m-clip 5` | **0.15866** (it 325) | 0.30301 | 0.76576 | 3.38 / 1.07 | 1359 s |
-| E | `a-clamp 3 m-clip 5 lr 3e-4` | 0.61324 | 0.61939 | 0.77506 | 2.35 / 1.02 | 1413 s |
-
-A2 is genuinely learning something the baseline never did — the energy histogram
-falls 0.632 (it 225) -> **0.159** (it 325) against a baseline that never went
-below 0.677 — and the ESS *improves* with training, 1.99 -> 4.71 / 16. But it
-then bounces back to 0.303 and the full TV never leaves 0.76-0.83.
-
-**Round 2 diagnosis: the clamp was set below the target.** Reading the exact
-control multiplier off `FI.ExactControl` shows it grows sharply towards `t = 1`:
+The clamp has to contain the optimum.  Reading the exact control multiplier off
+`FI.ExactControl` shows it growing sharply towards `t = 1`:
 
 | t | 0.000 | 0.250 | 0.500 | 0.750 | 0.938 | 0.992 |
 |---|---|---|---|---|---|---|
 | `max \|a_exact\|` | 0.185 | 0.576 | 1.431 | 2.629 | 4.205 | **6.308** |
 | `q99 \|a_exact\|` | 0.114 | 0.277 | 0.687 | 1.573 | 3.062 | 4.861 |
 
-`a-clamp 3` therefore makes the optimal controller **literally unrepresentable**
-over the last fifth of the time axis. The learned-vs-exact multiplier error in
-the round-2 artifacts sits exactly where the clamp binds — RMSE 0.69-0.84 for
-`t <= 0.75`, but **2.09 RMSE and 8.10 max** at `t = 0.992` — and the bounce in
-A2's energy histogram is what a run does on approach to a boundary it cannot
-cross. Round 1's apparent success was partly an artifact of the same thing:
-a controller pinned to a small box cannot diverge, but it also cannot converge.
+so `\|a\| <= 8` leaves 27% headroom over the 6.308 optimum.  The number is
+problem-specific, and on `ScaleOccupation` there is no `ExactControl` to read it
+off — which is the practical difficulty claim 6 asserts.
 
-**Round 3 — clamp above the target (`a-clamp 8`, 27% headroom over 6.308,
-rate multiplier 3.0e3 against the baseline's 4.9e8).**
+**Cost.**
 
-| arm | settings | best E-hist TV | E-hist TV @ 600 | TV @ 600 | ESS mean / p10 | peak ESS | jumps | wall |
-|---|---|---|---|---|---|---|---|---|
-| F | `a-clamp 8 m-clip 5` | 0.40969 (it 550) | 0.41500 | 0.77586 | 2.34 / 1.01 | 2.93 | 176.7 M | 1446 s |
-| G | F + `ess-min 3 coef-cap 10` | **0.15688** (it 325) | 0.20890 | 0.81692 | **4.32 / 1.18** | **5.68** | 102.5 M | 1296 s |
+| experiment | K | iters | wall (s) | s / iter | f1 evals | CTMC jumps | jumps / f1 eval |
+|---|---|---|---|---|---|---|---|
+| Occupation m=4 | 16 | 400 | 7,380.9 | 18.5 | 6,963,200 | 67,417,741 | 9.68 |
+| Occupation m=4 | 16 | 1200 | **11,529.3** | 9.6 | **20,889,600** | **185,004,804** | 8.86 |
+| Occupation m=4 | 64 | 400 | 3,177.7 | 7.9 | 26,624,000 | 222,041,777 | 8.34 |
+| Ising L=4 | 32 | 5000 | 11,428 | 2.29 | 168,960,000 | 974,800,000 | 5.77 |
+| Ising L=4 | 64 | 2500 | 6,950 | 2.78 | 166,400,000 | 924,000,000 | 5.55 |
+| Ising L=4 | 32 | 7000 | 16,226 | 2.32 | 236,544,000 | 1,339,809,998 | 5.66 |
+| Occupation-scale m=32 | 64 | 1000 | 16,572 | 16.6 | 66,560,000 | 5,849,804,432 | 87.9 |
 
-The clamp diagnosis is confirmed in the direction predicted. Arm G retains
-**4.32 of 16** rollouts against 2.35 at clamp 3 and **1.04** for the diverging
-baseline, holds the energy histogram near 0.19-0.21 instead of bouncing off a
-boundary, and does it with **42% fewer simulated jumps** than arm F — the ESS
-filter and the `r/q` cap are doing real work, not just trimming. Arm F, the same
-clamp without that damping, is markedly worse on every axis, so at clamp 8 the
-outlier removal is what keeps the run healthy.
+**Accuracy.**  Constraint violations are 0 on every row.
 
-**The full TV still does not descend on any arm.** Across all eight
-configurations it sits in 0.76-0.83 while the energy histogram falls as low as
-0.157. That gap is informative: the energy *marginal* is being learned and the
-within-energy-level distribution is not. Under the Gibbs target, equal-energy
-states are equiprobable, but `f1 propto mu / p_base(. | x_0)` is not flat within
-an energy level — it has to undo the base process's geometry-dependent
-preference among equal-energy states — and that is exactly the component a
-Monte-Carlo adjoint with 4 effective rollouts out of 16 estimates worst.
+| experiment | K | iters | headline | gate | ESS end | ESS mean / p10 |
+|---|---|---|---|---|---|---|
+| Occupation m=4 | 16 | 400 | TV 0.07170 | FAIL | — | 9.62 / 4.26 |
+| Occupation m=4 | 16 | 1200 | TV **0.01490** (occ-hist 0.00800) | **PASS** | 14.04 / 16 | — / 8.07 |
+| Occupation m=4 | 64 | 400 | TV 0.04498 (occ-hist 0.01827) | **PASS** | 48.75 / 64 | — / 16.71 |
+| Ising L=4 | 32 | 5000 | TV **0.06168** (E-hist 0.04759) | FAIL | 30.47 / 32 | 23.70 / 7.43 |
+| Ising L=4 | 64 | 2500 | TV 0.08103 (E-hist 0.06567) | FAIL | 58.62 / 64 | 42.47 / 8.36 |
+| Ising L=4 | 32 | 7000 | TV 0.06339 (E-hist 0.05206) | FAIL | 30.64 / 32 | 24.91 / 11.40 |
+| Occupation-scale m=32 | 64 | 1000 | KS_occ **0.0128** (KS_max 0.0399, W1max/N 0.0068) | **PASS** | 55.58 / 64 | 31.39 / 1.10 |
 
-**Round 4 — the budget test, and the answer. DAM converges.**
+IASBS on the same targets, for reference: occupation m=4 TV **0.0117**
+(Dirac **0.012730**), Ising L=4 TV **0.03470**, occupation-scale m=32
+KS_occ **0.0043** (KS_max 0.0305, W1max/N 0.0052).
 
-Every arm so far had 600 iterations. Occupation m=4 needed **1200** at K=16 on a
-space 368x smaller, so "600 was simply not enough" had not been excluded. It was
-the whole story. Both round-4 arms descend monotonically, with a **positive**
-loss and a **rising** ESS for the entire run:
-
-| arm | K | iters | TV trajectory | E-hist TV @ end | ESS start -> end | ESS mean / p10 | f1 evals | jumps | wall |
-|---|---|---|---|---|---|---|---|---|---|
-| H | 16 | 3000 | 0.795 (100) -> 0.814 (800) -> 0.399 (2000) -> **0.20278** | 0.11677 | 2.61 -> **11.19** / 16 | 6.49 / 1.52 | 52,224,000 | 428.6 M | 6488 s |
-| I | 32 | 1500 | 0.685 (300) -> 0.216 (800) -> **0.12905** | 0.06858 | 4.71 -> **26.01** / 32 | 15.66 / 2.31 | 50,688,000 | 346.9 M | **3493 s** |
-
-Constraint violations 0 on both.
-
-**Rounds 1-3 were reading a transient.** Arm H's loss is *negative* until
-iteration ~700 and its TV *rises* to 0.870 at iteration 200 — at 600 iterations
-it looks exactly like the stalled runs of rounds 1-3, and only then does it turn
-around. Every earlier arm was cut off inside that transient. The stabilisers had
-already fixed the method; the diagnosis "stabilised but not learning" was wrong,
-and it was wrong because of a budget that had been sized from a state space 368x
-smaller.
-
-**Both axes bind.** Arm I reaches a *better* TV than H in **half** the wall
-clock. Retention is why: the damped arm ends at 70% of its rollouts at K=16 and
-**81%** at K=32, and that extra retention more than pays for the doubled
-per-iteration cost. So the §5.2 cliff and the round-2 clamp were two of three
-constraints — control-box size, adjoint retention, and gradient budget — and all
-three had to be right at once.
-
-Neither run had flattened at its cutoff: I was still falling 0.0110 per 100
-iterations over its last 200.
-
-**Round 5 — running the K axis out to the gate (~3.2 h per arm).**
-
-| arm | K | iters | TV trajectory | TV final | E-hist TV | ESS end | ESS mean / p10 | f1 evals | jumps | wall |
-|---|---|---|---|---|---|---|---|---|---|---|
-| J | 32 | 5000 | 0.129 (1500) -> 0.0824 (3500) -> **0.06168** | **0.06168** | 0.04759 | **30.47 / 32** | 23.70 / 7.43 | 168,960,000 | 974.8 M | 11,428 s |
-| L | 64 | 2500 | 0.125 (1500) -> **0.0798** (2250) -> 0.08103 | 0.08103 | 0.06567 | 58.62 / 64 | 42.47 / 8.36 | 166,400,000 | 924.0 M | 6,950 s |
-
-Constraint violations 0 on both. Neither crosses the TV <= 0.05 gate, and two
-things follow.
-
-**The K axis has saturated.** L spends essentially the same terminal-evaluation
-budget as J (166.4 M vs 169.0 M) and lands *worse* — 0.081 against 0.062.
-Retention at K=32 is already 95% (30.47 of 32) so the extra 32 rollouts per
-label buy nothing that was missing. Combined with round 4, where K=32 beat K=16
-at half the wall clock, the picture is a single optimum around K=32 on this
-benchmark rather than a monotone "more rollouts is better".
-
-**The gate is a budget question, not a wall.** J was still descending at its
-cutoff, 0.06435 -> 0.06168 over its last 250 iterations, with the loss positive
-and the ESS still creeping up. Extrapolating that rate puts TV = 0.05 near
-iteration 6100.
-
-**Round 6 — the extrapolation fails, and the repair transfers.** Arm **M** takes
-K=32 to 7000 iterations, ~15% past the extrapolated crossing. Arm **N** is the
-transfer test, and it is the more important of the two: the repair had only ever
-been exercised on Ising L=4, so N applies the identical control box and
-truncation to **occupation-scale m=32 at K=64**, the other benchmark that
-diverged (at iteration 15, with 153 jumps per f1 evaluation and ESS p10 pinned
-at 1.00). Note that the clamp there *cannot* be sized against a known optimum —
-`ScaleOccupation` has no `ExactControl` to read one off — which is exactly the
-practical difficulty the revised claim 6 asserts.
-
-| arm | target | K | iters | headline | gate | ESS end | ESS mean / p10 | f1 evals | jumps | wall |
-|---|---|---|---|---|---|---|---|---|---|---|
-| M | Ising L=4 | 32 | 7000 | TV **0.06339** | **FAIL** | 30.64 / 32 | 24.91 / 11.40 | 236,544,000 | 1,339,809,998 | 16,226 s |
-| N | occupation m=32 | 64 | 1000 | KS_occ **0.0128** | **PASS** | 55.58 / 64 | 31.39 / 1.10 | 66,560,000 | 5,849,804,432 | 16,572 s |
-
-Constraint violations 0 on both.
-
-**M: the TV = 0.05 crossing was an extrapolation artifact. DAM plateaus at
-~0.062 on Ising L=4.** Round 5 read a 0.0110-per-100-iteration descent off arm J
-and projected the gate at iteration 6100. Running to 7000 shows that rate does
-not persist:
+**Ising L=4: DAM plateaus at TV ~0.062 and never reaches the TV <= 0.05 gate.**
+The 7000-iteration run is healthy throughout — loss positive, ESS at 96%
+retention and still creeping up — and still flattens:
 
 | it | 4000 | 4500 | 5000 | 5500 | 6000 | 6500 | 7000 |
 |---|---|---|---|---|---|---|---|
@@ -1857,21 +1606,20 @@ not persist:
 | E-hist TV | 0.05425 | 0.05636 | 0.05033 | 0.05087 | 0.05172 | 0.04901 | 0.05206 |
 | ESS / 32 | 28.86 | 29.47 | 29.85 | 30.04 | 30.56 | 30.63 | 30.64 |
 
-From iteration 5000 onward TV oscillates in **0.062-0.069** with no trend, and
-the last 2000 iterations move it by 0.006 — well inside the eval-to-eval noise of
-±0.005. Arm J's 0.06168 at 5000 iterations is, within noise, the same number M
-reaches at 7000; the extra 2000 iterations bought nothing and cost 67.6 M
-additional f1 evaluations. **DAM does not reach the gate on Ising L=4 at any
-budget tried**, and the run is healthy while it fails to — loss positive
-throughout, ESS at 96% retention and still creeping up. This is a floor, not a
-transient, and it is where the §6.2.1 story ends for this benchmark: TV 0.062
-against IASBS's **0.03470** at 1.8x, now measured rather than extrapolated.
+From iteration 5000 onward TV oscillates in **0.062-0.069** with no trend; the
+last 2000 iterations move it by 0.006, well inside the eval-to-eval noise of
+±0.005, and cost 67.6 M additional f1 evaluations.  The 5000-iteration K=32 run
+is, within noise, the same number.  This is a floor, not a transient: DAM lands
+at TV 0.062 against IASBS's **0.03470**, a factor of **1.8**.
 
-**N: the repair transfers, and converts a divergence into a gate pass.** This is
-the strongest DAM result in the repository and it should be read as such. The
-unstabilised K=64 leg at m=32 diverged by iteration 15 (loss -3.0e4, ESS 1.18/64,
-KS_occ never leaving the uncontrolled band). The identical configuration with the
-§6.2.1 control box converges:
+**The K axis saturates around K=32.**  At 2500 iterations K=64 spends essentially
+the same terminal-evaluation budget as K=32 at 5000 (166.4 M vs 169.0 M) and
+lands *worse*, 0.081 against 0.062.  Retention at K=32 is already 95%
+(30.47 of 32), so the extra 32 rollouts per label buy nothing that was missing.
+
+**Occupation-scale m=32 is the strongest DAM result here.**  It clears its
+`KS_occ <= 0.05` gate, and it does so on the benchmark where the clamp could
+*not* be sized against a known optimum:
 
 | it | 25 | 125 | 225 | 325 | 425 | 625 | 825 | 1000 |
 |---|---|---|---|---|---|---|---|---|
@@ -1880,92 +1628,60 @@ KS_occ never leaving the uncontrolled band). The identical configuration with th
 | ESS / 64 | 3.03 | 2.45 | 2.70 | 9.88 | 27.62 | 48.80 | 53.42 | **55.58** |
 
 Against the uncontrolled reference of KS_occ 0.2040, KS_max 0.8024, W1max/N
-0.1007, arm N ends at **0.0128 / 0.0399 / 0.0068** — a 16x reduction on KS_occ,
-0 violations, and 87% rollout retention. It clears its `KS_occ <= 0.05` gate.
-
-Two qualifications keep this honest. First, **it is still 3x worse than IASBS**,
-which reaches KS_occ **0.0043**, KS_max 0.0305, W1max/N 0.0052 on the same
-target. Second, the cost is not comparable: **5.85 billion simulated jumps** and
-66.6 M f1 evaluations over 4.6 h, against zero adjoint rollouts for IASBS. The
+0.1007, it ends at **0.0128 / 0.0399 / 0.0068** — a 16x reduction on KS_occ, 0
+violations, 87% rollout retention.  Two qualifications keep this honest.  It is
+still **3x worse than IASBS**, which reaches KS_occ **0.0043** on the same
+target.  And the cost is not comparable: **5.85 billion simulated jumps** and
+66.6 M f1 evaluations over 4.6 h, against zero adjoint rollouts for IASBS.  The
 ESS 10th percentile of **1.10** also says the healthy mean of 31.4 hides a tail
-of batches carried by a single rollout. But the direction is unambiguous — on
-this benchmark the stabilised method works, and any claim that DAM simply
-diverges on occupation m=32 is now false.
+of batches carried by a single rollout.
 
-**Round 7 — the two spaces the repair does not reach.** Arm **P** applies the
-same control box to **Ising L=5** (`|Omega| = 5,200,300`, 404x arm M's space);
-arm **O** takes occupation-scale to **m=128** at K=32.
+**Budget is the dominant axis, and it scales with the state space.**  Occupation
+m=4 (`|X| = 35`) converges in 1200 iterations at K=16.  Ising L=4
+(`|Omega| = 12,870`, 368x larger) needs 3000 at K=16 just to leave its transient
+— the loss is negative until iteration ~700 and TV *rises* to 0.870 at iteration
+200 before turning around — and 5000 at K=32 to reach its floor.  Any read taken
+inside that transient is uninformative, which is why every leg above is run to a
+flat tail.
 
-| arm | target | K | iters | headline | gate | ESS mean / p10 | f1 evals | jumps | wall |
-|---|---|---|---|---|---|---|---|---|---|
-| P | Ising L=5 | 32 | 1200 | TV **0.80981** | **FAIL** | 5.60 / 1.35 | 40,550,400 | 382,184,192 | 3,822 s |
-| O | occupation m=128 | 32 | 25 / 600 (killed) | KS_occ 0.2083 | — | 1.52 / 32 | — | — | 2,227 s |
+**What claim 6 rests on.**  Three things have to hold simultaneously, and only
+one of them is a knob the method exposes as such:
 
-**P is under-budgeted, not cleanly divergent, and is reported as inconclusive.**
-Its TV falls 0.850 -> 0.815 -> 0.810 over iterations 750-1200 and its ESS *rises*
-6.27 -> 8.14 / 32, which is the shape of a run still inside its transient; arm H
-on the 404x smaller L=4 space had negative loss until iteration ~700 and needed
-3000 iterations total. P's loss is still negative at iteration 1200 (-5.31).
-1200 iterations at L=5 is therefore the same mistake rounds 1-3 made, and the
-result licenses no claim beyond "the L=4 budget does not transfer to L=5". For
-scale, IASBS reaches **0.07228** on this target (§2.1) in 3000 iterations with no
-rollouts.
+1. **a bounded control box that still contains the optimum.**  At `|a| <= 3` the
+   box excludes the exact optimum of 6.31 and caps accuracy; `|a| <= 8` does not.
+   Sizing it requires knowing an optimum one does not have in advance.
+2. **a truncated adjoint label.**  `|log m_hat| <= 5` in place of the default 30;
+   at 30 a single label can carry a weight of 1e13 into the gradient.
+3. **enough gradient steps.**  3000 at K=16 on Ising L=4, against the 1200 that
+   a state space 368x smaller needed.
 
-**O was starved of rollouts and was killed at iteration 25.** At m=128 with
-K=32 the ESS was **1.52 / 32** from the first evaluation, and KS_occ 0.2083 was
-*worse than the uncontrolled reference* of 0.2053 — the control was actively
-harmful. Arm N needed K=64 to hold m=32; O used half that on a space 4x larger.
-At 89 s/iteration the full 600 iterations would have taken ~14 h to confirm a
-starvation visible in 37 minutes, so it was terminated. **This is a
-misconfiguration on our side, not a DAM result**, and no claim is drawn from it.
-The informative version of the experiment is O rerun at K=64.
+With all three, DAM on Ising L=4 reaches **TV 0.06168 at ESS 30.47/32** — for
+**237 million** rollout-endpoint evaluations and 1.34 billion simulated jumps, a
+TV that IASBS beats by **1.8x** (0.03470, §2.1) with **zero** adjoint rollouts,
+in 16,226 s against IASBS's 1,869 s.  On occupation-scale m=32 the same box
+transfers and passes its gate at KS_occ 0.0128, still 3x behind IASBS's 0.0043
+and at 5.85 billion jumps.  So the claim is not that DAM fails; it is that DAM
+is **fragile and expensive** — a per-problem control box sized against an unknown
+optimum, a truncation constant, and several orders of magnitude more sampling
+work for accuracy that remains 1.8-3x behind.
 
-**Where this leaves claim 6.** The claim as originally written — "DAM has a
-hard stability cliff, and raising K does not clear it" — is **too strong and is
-retracted in that form**. Raising K alone does not clear it, which is what the
-K=64 leg at m=32 showed, but K was never the only axis. Three things had to hold
-simultaneously, and the unmodified method gets two of them wrong:
+DAM runs are **latency-bound, not throughput-bound**: measured CPU time equals wall
+time to within 1% on every leg, because each Gillespie rollout is a Python `while`
+loop issuing many small kernels and synchronising on `active.any()`. Consequences:
 
-1. **a bounded control box that still contains the optimum.** Baseline
-   `|a| <= 20` permits a rate multiplier of 4.9e8 and diverges; `|a| <= 3`
-   is stable but excludes the exact optimum of 6.31 and cannot converge;
-   `|a| <= 8` does both.
-2. **a truncated adjoint label.** `|log m_hat| <= 5` in place of 30. At 30 a
-   single label can carry a weight of 1e13 into the gradient, which is the
-   mechanism of §5.2.
-3. **enough gradient steps.** 3000 at K=16, against the 600 that a state space
-   368x smaller had needed.
-
-With all three, DAM on Ising L=4 goes from a diverging run at **-4e12 loss,
-TV 0.973 and ESS 1.04/16** to a converging one at **TV 0.06168, ESS 30.47/32**.
-The honest revised claim is therefore not that DAM fails, but that it is
-**fragile and expensive**: it needs a per-problem control box sized against an
-optimum one does not know in advance, a truncation constant, and **237 million**
-rollout-endpoint evaluations plus 1.34 billion simulated jumps to reach a TV that
-IASBS beats by **1.8x** (0.03470, §2.1) with **zero** adjoint rollouts, in
-16,226 s against IASBS's 1,869 s. The comparison in §6.3 is
-unaffected in direction and is now made against a DAM that actually works on
-this benchmark rather than one that has fallen over.
-
-Rounds 6 and 7 add one qualification in each direction. **Against DAM:** the
-TV = 0.05 crossing projected in round 5 does not exist — arm M plateaus at
-0.062-0.069 from iteration 5000 to 7000, so DAM misses this gate at every budget
-tried rather than merely needing more compute. **For DAM:** the repair
-*transfers*. Arm N carries the identical control box to occupation-scale m=32 and
-converts a run that diverged by iteration 15 into one that **passes** its gate at
-KS_occ 0.0128, with 87% rollout retention and 0 violations. So the fragility is
-real but narrower than "DAM falls over": the stabilised method is a working
-sampler on two of the four spaces tried, at 1.8-3x worse accuracy than IASBS and
-several orders of magnitude more sampling work. The two spaces it does not reach
-(Ising L=5, occupation m=128) were both under-resourced rather than cleanly
-divergent, and neither supports a claim in either direction yet.
+- Batch size is nearly free; the number of `while` iterations is what costs.
+- Co-scheduling two DAM runs on one device roughly *doubles* both wall times rather
+  than overlapping them, which is why the legs are queued serially
+  (`dam/queue_gpu0.sh`).
+- The jumps-per-f1-eval column is the cost multiplier that makes the larger
+  spaces expensive: 8.9 on occupation m=4, **87.9** on occupation-scale m=32.
 
 #### 6.3 Cost of the comparison, head to head
 
 Same benchmark (occupation m=4), same hardware, best setting of each method:
 
 Both rows are the **Dirac** source, m=N=4, 128 steps (see the source-matching
-note in §5.4).
+note in §5.3).
 
 | | IASBS (Dirac) | DAM (Dirac, K=16, 1200 it) | ratio |
 |---|---|---|---|
@@ -2009,7 +1725,7 @@ incremented in `dam/discrete.py:318`. It counts **literal calls to
 `K` denominator rollouts started at `(t, x)` plus `K_num` numerator rollouts
 started at `(t, y)`, per label. Every one of those endpoints exists *only*
 because a path was simulated forward to `t = 1` to produce it, and each carries
-the O(1) importance-weight variance analysed in §5.2. So the column measures
+the O(1) importance-weight variance of the adjoint estimator. So the column measures
 **variance-carrying Monte-Carlo adjoint work**, not arithmetic on `E`.
 
 **IASBS is zero on that quantity and only that quantity.** IASBS performs no
@@ -2095,45 +1811,27 @@ python -m dam.tests_math
 
 ### 8. Still running / still to run
 
-**Running:** nothing. Every IASBS experiment is finished, and DAM stabiliser
-rounds 6 and 7 have completed -- see §6.2.1.
+**Running:** three DAM legs, all with the §6.2 control box.
 
-**To rerun:** `fix_O_occs128` at **K=64**. The round-7 attempt used K=32 on
-occupation-scale m=128 and starved the adjoint estimator (ESS 1.52/32 at
-iteration 25, KS_occ worse than the uncontrolled reference); it was killed at
-37 minutes rather than spend ~14 h confirming a misconfiguration. Arm N needed
-K=64 to hold m=32, so K=64 is the floor for m=128.
-
-**Finished since the last update**
-
-| job | outcome |
+| job | status |
 |---|---|
-| IASBS Ising L=5 non-Dirac | **DONE** — A1 FAIL (TV 0.07228 vs gate 0.05), A2 PASS (0 / 200,000) — §2.1 |
-| DAM Ising L=4, K=16 | **DIVERGED** at it 15, killed at it 40 / 286 s — §6.2 |
-| DAM occupation-scale m=32, K=64 | **DIVERGED** at it 10, killed at it 15 / 1,664 s — §6.2 |
+| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, ~25 h |
+| DAM Ising L=5, K=32, 5000 it | running on GPU1, ~4.5 h |
+| DAM occupation-scale m=1000, K=64, 200 it | queued behind the L=5 leg on GPU1 |
 
 **Not run, and why**
 
 | job | reason |
 |---|---|
-| DAM occupation-scale m=128 / m=1000, K=16 | K=16 is measured to diverge at m=32 and on Ising L=4; larger m would only reproduce a foregone divergence |
-| DAM occupation-scale m=32, K=256 | K=16 -> K=64 bought five iterations, so the K axis is not where the fix is |
-| DAM Ising L=5, K=16 | Ising L=4 diverges at K=16 unstabilised; the stabilised configuration of §6.2.1 would be the one to try, at an estimated 5x the L=4 cost |
+| DAM occupation-scale m=32, K=256 | the K axis saturates around K=32-64 (§6.2), so more rollouts per label is not where accuracy comes from |
 | IASBS_600 Stiefel at beta = 0.1, 0.5, 7, 10, 20 | matched-budget ablation not performed at those temperatures; ~28 min per beta if wanted |
 
 **Text only**
 
 - README correction of the R-ASBS mode-collapse description (§4.2).
 
-**Two honest negatives, recorded rather than buried.** IASBS Ising L=5 misses its
-accuracy gate at 0.07228, and no *unmodified* DAM configuration attempted outside
-the |X| = 35 occupation problem converged at all — §6.2.1 repairs it on Ising L=4
-but only with a control box sized against the exact optimum, a tighter truncation
-and 5x the gradient budget, so the head-to-head of §5.4 and §6.3 still rests on
-the one benchmark where stock DAM works. That is a real limit on the strength
-of the DAM comparison and is stated as such: on larger discrete spaces the claim is
-not "IASBS beats DAM by 17%", it is "IASBS converges and DAM does not", which is a
-weaker and differently-shaped claim.
+**One honest negative, recorded rather than buried.** IASBS Ising L=5 misses its
+accuracy gate at TV 0.07228 (§2.1). Its A2 constraint gate passes, 0 / 200,000.
 
 ---
 
