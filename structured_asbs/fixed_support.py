@@ -936,7 +936,15 @@ def build_space(args, device=None):
     if args.target not in TARGETS:
         raise NotImplementedError(
             f"target {args.target} is not implemented (see Section 27)")
-    cfg = TARGETS[args.target]
+    cfg = dict(TARGETS[args.target])
+    # Reference-measure knobs.  gamma is the (state-independent) escape rate of
+    # the reference chain and tau the target temperature; both are scalars, so
+    # overriding them keeps the reference symmetric under the A.2 group action
+    # and therefore keeps the orbit-kernel propagation exact.
+    if getattr(args, "gamma", 0.0):
+        cfg["gamma"] = float(args.gamma)
+    if getattr(args, "tau", 0.0):
+        cfg["tau"] = float(args.tau)
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
     sp = make_space(cfg["n"], cfg["k"], cfg["r"], gamma=cfg["gamma"],
                     device=dev)
@@ -1242,6 +1250,10 @@ def main():
         # position are not in the checkpoint, so a continuation is a new run
         # initialised at the old weights, not a resumed single schedule.
         p.add_argument("--init-from", dest="init_from", type=str, default="")
+        p.add_argument("--gamma", type=float, default=0.0,
+                       help="override the reference escape rate (0 = target default)")
+        p.add_argument("--tau", type=float, default=0.0,
+                       help="override the target temperature (0 = target default)")
         p.add_argument("--tag", type=str, default=f"fixed_support_{stem}")
         p.add_argument("--gb1-measured", dest="gb1_measured", type=str,
                        default="data/gb1/elife-16965-supp1-v4.xlsx")
