@@ -1,0 +1,87 @@
+{
+  "config": {
+    "cmd": "train",
+    "target": "gb1",
+    "steps": 256,
+    "iters": 1000,
+    "batch": 2048,
+    "buffer": 8,
+    "inner": 40,
+    "mb": 1024,
+    "hidden": 512,
+    "lr": 0.0003,
+    "seed": 0,
+    "eval_every": 250,
+    "n_samples": 20000,
+    "loss": "poisson",
+    "out": "json/results_fs_gb1_k3_dirac_C.json",
+    "ckpt_dir": "ckpt",
+    "init_from": "ckpt/fs_gb1_k3_dirac_B.pt",
+    "gamma": 0.0,
+    "tau": 1.0,
+    "tag": "fs_gb1_k3_dirac_C",
+    "gb1_measured": "data/gb1/elife-16965-supp1-v4.xlsx",
+    "gb1_imputed": "data/gb1/elife-16965-supp2-v4.xlsx"
+  },
+  "meta": {
+    "target": "gb1",
+    "name": "fixed_support_gb1_k3",
+    "n": 4,
+    "k": 3,
+    "r": 20,
+    "tau": 1.0,
+    "gamma": 10.0,
+    "doi": "10.7554/eLife.16965",
+    "measured": 149361,
+    "imputed": 10639,
+    "sector": 27436,
+    "wt": "VDGV",
+    "eps": 0.0001,
+    "alphabet": "ACDEFGHIKLMNPQRSTVWY",
+    "E_min": -1.836580894588803,
+    "E_max": 9.210340371976182,
+    "E_mean": 4.958196023542688,
+    "E_std": 2.5893353596846937,
+    "pi_max": 0.0015411520106784584,
+    "entropy": 8.21182774564306
+  },
+  "params": 766844,
+  "history": [
+    {
+      "iter": 250,
+      "TV": 0.18333181913361496,
+      "loss": 0.6942565649337578
+    },
+    {
+      "iter": 500,
+      "TV": 0.18790259810063228,
+      "loss": -0.4181679833309973
+    },
+    {
+      "iter": 750,
+      "TV": 0.14071971790430324,
+      "loss": 0.9047015209239966
+    },
+    {
+      "iter": 1000,
+      "TV": 0.13568485031022462,
+      "loss": 0.9777599368465023
+    }
+  ],
+  "report": {
+    "tv": 0.13568485031022462,
+    "kl": 0.08132466192472548,
+    "hellinger": 0.15205169291200712,
+    "mean_energy": -0.13810292509294064,
+    "target_mean_energy": -0.0999782322768147,
+    "mass_err": 8.881784197001252e-16,
+    "argmax_state": 6464,
+    "argmax_p": 0.001992143125056145,
+    "argmax_pi": 0.0015411520106784584,
+    "mean_fitness": 1.8549907093244657,
+    "target_mean_fitness": 1.8349929756484755,
+    "tv_emp": 0.24836432079583465,
+    "violations": 0,
+    "tv_emp_floor": 0.20938719012114165
+  }
+}

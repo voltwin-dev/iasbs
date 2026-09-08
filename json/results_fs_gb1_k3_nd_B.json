@@ -1,0 +1,102 @@
+{
+  "config": {
+    "cmd": "train-nondirac",
+    "target": "gb1",
+    "steps": 256,
+    "iters": 1000,
+    "batch": 2048,
+    "buffer": 8,
+    "inner": 40,
+    "mb": 1024,
+    "hidden": 512,
+    "lr": 0.0003,
+    "seed": 0,
+    "eval_every": 250,
+    "n_samples": 2000,
+    "loss": "poisson",
+    "out": "json/results_fs_gb1_k3_nd_B.json",
+    "ckpt_dir": "ckpt",
+    "init_from": "ckpt/fs_gb1_k3_nd_A.pt",
+    "gamma": 0.0,
+    "tau": 1.4,
+    "tag": "fs_gb1_k3_nd_B",
+    "gb1_measured": "data/gb1/elife-16965-supp1-v4.xlsx",
+    "gb1_imputed": "data/gb1/elife-16965-supp2-v4.xlsx",
+    "inner_h": 40,
+    "lr_h": 0.0003,
+    "corrector_hidden": 256,
+    "corrector_actions": 32
+  },
+  "meta": {
+    "target": "gb1",
+    "name": "fixed_support_gb1_k3",
+    "n": 4,
+    "k": 3,
+    "r": 20,
+    "tau": 1.4,
+    "gamma": 10.0,
+    "doi": "10.7554/eLife.16965",
+    "measured": 149361,
+    "imputed": 10639,
+    "sector": 27436,
+    "wt": "VDGV",
+    "eps": 0.0001,
+    "alphabet": "ACDEFGHIKLMNPQRSTVWY",
+    "E_min": -1.836580894588803,
+    "E_max": 9.210340371976182,
+    "E_mean": 4.958196023542688,
+    "E_std": 2.5893353596846937,
+    "pi_max": 0.0008560051388512868,
+    "entropy": 8.822791104518814
+  },
+  "params": 1625400,
+  "source": "four-atom",
+  "history": [
+    {
+      "iter": 250,
+      "TV": 0.14008098493347962,
+      "loss": -0.08726909344041356,
+      "loss_h": 0.9936066357368356
+    },
+    {
+      "iter": 500,
+      "TV": 0.13886787514686175,
+      "loss": 0.9328616020794037,
+      "loss_h": 0.9944901399193544
+    },
+    {
+      "iter": 750,
+      "TV": 0.10532760621172363,
+      "loss": 0.9597435864871026,
+      "loss_h": 0.9920904214091593
+    },
+    {
+      "iter": 1000,
+      "TV": 0.10703452348678916,
+      "loss": 0.7841554138453933,
+      "loss_h": 0.992788984031096
+    }
+  ],
+  "report": {
+    "tv": 0.10703452348678916,
+    "kl": 0.057694230833646595,
+    "hellinger": 0.12901556734392006,
+    "mean_energy": 0.45197802296580186,
+    "target_mean_energy": 0.6267988018240843,
+    "mass_err": 8.881784197001252e-16,
+    "argmax_state": 6464,
+    "argmax_p": 0.001061744863230812,
+    "argmax_pi": 0.0008560051388512868,
+    "mean_fitness": 1.4436009267047334,
+    "target_mean_fitness": 1.350597823943017,
+    "tv_emp": 0.6451352698121026,
+    "violations": 0,
+    "tv_emp_floor": 0.6586164872136253
+  },
+  "corrector_diag": {
+    "n": 100000,
+    "rmse": 0.01870061797815755,
+    "mae": 0.006538732331632543,
+    "max_abs": 0.5985885718273529
+  }
+}

@@ -36,6 +36,7 @@ structured_asbs/          OUR method
     run_anneal_chain.sh     Stiefel beta 50 -> 65 -> 80 -> 100 chain
     run_anneal_b100.sh      single beta = 100 leg from the beta = 50 control
     run_anneal_b100_fine.sh same at 796 steps
+    run_gb1_anneal.sh       GB1 k=3 tau 2 -> 1.4 -> 1 chain (the GB1 default)
 
 dam/                      THE OTHER BASELINE (Discrete Adjoint Matching)
   core.py                 gKL loss, adjoint estimator, control box
@@ -1359,10 +1360,73 @@ target looks like. The non-Dirac corrector reaches RMSE 0.02709, MAE 0.00960,
 max abs 0.61340 over 100,000 probes — 3.8x looser than the toy's 0.00705, again
 consistent with a target the budget has not resolved.
 
-**Continuation in progress.** Both runs are being warm-started from these
-checkpoints for a further 5000 iterations (§8); this section will be updated
-with the extended numbers, and the 3000-iteration verdict above is kept as the
-matched-budget point against the toy.
+##### 2.5.1 What the residual gap is not
+
+Two diagnostics rule out the cheap explanations before any schedule change.
+
+**Not a time-discretisation floor.** Re-propagating the trained flat-tau=1
+Dirac control on finer grids gives TV 0.21465 at 256 steps, 0.21759 at 512 and
+0.21909 at 1024 — finer grids are marginally *worse* (the control was fitted at
+256), so the gap is not the Euler grid.
+
+**Not a reference-mixing floor.** The reference chain at `gamma = 10` is already
+fully mixed at `t = 1`: propagating it with the control switched off gives
+TV 0.77976 against the target, and the distance from the exactly uniform law to
+the target is 0.78220. Raising gamma cannot help — 20, 40 and 80 all sit on the
+0.78220 uniform floor to five decimals. So the 0.195-0.215 above is a genuine
+75% reduction of an 0.78 starting distance, and the remaining gap is the
+optimiser's, not the discretisation's or the reference's.
+
+The one reference-side knob that *would* matter, tilting the base rates toward
+the target's per-site amino-acid marginals, is not admissible here: it breaks
+the permutation-equivariance of the reference and with it the exactness of the
+A.2 orbit-kernel propagation that makes this row's TV computable at all.
+
+##### 2.5.2 Temperature-annealed schedule — the GB1 default
+
+What does move the number is the optimiser's path. Because the target enters
+only as `exp(-E/tau)`, one can train through a flatter surrogate and finish on
+the real one. This is now the **default schedule for the GB1 target**, at the
+*same* 3000-iteration budget as the flat run above, spent as three warm-started
+stages of 1000 iterations at `tau = 2.0`, `1.4`, `1.0`. Only the final stage is
+reported, and it is evaluated at `tau = 1` against the unmodified Wu et al.
+Boltzmann law, so the benchmark is untouched — the flat and annealed rows differ
+in optimiser trajectory only, and the matched budget keeps the DAM head-to-head
+honest. The same schedule is available to DAM.
+
+| source | flat tau=1, 3000 it | annealed, 3000 it | change | A1 | A2 |
+|---|---|---|---|---|---|
+| Dirac(x0) | 0.21465 | **0.13568** | **-37%** | FAIL | **PASS** (0 / 20,000) |
+| four-atom mixture | 0.19501 | **0.13226** | **-32%** | FAIL | **PASS** (0 / 20,000) |
+
+Per-stage exact TV, each stage measured against its own `tau`:
+
+| stage | tau | iters | Dirac TV | non-Dirac TV |
+|---|---|---|---|---|
+| A | 2.0 | 1000 | 0.10566 | 0.10695 |
+| B | 1.4 | 1000 | 0.11564 | 0.10703 |
+| C | **1.0** | 1000 | **0.13568** | **0.13226** |
+
+Each `tau` step costs a transient: stage C opens at 0.18333 (Dirac) and 0.15945
+(non-Dirac) as the network absorbs the sharper target, then recovers past its
+own starting point within 750 iterations. The annealed runs also improve every
+secondary quantity — KL 0.08132 / 0.07650 (flat: 0.16552 / 0.14681), Hellinger
+0.15205 / 0.14738 (flat: 0.21871 / 0.20513), mean fitness 1.85499 / 1.91098
+against target 1.83499 (flat: 1.97982 / 1.95267), and the modal-variant
+overweight at state 6,464 drops from 2.0x to 1.29x (Dirac, `p = 0.00199`) and
+1.51x (non-Dirac, `p = 0.00233`) against `pi = 0.00154`. Terminal-law mass error
+is exactly 0.0 on both. The non-Dirac corrector improves to RMSE 0.02353,
+MAE 0.00899, max abs 0.63775.
+
+**A1 still fails.** 0.132 is 2.6x the gate. The annealing buys a third of the
+gap and every physical observable moves the right way, but GB1 is not a solved
+row: it is reported as a hardness result, exactly like Ising L=5 in §2.1, with
+the constraint machinery exact on both.
+
+**Repro (annealed, the default):**
+`bash structured_asbs/scripts/run_gb1_anneal.sh both` ->
+`json/results_fs_gb1_k3_{dirac,nd}_{A,B,C}.json` +
+`ckpt/fs_gb1_k3_{dirac,nd}_{A,B,C}.pt`; the reported row is stage `C`.
 
 **Repro:** `structured_asbs/fixed_support.py train --target gb1` and
 `structured_asbs/fixed_support.py train-nondirac --target gb1` (flags above,
@@ -2051,7 +2115,6 @@ so any flag not spelled out above can be read back off the artifact itself.
 | job | status |
 |---|---|
 | DAM occupation-scale m=128, K=64, 500 it | running on GPU0, 133 s/it |
-| IASBS fixed-support GB1 k=3, Dirac and non-Dirac, +5000 it warm start from the §2.5 checkpoints | running on GPU1, ~1.0 / 1.1 s/it |
 
 **Not run, and why**
 
@@ -2065,12 +2128,13 @@ so any flag not spelled out above can be read back off the artifact itself.
 
 - README correction of the R-ASBS mode-collapse description (§4.2).
 
-**Done since the last update.** Appendix A.2 fixed-support toy, both sources (§2.4): exact-law TV 0.00774 / 0.00776, A1 and A2 both PASS. Appendix A.2 GB1 k=3, both sources (§2.5): exact-law TV 0.21465 / 0.19501 at 3000 iterations, A1 FAIL and A2 PASS, still descending at cutoff.
+**Done since the last update.** Appendix A.2 fixed-support toy, both sources (§2.4): exact-law TV 0.00774 / 0.00776, A1 and A2 both PASS. Appendix A.2 GB1 k=3, both sources (§2.5): exact-law TV 0.21465 / 0.19501 at 3000 iterations, A1 FAIL and A2 PASS. The temperature-annealed schedule of §2.5.2, now the GB1 default at the same 3000-iteration budget, brings those to 0.13568 / 0.13226.
 
 **One honest negative, recorded rather than buried.** IASBS Ising L=5 misses its
 accuracy gate at TV 0.07228 (§2.1). Its A2 constraint gate passes, 0 / 200,000.
-Fixed-support GB1 k=3 also misses A1 at 3000 iterations, TV 0.21465 (Dirac) and
-0.19501 (non-Dirac), with the constraint gate passing 0 / 20,000 on both (§2.5).
+Fixed-support GB1 k=3 also misses A1, TV 0.13568 (Dirac) and 0.13226
+(non-Dirac) under the annealed default, 0.21465 and 0.19501 flat, with the
+constraint gate passing 0 / 20,000 on all four runs (§2.5).
 
 ---
 

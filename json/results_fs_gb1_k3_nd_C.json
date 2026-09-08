@@ -1,0 +1,102 @@
+{
+  "config": {
+    "cmd": "train-nondirac",
+    "target": "gb1",
+    "steps": 256,
+    "iters": 1000,
+    "batch": 2048,
+    "buffer": 8,
+    "inner": 40,
+    "mb": 1024,
+    "hidden": 512,
+    "lr": 0.0003,
+    "seed": 0,
+    "eval_every": 250,
+    "n_samples": 20000,
+    "loss": "poisson",
+    "out": "json/results_fs_gb1_k3_nd_C.json",
+    "ckpt_dir": "ckpt",
+    "init_from": "ckpt/fs_gb1_k3_nd_B.pt",
+    "gamma": 0.0,
+    "tau": 1.0,
+    "tag": "fs_gb1_k3_nd_C",
+    "gb1_measured": "data/gb1/elife-16965-supp1-v4.xlsx",
+    "gb1_imputed": "data/gb1/elife-16965-supp2-v4.xlsx",
+    "inner_h": 40,
+    "lr_h": 0.0003,
+    "corrector_hidden": 256,
+    "corrector_actions": 32
+  },
+  "meta": {
+    "target": "gb1",
+    "name": "fixed_support_gb1_k3",
+    "n": 4,
+    "k": 3,
+    "r": 20,
+    "tau": 1.0,
+    "gamma": 10.0,
+    "doi": "10.7554/eLife.16965",
+    "measured": 149361,
+    "imputed": 10639,
+    "sector": 27436,
+    "wt": "VDGV",
+    "eps": 0.0001,
+    "alphabet": "ACDEFGHIKLMNPQRSTVWY",
+    "E_min": -1.836580894588803,
+    "E_max": 9.210340371976182,
+    "E_mean": 4.958196023542688,
+    "E_std": 2.5893353596846937,
+    "pi_max": 0.0015411520106784584,
+    "entropy": 8.21182774564306
+  },
+  "params": 1625400,
+  "source": "four-atom",
+  "history": [
+    {
+      "iter": 250,
+      "TV": 0.15944683993678355,
+      "loss": 0.806891062530598,
+      "loss_h": 0.9936081128167605
+    },
+    {
+      "iter": 500,
+      "TV": 0.1900917889031644,
+      "loss": 0.9017732733621557,
+      "loss_h": 0.9914826318908782
+    },
+    {
+      "iter": 750,
+      "TV": 0.13055051060031567,
+      "loss": 0.5544760133872393,
+      "loss_h": 0.9916903789344025
+    },
+    {
+      "iter": 1000,
+      "TV": 0.13225871840493722,
+      "loss": 1.068182697982128,
+      "loss_h": 0.9924436185483665
+    }
+  ],
+  "report": {
+    "tv": 0.13225871840493722,
+    "kl": 0.07650231495563904,
+    "hellinger": 0.14737982004726555,
+    "mean_energy": -0.17561911978744832,
+    "target_mean_energy": -0.0999782322768147,
+    "mass_err": 1.3322676295501878e-15,
+    "argmax_state": 6464,
+    "argmax_p": 0.0023266940770246894,
+    "argmax_pi": 0.0015411520106784584,
+    "mean_fitness": 1.910984645014281,
+    "target_mean_fitness": 1.8349929756484755,
+    "tv_emp": 0.24840052241559984,
+    "violations": 0,
+    "tv_emp_floor": 0.21141698780020934
+  },
+  "corrector_diag": {
+    "n": 100000,
+    "rmse": 0.023532333620207152,
+    "mae": 0.008986139148098123,
+    "max_abs": 0.6377536930972063
+  }
+}
