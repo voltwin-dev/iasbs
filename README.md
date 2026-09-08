@@ -1263,6 +1263,53 @@ Both seeds then passed all three gates with `bad_labels = 0`, `skipped_steps = 0
 
 ---
 
+#### 2.4 Fixed-support heterogeneous Potts space (Appendix A.2) — toy, validated against the exact 81,081-state law
+
+The state space is the Appendix A.2 fixed-support set
+`X^(r)_{n,k} = {x in {0..r-1}^n : #{i : x_i != 0} = k}` at `n = 14`, `k = 4`,
+`r = 4`, so `|X| = C(14,4) * 3^4 = 81,081`. The target is a heterogeneous
+nonsymmetric Potts ring (128 energy edges: 8 label + 120 support), which
+deliberately breaks the permutation/label symmetry of the reference construction;
+the nonbinary-Johnson orbit kernel (`C = 15` orbits, `A = 770` global actions)
+still makes the terminal matching labels exactly computable, so the learned
+controlled law is compared to the target in exact total variation over all
+81,081 states. Both runs use `steps = 256`, `iters = 3000`, `batch = 2048`,
+`buffer = 8`, `inner = 40`, `mb = 1024`, `hidden = 512`, `lr = 3e-4`, Poisson
+loss, `seed = 0`, `n_samples = 20000`. Gates as in §2.1: **A1** exact-law
+TV <= 0.05, **A2** zero support-cardinality violations.
+
+| source | params | exact-law TV | KL | Hellinger | A1 | A2 | wall |
+|---|---|---|---|---|---|---|---|
+| Dirac(x0) | 882,806 | **0.00774** | 0.000202 | 0.00709 | **PASS** | **PASS** (0 / 20,000) | 3,050 s |
+| 4-atom mixture [0, 27, 81, 82] | 882,806 + 344,066 | **0.00776** | 0.000201 | 0.00708 | **PASS** | **PASS** (0 / 20,000) | 3,460 s |
+
+Both land at essentially the same TV, ~6.5x below the gate. The non-Dirac run
+carries an extra 344,066-parameter corrector (`corrector_hidden = 256`,
+`corrector_actions = 32`); its Radon-Nikodym head is accurate to
+RMSE 0.00705, MAE 0.00336, max abs 0.1169 over 100,000 probes — i.e. the
+non-Dirac machinery costs 13% more wall time and buys back the same accuracy,
+matching the pattern already seen on the sphere (§3.2).
+
+Empirical TV over 20,000 samples is 0.52736 (Dirac) and 0.52521 (non-Dirac)
+against i.i.d. floors of 0.52772 and 0.52162 — at `|X| = 81,081` with 20,000
+draws the empirical statistic is dominated by sampling noise, which is exactly
+why the exact-law TV is the gate. Mean energy `-2.3617` (Dirac) and `-2.3572`
+(non-Dirac) vs target `-2.3753`; the modal state (index 78,344) is ranked first
+by both, at `p = 0.000908 / 0.000910` vs `pi = 0.000935`. Terminal-law mass
+error is at machine precision (7e-16, 2e-16).
+
+| it | 500 | 1000 | 1500 | 2000 | 2500 | 3000 |
+|---|---|---|---|---|---|---|
+| TV, Dirac | 0.02040 | 0.01881 | 0.01767 | 0.01145 | 0.01195 | **0.00774** |
+| TV, non-Dirac | 0.02157 | — | 0.01394 | 0.01918 | 0.01031 | **0.00776** |
+
+**Repro:** `structured_asbs/fixed_support.py train --target toy` and
+`structured_asbs/fixed_support.py train-nondirac --target toy` (flags above) ->
+`json/results_fs_toy_v2_dirac.json`, `json/results_fs_toy_v2_nd.json` +
+`ckpt/fs_toy_v2_{dirac,nd}.pt`.
+
+---
+
 ### 3. IASBS on the sphere S^2
 
 Target: bimodal density; gates **C1** mean hemisphere-mass error < 0.03
@@ -1941,7 +1988,7 @@ so any flag not spelled out above can be read back off the artifact itself.
 
 | job | status |
 |---|---|
-| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, 131 s/it |
+| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, 135 s/it |
 
 **Not run, and why**
 
@@ -1954,6 +2001,8 @@ so any flag not spelled out above can be read back off the artifact itself.
 **Text only**
 
 - README correction of the R-ASBS mode-collapse description (§4.2).
+
+**Done since the last update.** Appendix A.2 fixed-support toy, both sources (§2.4): exact-law TV 0.00774 / 0.00776, A1 and A2 both PASS.
 
 **One honest negative, recorded rather than buried.** IASBS Ising L=5 misses its
 accuracy gate at TV 0.07228 (§2.1). Its A2 constraint gate passes, 0 / 200,000.
