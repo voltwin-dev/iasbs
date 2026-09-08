@@ -1310,6 +1310,68 @@ error is at machine precision (7e-16, 2e-16).
 
 ---
 
+#### 2.5 Fixed-support GB1 protein-fitness landscape (Appendix A.2) — exact three-mutation sector, 27,436 states
+
+Same `X^(r)_{n,k}` machinery as §2.4 with only the target adapter changed: the
+four-site GB1 landscape of Wu et al. (eLife 2016;5:e16965, `10.7554/eLife.16965`)
+restricted to the exact Hamming-distance-3 sector from wild type `VDGV`, i.e.
+`n = 4`, `k = 3`, `r = 20` so `|X| = C(4,3) * 19^3 = 27,436`. The target is the
+complete **measured + author-imputed** landscape (149,361 measured + 10,639
+imputed = 160,000 variants), Boltzmann-weighted on `E = -log(F + 1e-4)` at
+`tau = 1`, `gamma = 10`: E_min -1.8366, E_max 9.2103, E_mean 4.9582,
+E_std 2.5893, pi_max 0.0015412, entropy 8.2118. Orbit count `C = 7`,
+`A = 2,748` global actions, `alpha = 4.8649`, `beta = 5.1351`, 111 energy edges
+(54 label + 57 support). Both runs: `steps = 256`, `iters = 3000`,
+`batch = 2048`, `buffer = 8`, `inner = 40`, `mb = 1024`, `hidden = 512`,
+`lr = 3e-4`, Poisson loss, `seed = 0`, `eval_every = 250`, `n_samples = 20000`.
+
+| source | params | exact-law TV | KL | Hellinger | A1 (<= 0.05) | A2 | wall |
+|---|---|---|---|---|---|---|---|
+| Dirac(x0) | 766,844 | 0.21465 (best 0.20672 at it 2750) | 0.16552 | 0.21871 | **FAIL** | **PASS** (0 / 20,000) | 2,990 s |
+| four-atom mixture | 766,844 + 858,556 | **0.19501** (best 0.18426 at it 2750) | 0.14681 | 0.20513 | **FAIL** | **PASS** (0 / 20,000) | 3,340 s |
+
+**This row does not pass A1 at 3000 iterations, and the reason is visible in the
+trajectory, not in the constraint machinery.** The A.2 group action is exact —
+zero support violations out of 20,000 samples on both runs, and terminal-law
+mass error 8.9e-16 (Dirac) and 0.0 (non-Dirac). What is not converged is the
+control: TV is still falling at cutoff, 0.41124 -> 0.21465 over 3000 iterations
+with no plateau.
+
+| it | 250 | 500 | 750 | 1000 | 1250 | 1500 | 1750 | 2000 | 2250 | 2500 | 2750 | 3000 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| TV, Dirac | 0.41124 | 0.37348 | 0.30884 | 0.29591 | 0.28265 | 0.26552 | 0.22242 | 0.22909 | 0.22215 | 0.20718 | 0.20672 | 0.21465 |
+| TV, non-Dirac | 0.42944 | 0.35118 | 0.32679 | 0.27711 | 0.29705 | 0.28746 | 0.23627 | 0.22129 | 0.21286 | 0.19755 | 0.18426 | 0.19501 |
+
+GB1 is harder than the toy at a third of the state count: the toy is a smooth
+Potts ring (entropy 10.2658 out of `log 81081 = 11.30`), whereas the GB1
+Boltzmann law is an empirical fitness landscape with `E_std 2.59` and entropy
+8.2118 out of `log 27436 = 10.22` — a much more peaked target that the same
+3000-iteration budget does not resolve. The empirical statistic is
+uninformative here for the same reason as in §2.4: 0.29349 / 0.28759 over 20,000
+draws against i.i.d. floors of 0.21491 / 0.20909.
+
+Physical agreement is already reasonable: mean fitness 1.9798 (Dirac) and 1.9527
+(non-Dirac) vs target 1.8350; mean energy -0.2347 / -0.1879 vs target -0.0999.
+Both runs rank the same modal variant first (state index 6,464), but overweight
+it 2x, `p = 0.003087 / 0.003004` vs `pi = 0.0015412` — i.e. the residual TV is
+concentrated on the peak, which is what an unconverged control on a peaked
+target looks like. The non-Dirac corrector reaches RMSE 0.02709, MAE 0.00960,
+max abs 0.61340 over 100,000 probes — 3.8x looser than the toy's 0.00705, again
+consistent with a target the budget has not resolved.
+
+**Continuation in progress.** Both runs are being warm-started from these
+checkpoints for a further 5000 iterations (§8); this section will be updated
+with the extended numbers, and the 3000-iteration verdict above is kept as the
+matched-budget point against the toy.
+
+**Repro:** `structured_asbs/fixed_support.py train --target gb1` and
+`structured_asbs/fixed_support.py train-nondirac --target gb1` (flags above,
+plus `--gb1-measured data/gb1/elife-16965-supp1-v4.xlsx --gb1-imputed
+data/gb1/elife-16965-supp2-v4.xlsx`) -> `json/results_fs_gb1_k3_dirac.json`,
+`json/results_fs_gb1_k3_nd.json` + `ckpt/fs_gb1_k3_{dirac,nd}.pt`.
+
+---
+
 ### 3. IASBS on the sphere S^2
 
 Target: bimodal density; gates **C1** mean hemisphere-mass error < 0.03
@@ -1988,7 +2050,8 @@ so any flag not spelled out above can be read back off the artifact itself.
 
 | job | status |
 |---|---|
-| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, 135 s/it |
+| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, 133 s/it |
+| IASBS fixed-support GB1 k=3, Dirac and non-Dirac, +5000 it warm start from the §2.5 checkpoints | running on GPU1, ~1.0 / 1.1 s/it |
 
 **Not run, and why**
 
@@ -2002,10 +2065,12 @@ so any flag not spelled out above can be read back off the artifact itself.
 
 - README correction of the R-ASBS mode-collapse description (§4.2).
 
-**Done since the last update.** Appendix A.2 fixed-support toy, both sources (§2.4): exact-law TV 0.00774 / 0.00776, A1 and A2 both PASS.
+**Done since the last update.** Appendix A.2 fixed-support toy, both sources (§2.4): exact-law TV 0.00774 / 0.00776, A1 and A2 both PASS. Appendix A.2 GB1 k=3, both sources (§2.5): exact-law TV 0.21465 / 0.19501 at 3000 iterations, A1 FAIL and A2 PASS, still descending at cutoff.
 
 **One honest negative, recorded rather than buried.** IASBS Ising L=5 misses its
 accuracy gate at TV 0.07228 (§2.1). Its A2 constraint gate passes, 0 / 200,000.
+Fixed-support GB1 k=3 also misses A1 at 3000 iterations, TV 0.21465 (Dirac) and
+0.19501 (non-Dirac), with the constraint gate passing 0 / 20,000 on both (§2.5).
 
 ---
 

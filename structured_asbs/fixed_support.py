@@ -996,6 +996,10 @@ def run_train(args):
     net = FixedSupportController(space.n, space.r, space.out_dim,
                                  hidden=args.hidden).to(space.device)
     n_par = sum(p.numel() for p in net.parameters())
+    if getattr(args, "init_from", ""):
+        blob = torch.load(args.init_from, map_location=space.device)
+        net.load_state_dict(blob["state_dict"])
+        print(f"  warm start <- {args.init_from} (weights only)")
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     steps = args.steps
     space.build_kappa_grid(steps)
@@ -1073,6 +1077,11 @@ def run_train_nondirac(args):
                                   hidden=args.corrector_hidden).to(space.device)
     n_par = sum(p.numel() for p in net.parameters())
     n_par_h = sum(p.numel() for p in net_h.parameters())
+    if getattr(args, "init_from", ""):
+        blob = torch.load(args.init_from, map_location=space.device)
+        net.load_state_dict(blob["state_dicts"]["control"])
+        net_h.load_state_dict(blob["state_dicts"]["corrector"])
+        print(f"  warm start <- {args.init_from} (weights only)")
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     opt_h = torch.optim.Adam(net_h.parameters(), lr=args.lr_h)
     steps = args.steps
@@ -1229,6 +1238,10 @@ def main():
         p.add_argument("--out", type=str,
                        default=f"json/results_fixed_support_{stem}.json")
         p.add_argument("--ckpt-dir", dest="ckpt_dir", type=str, default="ckpt")
+        # Warm start: network weights only.  Optimiser moments and the cosine
+        # position are not in the checkpoint, so a continuation is a new run
+        # initialised at the old weights, not a resumed single schedule.
+        p.add_argument("--init-from", dest="init_from", type=str, default="")
         p.add_argument("--tag", type=str, default=f"fixed_support_{stem}")
         p.add_argument("--gb1-measured", dest="gb1_measured", type=str,
                        default="data/gb1/elife-16965-supp1-v4.xlsx")
