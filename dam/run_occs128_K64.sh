@@ -1,23 +1,29 @@
 #!/usr/bin/env bash
-# Round 8: rerun the round-7 arm O with enough rollouts.
+# DAM on occupation-scale m=128, K=64 -- the section 6.2.1 leg.
 #
-# Round 7 ran occupation-scale m=128 at K=32 and starved the adjoint estimator:
-# ESS 1.52/32 at iteration 25, with KS_occ 0.2083 against an uncontrolled
-# reference of 0.2053, i.e. the control was actively harmful.  Arm N already
-# needed K=64 to hold m=32, so K=32 on a 4x larger space was a misconfiguration
-# on our side.  This reruns it at K=64.
+# Same control box as the m=32 leg of section 6.2 (a-clamp 8, m-clip 5,
+# ess-min 3, coef-cap 10, 128 steps), scaled up one state-space step.  K=64 is
+# the value the m=32 leg needed; K=32 on this space starves the adjoint
+# estimator outright (ESS 1.52/32, KS_occ above the uncontrolled reference).
+# Even at K=64 the estimator collapses here -- ESS ends at 1.69 / 64 with
+# 451,665 clipped labels -- which is the point of the section.
 #
-# Arm N converged by iteration ~425 of 1000, so 500 iterations is budgeted here.
-# At m=128 the per-iteration cost is ~5.4x arm N's, and doubling K doubles it
-# again, so expect ~178 s/iter and ~25 h.
+# Budget: 500 iterations, ~135 s/iter, ~18.8 h on one A100.
+#
+#   bash dam/run_occs128_K64.sh
+#
+# Writes json/results_dam_occs128_K64_500.json and ckpt/dam_occs128_K64_500.pt.
 set -u
-PY=/root/miniconda3/envs/SML_env/bin/python
+cd "$(dirname "$0")/.."
+PY=${PY:-/root/miniconda3/envs/SML_env/bin/python}
+mkdir -p dam/logs
 STAB="--a-clamp 8 --m-clip 5 --ess-min 3 --coef-cap 10"
+TAG=dam_occs128_K64_500
 
-echo "=== [$(date -u '+%F %T UTC')] starting round 8"
-CUDA_VISIBLE_DEVICES=0 "$PY" -u -m dam.discrete occupation-scale \
+echo "=== [$(date -u '+%F %T UTC')] START $TAG"
+"$PY" -u -m dam.discrete occupation-scale \
     --m 128 --K 64 --iters 500 --steps 128 --inner 4 --mb 256 --batch 512 \
     --eval-every 25 --n-samples 10000 $STAB \
-    --tag fix_O2_occs128_K64 --out json/results_fix_O2_occs128_K64.json \
-    > dam/logs/fix_O2_occs128_K64.log 2>&1
-echo "=== [$(date -u '+%F %T UTC')] END fix_O2_occs128_K64 exit=$?"
+    --tag "$TAG" --out "json/results_${TAG}.json" \
+    > "dam/logs/${TAG}.log" 2>&1
+echo "=== [$(date -u '+%F %T UTC')] END   $TAG  exit=$?"

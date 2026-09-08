@@ -44,7 +44,7 @@ dam/                      THE OTHER BASELINE (Discrete Adjoint Matching)
   tests_math.py           gradient identity, path-weight identity, estimator
   run_dam.sh              every DAM leg reported in section 6.2
   run_dam_a2.sh           the two Appendix A.2 legs of section 2.6 (toy, GB1 annealed)
-  run_occs128_K64.sh      occupation m=128 leg   (running, see section 8)
+  run_occs128_K64.sh      occupation m=128 leg   (section 6.2.1)
 
 rasbs/                    THE BASELINE, kept apart from our code
   rasbs_port.py           faithful PyTorch port of R-ASBS alg2_stiefel.m
@@ -1141,7 +1141,7 @@ Status legend: **DONE** = finished with gate verdicts recorded;
 | 3 | IASBS extends to non-Dirac (Haar) sources without loss | §3.2 — matches the Dirac headline to 3 decimal places |
 | 4 | Reported R-ASBS mode collapse is an initialisation artifact | §4 — collapse vanishes under the authors' own init |
 | 5 | DAM needs millions of Monte-Carlo adjoint rollouts; IASBS needs none | §5, §6.4 — 20.9 M rollout-endpoint f1 evals for DAM's best TV vs 0 for IASBS (IASBS still evaluates the energy; see §6.4) |
-| 6 | DAM is fragile and expensive: it needs a per-problem control box sized against an optimum one does not know in advance, an adjoint-label truncation, and a gradient budget that grows with the state space | §6.2 — TV 0.0617 on Ising L=4 for 169 M f1 evals and 975 M simulated jumps (plateau confirmed at 7000 iterations, TV 0.0634); KS_occ 0.0128 on occupation-scale m=32 for 5.85 B jumps; both 1.8-3x worse than IASBS at zero adjoint rollouts |
+| 6 | DAM is fragile and expensive: it needs a per-problem control box sized against an optimum one does not know in advance, an adjoint-label truncation, and a gradient budget that grows with the state space | §6.2 — TV 0.0617 on Ising L=4 for 169 M f1 evals and 975 M simulated jumps (plateau confirmed at 7000 iterations, TV 0.0634); KS_occ 0.0128 on occupation-scale m=32 for 5.85 B jumps; both 1.8-3x worse than IASBS at zero adjoint rollouts, and at m=128 the adjoint estimator collapses outright (ESS 1.69 / 64, KS_occ 0.1755 vs IASBS 0.0127, §6.2.1) |
 
 ---
 
@@ -1885,6 +1885,7 @@ off — which is the practical difficulty claim 6 asserts.
 | Ising L=4 | 64 | 2500 | 6,950 | 2.78 | 166,400,000 | 924,000,000 | 5.55 |
 | Ising L=4 | 32 | 7000 | 16,226 | 2.32 | 236,544,000 | 1,339,809,998 | 5.66 |
 | Occupation-scale m=32 | 64 | 1000 | 16,572 | 16.6 | 66,560,000 | 5,849,804,432 | 87.9 |
+| Occupation-scale m=128 | 64 | 500 | 67,693 | 135.4 | 33,280,000 | 12,889,415,391 | 387.3 |
 | Ising L=5 | 32 | 5000 | 15,391 | 3.08 | 168,960,000 | 1,372,615,519 | 8.12 |
 
 **Accuracy.**  Constraint violations are 0 on every row.
@@ -1898,11 +1899,14 @@ off — which is the practical difficulty claim 6 asserts.
 | Ising L=4 | 64 | 2500 | TV 0.08103 (E-hist 0.06567) | FAIL | 58.62 / 64 | 42.47 / 8.36 |
 | Ising L=4 | 32 | 7000 | TV 0.06339 (E-hist 0.05206) | FAIL | 30.64 / 32 | 24.91 / 11.40 |
 | Occupation-scale m=32 | 64 | 1000 | KS_occ **0.0128** (KS_max 0.0399, W1max/N 0.0068) | **PASS** | 55.58 / 64 | 31.39 / 1.10 |
+| Occupation-scale m=128 | 64 | 500 | KS_occ 0.1755 (KS_max 0.9014, W1max/N 0.0382) | FAIL | 1.73 / 64 | 1.69 / 1.00 |
 | Ising L=5 | 32 | 5000 | TV 0.39956 (E-hist 0.19000) | FAIL | 13.39 / 32 | 8.53 / 2.01 |
 
 IASBS on the same targets, for reference: occupation m=4 TV **0.0117**
 (Dirac **0.012730**), Ising L=4 TV **0.03470**, Ising L=5 TV **0.07228**,
 occupation-scale m=32 KS_occ **0.0043** (KS_max 0.0305, W1max/N 0.0052).
+On occupation-scale m=128 IASBS reaches KS_occ **0.01270** (W1max/N 0.00224,
+0 violations) in 1,523 s (§2.3).
 
 **Ising L=4: DAM plateaus at TV ~0.062 and never reaches the TV <= 0.05 gate.**
 The 7000-iteration run is healthy throughout — loss positive, ESS at 96%
@@ -2002,6 +2006,51 @@ loop issuing many small kernels and synchronising on `active.any()`. Consequence
   than overlapping them, which is why `dam/run_dam.sh` queues the legs serially.
 - The jumps-per-f1-eval column is the cost multiplier that makes the larger
   spaces expensive: 8.9 on occupation m=4, **87.9** on occupation-scale m=32.
+
+#### 6.2.1 Occupation-scale m=128 — where DAM stops working
+
+The m=32 leg above is DAM's best row in this repo.  Pushing the same
+configuration to m=128 (`|X|` = compositions of N=128 into m=128 parts, 128
+steps, K=64, the identical §6.2 control box) breaks it:
+
+| method | m | iters | KS_occ | KS_max | W1max / N | viol | ESS | f1 evals | simulated jumps | wall (s) | s / it |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **IASBS** | **128** | 3000 | **0.01270** | — | **0.00224** | **0** | — | **0** | **0** | **1,523** | **0.51** |
+| DAM, K=64 | 128 | 500 | 0.17554 | 0.9014 | 0.03820 | 0 | 1.69 / 64 | 33,280,000 | 12,889,415,391 | 67,693 | 135.4 |
+| uncontrolled reference | 128 | — | 0.20529 | 0.8986 | 0.03997 | 0 | — | 0 | 0 | — | — |
+
+DAM ends **13.8x** worse than IASBS on the gate quantity and, more tellingly,
+only **1.17x** better than doing nothing at all: the uncontrolled reference chain
+already sits at KS_occ 0.20529, so 18.8 h of training and **12.9 billion**
+simulated CTMC jumps buy a 14% reduction where IASBS buys 16.2x in 25 minutes at
+zero adjoint rollouts.
+
+**The mechanism is estimator collapse, not a bad optimum.**  ESS is
+**1.69 of 64** (p10 exactly 1.00), i.e. essentially every adjoint label is
+carried by a single rollout out of 64, and **451,665** labels hit the
+`LOG_M_CLIP` truncation.  On m=32 the same box held ESS at 31.39/64 with 0
+clipping.  The importance ratio that DAM's `m_hat` is built from has a right tail
+that widens with the state space, and at m=128 the truncation that keeps the run
+numerically alive is also what destroys the gradient signal.  The trajectory is
+consistent with that reading: KS_occ moves 0.2071 (it 25) -> 0.2086 (125) ->
+0.2027 (250) -> 0.1834 (400) -> **0.1731** (475) -> 0.1755 (500), a slow crawl
+that is still 3.5x above the gate after 500 iterations and has an eval-to-eval
+noise of the same order as its per-100-iteration progress.
+
+Energy agreement makes the same point: `E_ours = 65.89` against
+`E_exact = 52.11` (26% high; the uncontrolled reference is 67.86, so DAM closed
+13% of a 30% error), while the E-histogram KS is 0.9983 — the controlled law and
+the target overlap almost nowhere.  Constraints, as everywhere in this repo, are
+exact: 0 violations in 10,000 samples, because they are a property of the state
+space and the reference chain rather than of the loss.
+
+This is the honest ceiling for the baseline.  DAM is not broken by a tuning
+mistake here; it is broken by the variance of the Monte-Carlo adjoint on a large
+constrained space, which is precisely the quantity the intertwining identity
+removes.
+
+**Repro:** `bash dam/run_occs128_K64.sh` -> `json/results_dam_occs128_K64_500.json`
++ `ckpt/dam_occs128_K64_500.pt`.
 
 **Repro:** `bash dam/run_dam.sh` runs all eight legs above serially (~23 h on one A100); `bash dam/run_dam.sh occ4` | `ising` | `occs32` | `isingL5` runs one group. Artifacts: `json/results_dam_{occupation_m4_K16,occ4_K16_long,occ4_K64,ising_L4_K32_5000,ising_L4_K64_2500,ising_L4_K32_7000,occs32_K64_1000,ising_L5_K32_5000}.json` + the identically-named `ckpt/*.pt`. The exact-control table is read off `fixed_ising.ExactControl`, which needs no training.
 
@@ -2136,6 +2185,7 @@ The index below is the same information grouped by script.
 | `rasbs/run_fidelity_audit.sh` | `results_rasbs_sphere_matlabinit_s{0..4}`, `results_rasbs_audit_{uniform,vmf}_mi` | matching `.pt` |
 | `rasbs/regen_f64.sh` | `results_{rasbs_b2,stiefel_b2}_f64` (float64, for the fig-7 residual panel) | float64 `rasbs_b2.pt`, `stiefel_grid_b2_seed0.pt` |
 | `dam/run_dam.sh` | all seven §6.2 legs: `results_dam_*` | `ckpt/dam_*.pt`, same names |
+| `dam/run_occs128_K64.sh` | the §6.2.1 leg: `results_dam_occs128_K64_500` | `ckpt/dam_occs128_K64_500.pt` |
 | `dam/run_dam_a2.sh` | the two A.2 legs of §2.6: `results_dam_fs_*` | `ckpt/dam_fs_*.pt`, same names |
 
 The runs that have no wrapper script are single commands:
@@ -2181,11 +2231,7 @@ so any flag not spelled out above can be read back off the artifact itself.
 
 ### 8. Still running / still to run
 
-**Running:** one DAM leg, with the §6.2 control box.
-
-| job | status |
-|---|---|
-| DAM occupation-scale m=128, K=64, 500 it | running on GPU0, 133 s/it |
+**Running:** nothing. Every job listed in previous revisions of this section has finished.
 
 **Not run, and why**
 
@@ -2199,7 +2245,7 @@ so any flag not spelled out above can be read back off the artifact itself.
 
 - README correction of the R-ASBS mode-collapse description (§4.2).
 
-**Done since the last update.** Appendix A.2 fixed-support toy, both sources (§2.4): exact-law TV 0.00774 / 0.00776, A1 and A2 both PASS. DAM on the same two A.2 spaces (§2.6), on matched schedules: TV 0.08285 on the toy (A1 FAIL) and 0.26472 on annealed GB1, for 20.9 M rollout-endpoint f1 evals and 119 / 127 M simulated jumps each, against 0 for IASBS. Appendix A.2 GB1 k=3, both sources (§2.5): exact-law TV 0.21465 / 0.19501 at 3000 iterations, A1 FAIL and A2 PASS. The temperature-annealed schedule of §2.5.2, now the GB1 default at the same 3000-iteration budget, brings those to 0.13568 / 0.13226.
+**Done since the last update.** DAM occupation-scale m=128, K=64, 500 iterations (§6.2.1): KS_occ 0.1755 after 18.8 h and 12.9 B simulated jumps, against IASBS's 0.01270 in 1,523 s -- the adjoint estimator collapses to ESS 1.69 / 64 with 451,665 clipped labels. Appendix A.2 fixed-support toy, both sources (§2.4): exact-law TV 0.00774 / 0.00776, A1 and A2 both PASS. DAM on the same two A.2 spaces (§2.6), on matched schedules: TV 0.08285 on the toy (A1 FAIL) and 0.26472 on annealed GB1, for 20.9 M rollout-endpoint f1 evals and 119 / 127 M simulated jumps each, against 0 for IASBS. Appendix A.2 GB1 k=3, both sources (§2.5): exact-law TV 0.21465 / 0.19501 at 3000 iterations, A1 FAIL and A2 PASS. The temperature-annealed schedule of §2.5.2, now the GB1 default at the same 3000-iteration budget, brings those to 0.13568 / 0.13226.
 
 **One honest negative, recorded rather than buried.** IASBS Ising L=5 misses its
 accuracy gate at TV 0.07228 (§2.1). Its A2 constraint gate passes, 0 / 200,000.
