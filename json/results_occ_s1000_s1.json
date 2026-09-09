@@ -1,0 +1,61 @@
+{
+  "config": {
+    "cmd": "scale",
+    "m": 1000,
+    "N": 1000,
+    "d": 0.5,
+    "tau": 1.0,
+    "gamma": 4.0,
+    "steps": 256,
+    "iters": 1500,
+    "inner": 4,
+    "batch": 128,
+    "mb": 512,
+    "buffer": 8,
+    "hidden": 256,
+    "lr": 0.001,
+    "loss": "bregman",
+    "estimator": "full",
+    "n_a": 1,
+    "eval_every": 1000000000,
+    "n_samples": 4000,
+    "reps": 2000,
+    "seed": 1,
+    "out": "json/results_occ_s1000_s1.json",
+    "ckpt_dir": "ckpt",
+    "tag": "occ_s1000_s1",
+    "nu_skew": 1.0,
+    "inner_h": 4,
+    "lr_h": 0.01
+  },
+  "params": 136450,
+  "reference": {
+    "violations": 0,
+    "KS_occ": 0.20316299999999998,
+    "KS_max": 0.48124999999999996,
+    "W1_max": 4.292750000000002,
+    "W1_max_frac": 0.004292750000000001,
+    "cond_ours": 0.01863625,
+    "cond_exact": 0.014366,
+    "E_ours": 526.1755683543697,
+    "E_exact": 405.6758900492682,
+    "E_KS": 1.0
+  },
+  "history": [
+    {
+      "violations": 0,
+      "KS_occ": 0.009992749999999995,
+      "KS_max": 0.14700000000000002,
+      "W1_max": 0.9837499999999995,
+      "W1_max_frac": 0.0009837499999999994,
+      "cond_ours": 0.013382250000000002,
+      "cond_exact": 0.014366,
+      "E_ours": 412.15060225203445,
+      "E_exact": 405.6758900492682,
+      "E_KS": 0.3349111264256177,
+      "iter": 1500,
+      "loss": 119.70829633237491
+    }
+  ],
+  "B2": true
+}
