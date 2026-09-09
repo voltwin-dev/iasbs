@@ -950,18 +950,26 @@ Artifacts: `json/results_stiefel_sweep.json`,
 frame term breaks the 16-fold sign symmetry, so `--antithetic` is
 auto-disabled. No analytic reference; MCMC is the only ground truth.
 
-| steps | 199 | 398 | 796 |
-|---|---:|---:|---:|
-| IASBS dE (2 seeds) | 0.117 | — | 0.0493 / 0.0516 |
-| IASBS KS(E) | — | — | 0.029 |
+MCMC reference: `E = 4.6978 +- 1.5670`, `tr(C^T X) = 0.4977`, 200,000 chains
+x 3,000 sweeps. Five seeds, native budget 2048 x 2500 = 5,120,000 terminal
+oracle calls, 100,000 evaluation samples.
+
+| steps | \|dE\| mean +- sd | KS(E) mean +- sd | E | tr(C^T X) | \|X^T X - I\| |
+|---:|---:|---:|---:|---:|---:|
+| 199 | 0.1264 +- 0.0065 | 0.0307 +- 0.0019 | 4.8242 +- 1.6161 | 0.5094 | 3.2e-14 |
+| 398 | 0.0779 +- 0.0061 | 0.0185 +- 0.0021 | 4.7705 +- 1.6017 | 0.5125 | 5.5e-14 |
+| 796 | 0.0564 +- 0.0021 | 0.0137 +- 0.0007 | 4.7537 +- 1.5972 | 0.5126 | 9.5e-14 |
+
+Gate D2a (mean \|dE\| < 0.05) FAILs at 199 steps (0.1264); D2b (mean KS(E) <
+0.05) PASSes (0.0307). Wall 1,889 s per seed.
 
 ```bash
-python structured_asbs/stiefel.py train --frame --betas 1.0 --steps 199 \
-    --iters 2500 --mb 16384 --ema 0.9995 --seeds 2 --refine 2,4 \
-    --tag stiefel_frame --out json/results_stiefel_frame.json
+bash structured_asbs/scripts/run_fair_stiefel.sh frame
 ```
 
-Artifacts: `json/results_stiefel_frame.json` + `ckpt/stiefel_frame_b1_seed*.pt`.
+Artifacts: `json/results_stiefel_frame_s5.json` +
+`ckpt/stiefel_frame_s5_b1_seed{0..4}.pt`. The earlier 2-seed probe is
+`json/results_stiefel_frame.json`.
 
 ## 5.5 Second moment, from disk
 
@@ -971,6 +979,74 @@ At beta = 2, after rotating the R-ASBS samples into the common eigenbasis,
 **3.0e-14** (IASBS) against **2.9e-07** (R-ASBS). Checkpoints store sample
 tensors in float64 (`common.py:save_ckpt` promotes them), which is what makes
 the second comparison resolvable — float32 epsilon is 1.2e-07.
+
+## 5.6 Fair comparison against R-ASBS
+
+Both samplers run on the same two targets, against the same MCMC reference,
+with the same 100,000 evaluation samples and the same inference resolutions,
+and each keeps its own native source, retraction and architecture. The
+oracle budget is equalised at 600,000 terminal calls: R-ASBS's own
+600 x 1000, matched by IASBS at 400 x 1500. `IASBS` is the unmatched native
+budget (2048 x 2500 = 5,120,000) and is listed only to show what the extra
+oracle calls buy.
+
+### 5.6.1 Frame-sensitive target, beta = 1, 5 seeds per method
+
+| method | budget | steps | \|dE\| mean +- sd | KS(E) mean +- sd | \|X^T X - I\| | wall/seed |
+|---|---:|---:|---:|---:|---:|---:|
+| IASBS | 5.12M | 199 | 0.1264 +- 0.0065 | 0.0307 +- 0.0019 | 3.2e-14 | 1,889 s |
+| IASBS | 5.12M | 398 | 0.0779 +- 0.0061 | 0.0185 +- 0.0021 | 5.5e-14 | |
+| IASBS | 5.12M | 796 | 0.0564 +- 0.0021 | 0.0137 +- 0.0007 | 9.5e-14 | |
+| IASBS600 | 600k | 199 | 0.1888 +- 0.0102 | 0.0458 +- 0.0032 | 3.2e-14 | 1,117 s |
+| IASBS600 | 600k | 398 | 0.1458 +- 0.0135 | 0.0353 +- 0.0038 | 5.5e-14 | |
+| IASBS600 | 600k | 796 | 0.1263 +- 0.0071 | 0.0304 +- 0.0010 | 9.7e-14 | |
+| R-ASBS | 600k | 199 | 0.3222 +- 0.0097 | 0.0820 +- 0.0025 | 4.0e-07 | 310 s |
+| R-ASBS | 600k | 398 | 0.3078 +- 0.0139 | 0.0792 +- 0.0036 | 4.0e-07 | |
+| R-ASBS | 600k | 796 | 0.3018 +- 0.0160 | 0.0775 +- 0.0036 | 3.8e-07 | |
+
+IASBS600 gates: D2a FAIL (0.1888), D2b PASS (0.0458).
+
+### 5.6.2 Trace target, 3 seeds per method, matched 600k budget
+
+| beta | method | steps | \|dE\| mean +- sd | KS(E) mean +- sd | \|X^T X - I\| | wall/seed |
+|---:|---|---:|---:|---:|---:|---:|
+| 1.3 | IASBS600 | 199 | 0.1654 +- 0.0074 | 0.0547 +- 0.0010 | 3.3e-14 | 1,119 s |
+| 1.3 | IASBS600 | 398 | 0.1237 +- 0.0054 | 0.0421 +- 0.0027 | 5.5e-14 | |
+| 1.3 | R-ASBS | 199 | 0.4709 +- 0.0141 | 0.1433 +- 0.0052 | 4.0e-07 | 304 s |
+| 1.3 | R-ASBS | 398 | 0.4520 +- 0.0125 | 0.1390 +- 0.0046 | 4.0e-07 | |
+| 2 | IASBS600 | 199 | 0.1589 +- 0.0040 | 0.0764 +- 0.0004 | 3.2e-14 | 1,119 s |
+| 2 | IASBS600 | 398 | 0.1146 +- 0.0052 | 0.0569 +- 0.0022 | 5.5e-14 | |
+| 2 | R-ASBS | 199 | 0.5544 +- 0.0109 | 0.1876 +- 0.0039 | 4.1e-07 | 302 s |
+| 2 | R-ASBS | 398 | 0.5291 +- 0.0108 | 0.1797 +- 0.0032 | 3.9e-07 | |
+| 5 | IASBS600 | 199 | 0.1111 +- 0.0020 | 0.1365 +- 0.0014 | 3.2e-14 | 1,122 s |
+| 5 | IASBS600 | 398 | 0.0699 +- 0.0006 | 0.0921 +- 0.0006 | 5.6e-14 | |
+| 5 | R-ASBS | 199 | 0.4497 +- 0.0253 | 0.2599 +- 0.0162 | 3.9e-07 | 303 s |
+| 5 | R-ASBS | 398 | 0.4231 +- 0.0222 | 0.2444 +- 0.0163 | 4.0e-07 | |
+
+IASBS600 gates over the three betas: D1a FAIL (0.1451), D1b FAIL (0.0892).
+
+The single-seed IASBS600 numbers these tables replace are in
+`json/results_stiefel_matched.json`; the single-seed native-budget row per beta
+is in `json/results_stiefel_extra.json` (beta = 1.3 / 2 / 5: \|dE\| 0.1548 /
+0.1372 / 0.1100, KS(E) 0.0537 / 0.0718 / 0.1369).
+
+```bash
+bash structured_asbs/scripts/run_fair_stiefel.sh frame      # IASBS native, 5 seeds
+bash structured_asbs/scripts/run_fair_stiefel.sh frame600   # IASBS600 frame, 5 seeds
+bash structured_asbs/scripts/run_fair_stiefel.sh trace600   # IASBS600 trace, 3 seeds/beta
+bash rasbs/run_fair.sh frame                                # R-ASBS frame, 5 seeds
+bash rasbs/run_fair.sh trace                                # R-ASBS trace, 3 seeds/beta
+```
+
+Artifacts:
+
+| leg | json | ckpt |
+|---|---|---|
+| IASBS native frame | `results_stiefel_frame_s5.json` | `stiefel_frame_s5_b1_seed{0..4}.pt` |
+| IASBS600 frame | `results_stiefel_frame600.json` | `stiefel_frame600_b1_seed{0..4}.pt` |
+| IASBS600 trace | `results_stiefel_matched_s3.json` | `stiefel_matched_s3_b{1.3,2,5}_seed{0,1,2}.pt` |
+| R-ASBS frame | `results_rasbs_frame.json` | `rasbs_frame_b1_seed{0..4}.pt` |
+| R-ASBS trace | `results_rasbs_m600.json` | `rasbs_m600_b{1.3,2,5}_seed{0,1,2}.pt` |
 
 Figures: `fig5_stiefel` (energy curves, step refinement), `fig7_stiefel_frames`
 (96 raw frames per sampler + second moment), `fig/table_stiefel.md` (generated
