@@ -10,19 +10,19 @@ seeds must reuse it verbatim, changing only the seed.
 |---|---|---|---|---|---|---|---|
 | Ising $4\times4$ | IASBS Dirac | 1 | +2 | 3 | 256 steps, 3000 outer iters, 40 inner updates, batch 2048, minibatch 1024 | exact TV | TV, KL, Hellinger, energy-hist TV, $\mathbb{E}[E]$, ESS fraction, violations, wall time |
 | Ising $4\times4$ | IASBS non-Dirac | 1 | +2 | 3 | 256 steps, 3000 iters, same controller, 40 corrector updates | exact TV | exact TV, corrector RMSE/MAE, violations, wall time |
-| Ising $4\times4$ | DAM | 1 | +2 | 3 | $K=32$, 128 steps, 5000 iters | exact TV | TV, energy-hist TV, ESS/K, ESS mean/p10, clipping counts, endpoint-$f_1$ evals, CTMC jumps, wall time |
+| Ising $4\times4$ | DAM **(LAST, 6.0 h)** | 1 | +2 | 3 | $K=32$, 128 steps, 5000 iters | exact TV | TV, energy-hist TV, ESS/K, ESS mean/p10, clipping counts, endpoint-$f_1$ evals, CTMC jumps, wall time |
 | Ising $5\times5$ | IASBS Dirac | 1 | +2 | 3 | 512 steps, 6000 outer iters, 40 inner updates, batch 2048, minibatch 1024 | exact TV | TV, KL, Hellinger, energy-hist TV, $\mathbb{E}[E]$, ESS fraction, violations, wall time |
 | Ising $5\times5$ | IASBS non-Dirac | 1 | +2 | 3 | 256 steps, 3000 iters, 40 corrector updates | exact TV | exact TV, corrector RMSE/MAE, violations, wall time |
-| Ising $5\times5$ | DAM | 1 | +2 | 3 | $K=32$, 128 steps, 5000 iters | exact TV | TV, energy-hist TV, ESS/K, ESS mean/p10, clipping counts, endpoint-$f_1$ evals, CTMC jumps, wall time |
+| Ising $5\times5$ | DAM **(LAST, 6.4 h)** | 1 | +2 | 3 | $K=32$, 128 steps, 5000 iters | exact TV | TV, energy-hist TV, ESS/K, ESS mean/p10, clipping counts, endpoint-$f_1$ evals, CTMC jumps, wall time |
 | Occupation $m=N=4$ | IASBS Dirac | 1 | +2 | 3 | 128 steps, 1500 iters, batch 512, minibatch 1024 | exact TV | TV, occupancy-hist TV, max-occupancy TV, mean energy, violations |
 | Occupation $m=N=4$ | IASBS non-Dirac uniform | 1 | +2 | 3 | 128 steps, 1500 iters, source $\rho=1$, 4 corrector updates | exact TV | TV, occupancy/max-occupancy errors, corrector max/RMSE error, mean energy, violations |
-| Occupation $m=N=4$ | DAM | 1 | +2 | 3 | $K=16$, 128 steps, 1200 iters | exact TV | TV, occupancy-hist TV, ESS/K, ESS mean/p10, endpoint-$f_1$ evals, CTMC jumps, wall time |
+| Occupation $m=N=4$ | DAM **(LAST, 6.1 h)** | 1 | +2 | 3 | $K=16$, 128 steps, 1200 iters | exact TV | TV, occupancy-hist TV, ESS/K, ESS mean/p10, endpoint-$f_1$ evals, CTMC jumps, wall time |
 | Occupation $m=N=32$ | IASBS Dirac | 1 | +2 | 3 | 128 steps, 3000 iters, batch 512, minibatch 1024 | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + mean energy, violations, wall time |
 | Occupation $m=N=32$ | IASBS non-Dirac | 2 | +1 | 3 | 128 steps, 3000 iters, batch 512, minibatch 1024 | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + mean energy, violations, corrector diagnostics |
-| Occupation $m=N=32$ | DAM | 1 | +2 | 3 | $K=64$, 128 steps, 1000 iters | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + ESS mean/p10, clipping/nonfinite counts, endpoint-$f_1$ evals, jumps, wall time |
+| Occupation $m=N=32$ | DAM **(LAST, 8.3 h)** | 1 | +2 | 3 | $K=64$, 128 steps, 1000 iters | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + ESS mean/p10, clipping/nonfinite counts, endpoint-$f_1$ evals, jumps, wall time |
 | Occupation $m=N=128$ | IASBS Dirac | 1 | +2 | 3 | 128 steps, 3000 iters, batch 512, minibatch 1024 | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + mean energy, violations, wall time |
 | Occupation $m=N=128$ | IASBS non-Dirac | 1 | +2 | 3 | 128 steps, 3000 iters, corrector LR $10^{-2}$ | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + mean energy, violations, corrector diagnostics |
-| Occupation $m=N=128$ | DAM | 1 | +2 | 3 | $K=64$, 128 steps, 500 iters | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + ESS collapse stats, clipped labels, nonfinite weights, endpoint-$f_1$ evals, jumps, wall time |
+| Occupation $m=N=128$ | DAM **(LAST, 36.5 h)** | 1 | +2 | 3 | $K=64$, 128 steps, 500 iters | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + ESS collapse stats, clipped labels, nonfinite weights, endpoint-$f_1$ evals, jumps, wall time |
 | Occupation $m=N=1000$ | IASBS Dirac | 1 | +2 | 3 | 256 steps, 1500 iters, batch 128, minibatch 512 | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + mean energy, violations, wall time |
 | Occupation $m=N=1000$ | IASBS non-Dirac | 1 | +2 | 3 | 256 steps, 1500 iters, batch 512, minibatch 512 | $\mathrm{KS}_{\rm occ}$, $W_1(\max)/N$ | same + mean energy, violations, corrector diagnostics |
 | Fixed-support toy $(14,4,4)$ | IASBS Dirac | 1 | +2 | 3 | 256 steps, 3000 iters, batch 2048, minibatch 1024 | exact TV | TV, KL, Hellinger, mean energy, wall time, violations |
@@ -40,6 +40,23 @@ seeds must reuse it verbatim, changing only the seed.
 | Stiefel trace $\beta=1.3$ | R-ASBS | 1 | +2 | 3 | current matched/native baseline | $\lvert\Delta E\rvert$, KS(E), relative spread | same + oracle budget, wall time |
 | Stiefel trace $\beta=2$ | R-ASBS | 1 | +2 | 3 | current matched/native baseline | $\lvert\Delta E\rvert$, KS(E), relative spread | same + oracle budget, wall time |
 | Stiefel trace $\beta=5$ | R-ASBS | 1 | +2 | 3 | current matched/native baseline | $\lvert\Delta E\rvert$, KS(E), relative spread | same + oracle budget, wall time |
+
+## Run order
+
+Five DAM rows are marked **LAST** in the table above.  Together they are 63 h
+of the 100 h serial estimate -- occupation $m=128$ alone is 36.5 h, because
+DAM needs 18.8 h per seed there and the seed-0 result is already a documented
+estimator collapse (ESS 1.69 / 64).  Nothing else depends on them, so they
+should be queued after everything else has landed.
+
+| set | serial | on 2 GPUs |
+|---|---|---|
+| whole table | 100 h | 50 h |
+| without the five LAST rows | 37 h | 18 h |
+| the five LAST rows alone | 63 h | 32 h |
+
+The four remaining DAM rows (GB1 $k=3$ 3.9 h, fixed-support toy 3.8 h) are
+short enough to run with the main batch.
 
 ## Running the added seeds
 

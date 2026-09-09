@@ -18,7 +18,12 @@
 #   bash structured_asbs/scripts/multiseed.sh list
 #   bash structured_asbs/scripts/multiseed.sh <row> [seeds] [drop|keep]
 #   bash structured_asbs/scripts/multiseed.sh group:ising  [seeds] [drop|keep]
+#   bash structured_asbs/scripts/multiseed.sh group:main   [seeds] [drop|keep]
+#   bash structured_asbs/scripts/multiseed.sh group:last   [seeds] [drop|keep]
 #   bash structured_asbs/scripts/multiseed.sh all          [seeds] [drop|keep]
+#
+# group:last is the five long DAM rows (63 h of the 100 h serial estimate);
+# group:main is everything else (37 h).  Run main first, last last.
 #
 # Third argument -- mid-run evaluations, default "drop".
 #
@@ -73,6 +78,13 @@ toy_nd|structured_asbs/fixed_support.py|train-nondirac --target toy --steps 256 
 toy_dam|dam/discrete.py|fixed-support --target toy --tau 1.0 --gamma 10.0 --K 16 --steps 256 --iters 1200 --inner 4 --batch 512 --mb 256 --buffer 8 --hidden 512 --lr 1e-3 --m-clip 30 --eval-every 50 --n-samples 20000|dam_fs_toy_v2_K16
 ROWS
 }
+
+# The five DAM rows that dominate the budget: 63 h of the 100 h serial estimate,
+# occupation m=128 alone 36.5 h.  Marked LAST in multiseed_requests.md and
+# selectable as group:last, with everything else as group:main.
+LAST_ROWS="ising_L4_dam ising_L5_dam occ4_dam occs32_dam occs128_dam"
+
+is_last() { case " $LAST_ROWS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 group_of() {                      # group_of <row name>
     case "$1" in
@@ -179,6 +191,13 @@ case "$WHICH" in
         ;;
     all)
         for n in $(all_rows); do for s in $SEEDS; do run_row "$n" "$s"; done; done ;;
+    group:last)
+        for n in $LAST_ROWS; do for s in $SEEDS; do run_row "$n" "$s"; done; done ;;
+    group:main)
+        for n in $(all_rows); do
+            is_last "$n" && continue
+            for s in $SEEDS; do run_row "$n" "$s"; done
+        done ;;
     group:*)
         g="${WHICH#group:}"
         for n in $(all_rows); do
