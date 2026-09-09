@@ -794,6 +794,34 @@ capacity. Per-seed KS(x_3): 0.03098 / 0.02967 / 0.03079 / 0.03018 / 0.03051
 (hidden 256) and 0.02993 / 0.02868 / 0.03047 / 0.02855 / 0.02977 (hidden 48).
 Gates C1 and C2 PASS on both legs. Wall 140-153 s per seed.
 
+On the four §4.3 secondaries, all recomputed from `ckpt/` by the same
+`remeasure.py sphere` path that produced the §4.2 and §4.3 rows (population sd,
+5 seeds, 200,000 samples per seed):
+
+| leg | north mass | W1(x_3) | KS(phi) | `\|dE[x_3^2]\|` |
+|---|---:|---:|---:|---:|
+| R-ASBS, matlab init | 0.47221 +- 0.03524 | 0.08365 +- 0.04100 | 0.01094 +- 0.00322 | 0.07529 +- 0.01365 |
+| IASBS, budget-matched | **0.49961 +- 0.00136** | **0.01883 +- 0.00034** | **0.00371 +- 0.00152** | **0.02813 +- 0.00046** |
+| IASBS, budget + parameter matched | **0.49954 +- 0.00096** | **0.01762 +- 0.00029** | **0.00298 +- 0.00068** | **0.02659 +- 0.00031** |
+| IASBS, native budget | 0.50013 +- 0.00062 | 0.01239 +- 0.00022 | 0.00264 +- 0.00097 | 0.01907 +- 0.00019 |
+| iid floor (n = 200,000) | 0.50019 +- 0.00079 | 0.00118 +- 0.00073 | 0.00182 +- 0.00053 | 0.00028 +- 0.00019 |
+
+Per-seed, budget-matched then parameter-matched:
+
+| metric | hidden 256 | hidden 48 |
+|---|---|---|
+| north mass | 0.49978 / 0.50194 / 0.49772 / 0.49912 / 0.49949 | 0.49970 / 0.50112 / 0.49975 / 0.49890 / 0.49824 |
+| W1(x_3) | 0.01908 / 0.01875 / 0.01933 / 0.01865 / 0.01836 | 0.01785 / 0.01757 / 0.01739 / 0.01726 / 0.01804 |
+| KS(phi) | 0.00192 / 0.00457 / 0.00280 / 0.00623 / 0.00302 | 0.00213 / 0.00348 / 0.00249 / 0.00400 / 0.00281 |
+| `\|dE[x_3^2]\|` | 0.02894 / 0.02757 / 0.02816 / 0.02815 / 0.02784 | 0.02702 / 0.02655 / 0.02652 / 0.02609 / 0.02676 |
+
+KS(phi) at both matched budgets is within a factor 2 of the iid floor, so the
+azimuthal marginal is already at sampling resolution and the 109x budget cut
+does not touch it. `north mass` differs by 5e-4 from the value the training run
+records in its own JSON (0.50012 for hidden 256) because the two are separate
+200,000-sample draws; the table above uses the `ckpt/` draw so that all four
+columns share one provenance with §4.2 and §4.3.
+
 Cutting the budget 109x moves KS(x_3) from 0.02165 to 0.03042 (1.4x) and leaves
 north_err unchanged within seed noise. Halving capacity below R-ASBS's costs
 nothing further.
