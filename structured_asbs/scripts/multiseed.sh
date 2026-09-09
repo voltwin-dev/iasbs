@@ -16,9 +16,26 @@
 # also serves as a reproducibility check against the number already in README.
 #
 #   bash structured_asbs/scripts/multiseed.sh list
-#   bash structured_asbs/scripts/multiseed.sh <row> [seeds]      # default "1 2"
-#   bash structured_asbs/scripts/multiseed.sh group:ising  [seeds]
-#   bash structured_asbs/scripts/multiseed.sh all          [seeds]
+#   bash structured_asbs/scripts/multiseed.sh <row> [seeds] [drop|keep]
+#   bash structured_asbs/scripts/multiseed.sh group:ising  [seeds] [drop|keep]
+#   bash structured_asbs/scripts/multiseed.sh all          [seeds] [drop|keep]
+#
+# Third argument -- mid-run evaluations, default "drop".
+#
+#   drop  append --eval-every 1000000000 to every command.  All sixteen
+#         evaluation sites in the four mains are guarded by
+#         "it % args.eval_every == 0 or it == args.iters", so the final
+#         evaluation still runs and every headline number is unchanged: the
+#         reported figure is always the last eval, never a min over history
+#         (checked -- e.g. dam_occs32_K64_1000 reports its final 0.01284, not
+#         its best 0.00272).  What is lost is the TV-vs-iteration trajectory
+#         and the progress lines in the log.  Seed 0's curves already exist.
+#         On Ising 5x5 non-Dirac this removes 120 exact propagations over
+#         2^25 states and is worth roughly 9 h per seed.
+#
+#   keep  use each row's recorded --eval-every, i.e. reproduce the seed-0 run
+#         including its evaluation cadence.  Slower; needed only if the
+#         trajectory itself is wanted for the added seeds.
 #
 # Aggregate afterwards with
 #   python structured_asbs/scripts/aggregate_seeds.py <base> [<base> ...]
@@ -80,7 +97,8 @@ run_plain() {                     # run_plain <script> <args> <base tag> <seed>
     case "$script" in *fixed_support.py|dam/discrete.py) extra="$GB1DATA" ;; esac
     echo "=== [$(date -u '+%F %T UTC')] START $tag"
     # shellcheck disable=SC2086
-    "$PY" -u "$script" $args $extra \
+    # MIDEVAL comes last so its --eval-every overrides the row's recorded one.
+    "$PY" -u "$script" $args $extra $MIDEVAL \
         --seed "$s" --tag "$tag" --out "json/results_${tag}.json" \
         > "${logdir}/${tag}.log" 2>&1
     echo "=== [$(date -u '+%F %T UTC')] END   $tag  exit=$?"
@@ -112,7 +130,7 @@ run_gb1_chain() {                 # run_gb1_chain <dirac|nd|dam> <seed>
         [ -n "$prev" ] && init="--init-from ckpt/${prev}.pt"
         echo "=== [$(date -u '+%F %T UTC')] START $tag  tau=$tau  ${init:-cold}"
         # shellcheck disable=SC2086
-        "$PY" -u "$script" $args $GB1DATA \
+        "$PY" -u "$script" $args $GB1DATA $MIDEVAL \
             --tau "$tau" --iters "$it" --n-samples "$ns" $init \
             --seed "$s" --tag "$tag" --out "json/results_${tag}.json" \
             > "${logdir}/${tag}.log" 2>&1
@@ -141,6 +159,13 @@ all_rows() { rows | cut -d'|' -f1; echo gb1_dirac; echo gb1_nd; echo gb1_dam; }
 # --------------------------------------------------------------------- main --
 WHICH=${1:-list}
 SEEDS=${2:-"1 2"}
+EVALS=${3:-drop}
+
+case "$EVALS" in
+    drop) MIDEVAL="--eval-every 1000000000" ;;
+    keep) MIDEVAL="" ;;
+    *) echo "third argument must be drop or keep, got: $EVALS" >&2; exit 2 ;;
+esac
 
 case "$WHICH" in
     list)
@@ -164,4 +189,4 @@ case "$WHICH" in
         for s in $SEEDS; do run_row "$WHICH" "$s"; done ;;
 esac
 
-echo "=== [$(date -u '+%F %T UTC')] DONE ($WHICH, seeds: $SEEDS)"
+echo "=== [$(date -u '+%F %T UTC')] DONE ($WHICH, seeds: $SEEDS, mid-evals: $EVALS)"

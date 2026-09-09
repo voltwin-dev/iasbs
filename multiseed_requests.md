@@ -41,6 +41,28 @@ seeds must reuse it verbatim, changing only the seed.
 | Stiefel trace $\beta=2$ | R-ASBS | 1 | +2 | 3 | current matched/native baseline | $\lvert\Delta E\rvert$, KS(E), relative spread | same + oracle budget, wall time |
 | Stiefel trace $\beta=5$ | R-ASBS | 1 | +2 | 3 | current matched/native baseline | $\lvert\Delta E\rvert$, KS(E), relative spread | same + oracle budget, wall time |
 
+## Running the added seeds
+
+`bash structured_asbs/scripts/multiseed.sh <row|group:X|all> [seeds] [drop|keep]`
+re-issues each row's recorded flags with `--seed S --tag <base>_sS --out
+json/results_<base>_sS.json`, so nothing collides with the seed-0 artifacts.
+`bash structured_asbs/scripts/multiseed.sh list` prints the row names.
+
+The third argument controls mid-run evaluation and defaults to `drop`, which
+appends `--eval-every 1000000000`.  Every evaluation site in the four discrete
+mains is guarded by `it % args.eval_every == 0 or it == args.iters`, so the
+final evaluation still runs and none of the headline numbers above change --
+each is taken from the last evaluation, never from a minimum over the training
+history.  Only the TV-vs-iteration curve is lost, and seed 0 already has it.
+On Ising $5\times5$ non-Dirac that removes 120 exact propagations over $2^{25}$
+states, about 9 h per seed; over the whole table it takes the estimated
+two-GPU wall from roughly 64 h to roughly 50 h.  Pass `keep` to reproduce a
+row's original evaluation cadence as well.
+
+Collapse the per-seed files with
+`python structured_asbs/scripts/aggregate_seeds.py <base> [...]`
+(add `--stage C` for the GB1 chain).
+
 ## Already in flight
 
 The last nine rows -- the Stiefel trace legs at $\beta \in \{1.3, 2, 5\}$ for
