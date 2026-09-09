@@ -1288,7 +1288,124 @@ seed, 163,840,000 across 5 seeds.
 
 ---
 
-# 8. Reproduction index
+# 8. Multi-seed reproducibility
+
+Every number published elsewhere in this README is a single run at seed 0. This
+section re-runs the 18 `group:main` rows at seeds 1 and 2 -- 35 additional runs,
+identical in every respect except the seed -- and reports the across-seed
+spread. The five long DAM rows (`ising_L4_dam`, `ising_L5_dam`, `occ4_dam`,
+`occs32_dam`, `occs128_dam`) are not included.
+
+`sd` here is the **sample** standard deviation (ddof = 1) over n = 3, which is
+what `aggregate_seeds.py` emits. Note this differs from the sphere tables in
+sections 4.2 and 4.5, which quote a population sd (ddof = 0) over n = 5 seeds.
+
+That the added runs differ from the published ones *only* in the seed is checked
+mechanically rather than by inspection:
+
+```bash
+python structured_asbs/scripts/verify_multiseed.py
+# 0 mismatch(es), 0 skip(s)   over 30 row/stage combinations
+```
+
+The script re-parses each main's argument parser, replays the recorded command
+line for the seed-0 artifact and for every added seed, and diffs the resulting
+config dicts field by field.
+
+## 8.1 Headline metric, three seeds
+
+TV is exact (full enumeration) on the Ising, occupation m = 4, toy and GB1 rows.
+The occupation m >= 32 rows cannot be enumerated, so they report KS(occ)
+against the exact reference; those values are the last training-history entry,
+**not** the top-level `reference` block, which is the untrained baseline sampler
+(KS(occ) ~ 0.205).
+
+| row | metric | seed 0 (paper) | 3-seed mean +- sd | seed 1 | seed 2 | spread | viol |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Ising 4x4, Dirac | TV | 0.04158 | **0.04134 +- 0.00592** | 0.03531 | 0.04715 | 1.34x | 0 |
+| Ising 4x4, non-Dirac | TV | 0.03470 | **0.03685 +- 0.00269** | 0.03597 | 0.03987 | 1.15x | 0 |
+| Ising 5x5, Dirac | TV | 0.07698 | **0.07832 +- 0.00541** | 0.07371 | 0.08427 | 1.14x | 0 |
+| Ising 5x5, non-Dirac | TV | 0.07228 | **0.07296 +- 0.00416** | 0.06919 | 0.07743 | 1.12x | 0 |
+| occupation m=4, Dirac | TV | 0.01273 | **0.01340 +- 0.00058** | 0.01373 | 0.01373 | 1.08x | 0 |
+| occupation m=4, non-Dirac | TV | 0.01248 | **0.01449 +- 0.00188** | 0.01621 | 0.01479 | 1.30x | 0 |
+| occupation m=32, Dirac | KS_occ | 0.00432 | **0.00733 +- 0.00566** | 0.00381 | 0.01386 | 3.64x | 0 |
+| occupation m=32, non-Dirac | KS_occ | 0.01512 | **0.01686 +- 0.00194** | 0.01895 | 0.01650 | 1.25x | 0 |
+| occupation m=128, Dirac | KS_occ | 0.00835 | **0.00862 +- 0.00100** | 0.00777 | 0.00972 | 1.25x | 0 |
+| occupation m=128, non-Dirac | KS_occ | 0.01270 | **0.01029 +- 0.00232** | 0.00808 | 0.01007 | 1.57x | 0 |
+| occupation m=1000, Dirac | KS_occ | 0.01024 | **0.01322 +- 0.00538** | 0.00999 | 0.01943 | 1.94x | 0 |
+| occupation m=1000, non-Dirac | KS_occ | 0.01109 | **0.01109 +- 0.00321** | 0.01430 | 0.00788 | 1.81x | 0 |
+| toy fixed-support, Dirac | TV | 0.00774 | **0.01043 +- 0.00332** | 0.01414 | 0.00940 | 1.83x | 0 |
+| toy fixed-support, non-Dirac | TV | 0.00776 | **0.00900 +- 0.00115** | 0.00923 | 0.01003 | 1.29x | 0 |
+| toy fixed-support, DAM | TV | 0.08285 | **0.08400 +- 0.00166** | 0.08325 | 0.08591 | 1.04x | 0 |
+| GB1 k=3 (stage C), Dirac | TV | 0.13568 | **0.14371 +- 0.01123** | 0.15654 | 0.13889 | 1.15x | 0 |
+| GB1 k=3 (stage C), non-Dirac | TV | 0.13226 | **0.13110 +- 0.00396** | 0.12669 | 0.13435 | 1.06x | 0 |
+| GB1 k=3 (stage C), DAM | TV | 0.26472 | **0.25750 +- 0.00662** | 0.25606 | 0.25170 | 1.05x | 0 |
+
+## 8.2 What moved
+
+Every gate verdict is unchanged from seed 0, and `violations` is 0 in all 53
+runs. `bad_labels` and `skipped_steps` are 0 wherever the main reports them.
+
+Two published numbers are noticeably lucky at seed 0:
+
+- **Occupation m = 32, Dirac, KS(occ).** Section 2.3 publishes 0.0043; the three
+  seeds are 0.00432 / 0.00381 / 0.01386, a 3.6x spread and the widest in the
+  table. The scaling story survives -- the 3-seed means are still monotone in m
+  (0.00733, 0.00862, 0.01322 for m = 32, 128, 1000) -- but the single-seed value
+  understates the run-to-run variation by a large factor.
+- **Occupation m = 4, non-Dirac, corrector max err.** Section 2.2 publishes
+  3.59e-4; the three seeds are 3.59e-4 / 1.40e-3 / 9.33e-4, mean 8.96e-4 +-
+  5.19e-4, a 3.9x spread. All three are small in absolute terms and the A1 gate
+  (which is on TV, not on this diagnostic) passes at every seed.
+
+One published number is mildly pessimistic:
+
+- **Occupation m = 1000, Dirac, conditioning** (section 2.4). Seed 0 gives
+  0.01607 against the exact 0.01443; the 3-seed mean 0.01401 is closer to exact,
+  so seed 0 is the worst of the three.
+
+Structural observations that hold across the sweep:
+
+- The non-Dirac source is consistently *more* seed-stable than the Dirac source
+  on the same space: sd ratio Dirac/non-Dirac is 2.8x on GB1, 2.9x on toy and
+  2.2x on Ising 4x4. On GB1 and toy the non-Dirac 3-seed mean is also the better
+  of the two (0.13110 vs 0.14371, and 0.00900 vs 0.01043).
+- DAM is the most seed-stable method in the table (spread 1.04x-1.05x), which is
+  expected: its rollouts average over K = 16 annealing stages.
+- `KS_max` at m = 1000 varies by 1.5x across seeds (0.2215 / 0.1470 / 0.1975).
+  It is a max over 1000 marginals and should not be quoted as a point estimate.
+
+## 8.3 Reproduction
+
+```bash
+# one row, seeds 1 and 2
+bash structured_asbs/scripts/multiseed.sh <row> "1 2" <keep|drop>
+
+# the whole group:main sweep, two GPUs sharing one atomic work pool
+bash structured_asbs/scripts/multiseed_pool.sh init
+CUDA_VISIBLE_DEVICES=0 bash structured_asbs/scripts/multiseed_pool.sh work w0 &
+CUDA_VISIBLE_DEVICES=1 bash structured_asbs/scripts/multiseed_pool.sh work w1 &
+
+# collapse to mean +- sd
+python structured_asbs/scripts/aggregate_seeds.py --json json/seed_summary_main.json <bases...>
+python structured_asbs/scripts/aggregate_seeds.py --stage C --json json/seed_summary_gb1.json \
+    fs_gb1_k3_dirac fs_gb1_k3_nd dam_fs_gb1_k3_K16
+```
+
+`multiseed_pool.sh` runs the three `scale-nondirac` rows (`occs32_nd`,
+`occs128_nd`, `occs1000_nd`) in `keep` mode, because their mid-training
+evaluation block draws `torch.randint` and therefore advances the training RNG
+stream; changing `--eval-every` on those rows would change the trajectory.
+Every other row runs in `drop` mode (`--eval-every 1000000000`), whose
+evaluation calls are all `no_grad` and RNG-free, leaving the stream identical
+while removing a large diagnostic overhead.
+
+Artifacts: `json/seed_summary_main.json`, `json/seed_summary_gb1.json`, and
+`json/results_<base>_s{1,2}.json` for every row above.
+
+---
+
+# 9. Reproduction index
 
 | script | produces | checkpoints |
 |---|---|---|
