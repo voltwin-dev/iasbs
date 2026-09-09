@@ -14,3 +14,7 @@ rasbs_ref/
 
 __pycache__/
 *.pyc
+
+# GB1 raw data (6.7 MB of Olson et al. supplements).
+# Download instructions are in data/gb1/README.md.
+data/gb1/*.xlsx
