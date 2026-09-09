@@ -772,6 +772,47 @@ Artifacts: `json/results_rasbs_sphere_bimodal{,_s1,_s2,_s3,_s4}.json`,
 `json/results_rasbs_sphere_matlabinit_s{0..4}.json`,
 `json/results_rasbs_audit_{uniform,vmf}_mi.json` + matching `ckpt/*.pt`.
 
+## 4.5 Fair comparison against R-ASBS on S^2
+
+The §4.4 rows are not budget-matched. IASBS calls `C.sphere_energy_grad` once
+per endpoint per iteration, `batch 8192 x iters 4000 = 32,768,000` terminal
+oracle calls per seed; R-ASBS uses `600 epochs x B 500 = 300,000`, a factor of
+109. This section equalises that. Everything else is `rerun_sphere.sh`'s
+antithetic leg unchanged: 128 steps, `--inner 16`, EMA 0.9995, 200,000
+evaluation samples, 5 seeds.
+
+| leg | oracle calls | params | mean north_err +- sd | mean KS(x_3) +- sd | max \|\|x\|-1\| |
+|---|---:|---:|---:|---:|---:|
+| R-ASBS, matlab init | 300,000 | 7,366 | 0.03189 +- 0.03158 | 0.08914 +- 0.02699 | — |
+| IASBS, budget-matched | 300,000 | 136,963 | **0.00072 +- 0.00055** | **0.03042 +- 0.00052** | 2.2e-16 |
+| IASBS, budget + parameter matched | 300,000 | **5,715** | **0.00132 +- 0.00080** | **0.02948 +- 0.00083** | 2.2e-16 |
+| IASBS, native budget | 32,768,000 | 136,963 | 0.00069 | 0.02165 | 2.2e-16 |
+
+The parameter-matched leg uses `--hidden 48`, which is 5,715 parameters against
+R-ASBS's 7,366 — 0.78x, so it is matched on oracle calls and strictly smaller in
+capacity. Per-seed KS(x_3): 0.03098 / 0.02967 / 0.03079 / 0.03018 / 0.03051
+(hidden 256) and 0.02993 / 0.02868 / 0.03047 / 0.02855 / 0.02977 (hidden 48).
+Gates C1 and C2 PASS on both legs. Wall 140-153 s per seed.
+
+Cutting the budget 109x moves KS(x_3) from 0.02165 to 0.03042 (1.4x) and leaves
+north_err unchanged within seed noise. Halving capacity below R-ASBS's costs
+nothing further.
+
+```bash
+python structured_asbs/sphere.py train --antithetic --seeds 5 --iters 600 \
+    --batch 500 --mb 16384 --ema 0.9995 --inner 16 --eval-every 1000 \
+    --n-samples 200000 --ckpt-dir ckpt --tag sphere_m300 \
+    --out json/results_sphere_matched300.json
+python structured_asbs/sphere.py train --antithetic --seeds 5 --iters 600 \
+    --batch 500 --mb 16384 --ema 0.9995 --inner 16 --hidden 48 \
+    --eval-every 1000 --n-samples 200000 --ckpt-dir ckpt --tag sphere_m300h48 \
+    --out json/results_sphere_matched300_h48.json
+```
+
+Artifacts: `json/results_sphere_matched300.json`,
+`json/results_sphere_matched300_h48.json` +
+`ckpt/sphere_m300{,h48}_seed{0..4}.pt`.
+
 ---
 
 # 5. Stiefel manifold St(4,2)
