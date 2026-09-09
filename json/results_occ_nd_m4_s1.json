@@ -1,0 +1,61 @@
+{
+  "config": {
+    "cmd": "train-nondirac",
+    "m": 4,
+    "N": 4,
+    "d": 0.5,
+    "tau": 1.0,
+    "gamma": 4.0,
+    "steps": 128,
+    "iters": 1500,
+    "inner": 4,
+    "batch": 512,
+    "mb": 1024,
+    "buffer": 8,
+    "hidden": 256,
+    "lr": 0.001,
+    "loss": "bregman",
+    "estimator": "full",
+    "n_a": 1,
+    "eval_every": 1000000000,
+    "n_samples": 20000,
+    "reps": 2000,
+    "seed": 1,
+    "out": "json/results_occ_nd_m4_s1.json",
+    "ckpt_dir": "ckpt",
+    "tag": "occ_nd_m4_s1",
+    "nu_skew": 1.0,
+    "inner_h": 4,
+    "lr_h": 0.01
+  },
+  "params": 139540,
+  "source": "nondirac",
+  "nu0": [
+    0.25,
+    0.25,
+    0.25,
+    0.25
+  ],
+  "history": [
+    {
+      "iter": 1500,
+      "TV": 0.01620577656822278,
+      "occ_hist_TV": 0.008886305177789367,
+      "loss": 1.5567539188366912,
+      "loss_h": 0.4358437232136694,
+      "corrector_max_err": 0.0013958051957843054
+    }
+  ],
+  "final_TV": 0.0162057765682228,
+  "empirical_TV": 0.023200000000000016,
+  "iid_TV_floor": 0.017762499999999987,
+  "violations": 0,
+  "corrector_max_err": 0.0013958051957843054,
+  "sinkhorn_marginal_err": 2.7755575615628914e-17,
+  "stats": {
+    "TV": 0.0162057765682228,
+    "occ_hist_TV": 0.008886305177789312,
+    "maxocc_TV": 0.011184162675669313,
+    "meanE": 1.8906419744590288
+  }
+}
