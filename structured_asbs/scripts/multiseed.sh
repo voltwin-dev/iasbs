@@ -86,6 +86,33 @@ LAST_ROWS="ising_L4_dam ising_L5_dam occ4_dam occs32_dam occs128_dam"
 
 is_last() { case " $LAST_ROWS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# Seeds a row already holds on disk, which must therefore not be re-run.
+# Occupation m=32 non-Dirac was trained twice before this script existed; its
+# runs live in json/results_occ_nd_s32_seed{0,1}.json and carry seed 0 and
+# seed 1.  verify_multiseed.py confirms both were run under exactly the
+# configuration this row replays, so only seed 2 is still missing and a
+# request for "1 2" must run seed 2 alone.  Every other row has seed 0 only.
+have_seeds() {                    # have_seeds <row name>
+    case "$1" in
+        occs32_nd) echo "0 1" ;;
+        *)         echo "0" ;;
+    esac
+}
+
+# Requested seeds minus the ones already on disk.
+wanted_seeds() {                  # wanted_seeds <row name> <seeds...>
+    local name="$1"; shift
+    local have out=""
+    have=" $(have_seeds "$name") "
+    for s in "$@"; do
+        case "$have" in
+            *" $s "*) echo "--- skip $name seed $s (already on disk)" >&2 ;;
+            *)        out="$out $s" ;;
+        esac
+    done
+    echo "$out"
+}
+
 group_of() {                      # group_of <row name>
     case "$1" in
         ising_*)      echo ising ;;
@@ -168,6 +195,13 @@ run_row() {                       # run_row <name> <seed>
 
 all_rows() { rows | cut -d'|' -f1; echo gb1_dirac; echo gb1_nd; echo gb1_dam; }
 
+# run_row over the requested seeds, dropping any the row already has on disk.
+run_seeds() {                     # run_seeds <row name> <seeds...>
+    local n="$1"; shift
+    # shellcheck disable=SC2046
+    for s in $(wanted_seeds "$n" "$@"); do run_row "$n" "$s"; done
+}
+
 # --------------------------------------------------------------------- main --
 WHICH=${1:-list}
 SEEDS=${2:-"1 2"}
@@ -190,22 +224,22 @@ case "$WHICH" in
         printf '%-16s %-28s %s\n' gb1_dam   'dam_fs_gb1_k3_K16_s<S>_{A,B,C}' dam/discrete.py
         ;;
     all)
-        for n in $(all_rows); do for s in $SEEDS; do run_row "$n" "$s"; done; done ;;
+        for n in $(all_rows); do run_seeds "$n" $SEEDS; done ;;
     group:last)
-        for n in $LAST_ROWS; do for s in $SEEDS; do run_row "$n" "$s"; done; done ;;
+        for n in $LAST_ROWS; do run_seeds "$n" $SEEDS; done ;;
     group:main)
         for n in $(all_rows); do
             is_last "$n" && continue
-            for s in $SEEDS; do run_row "$n" "$s"; done
+            run_seeds "$n" $SEEDS
         done ;;
     group:*)
         g="${WHICH#group:}"
         for n in $(all_rows); do
             [ "$(group_of "$n")" = "$g" ] || continue
-            for s in $SEEDS; do run_row "$n" "$s"; done
+            run_seeds "$n" $SEEDS
         done ;;
     *)
-        for s in $SEEDS; do run_row "$WHICH" "$s"; done ;;
+        run_seeds "$WHICH" $SEEDS ;;
 esac
 
 echo "=== [$(date -u '+%F %T UTC')] DONE ($WHICH, seeds: $SEEDS, mid-evals: $EVALS)"
