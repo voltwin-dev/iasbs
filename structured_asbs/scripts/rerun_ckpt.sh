@@ -7,10 +7,6 @@ PY=${PY:-python}
 CK=ckpt
 
 # --- Phase 2a: fixed Ising -------------------------------------------------
-$PY -u structured_asbs/fixed_ising.py train --iters 1500 --eval-every 100 --n-samples 20000 \
-    --loss poisson --ckpt-dir $CK --tag ising_poisson --out json/results_ising_poisson.json
-$PY -u structured_asbs/fixed_ising.py train --iters 1500 --eval-every 100 --n-samples 20000 \
-    --loss mse --ckpt-dir $CK --tag ising_mse --out json/results_ising_mse.json
 $PY -u structured_asbs/fixed_ising.py train --steps 256 --iters 3000 --eval-every 200 --n-samples 20000 \
     --loss poisson --ckpt-dir $CK --tag ising_poisson256 --out json/results_ising_poisson256.json
 

@@ -380,9 +380,9 @@ def figure7(args, beta=2):
 # ============================================================================
 
 def figure8(args):
-    ck = load_ck("ising_poisson")
+    ck = load_ck("ising_poisson256")
     if ck is None:
-        return _missing(8, ["ising_poisson"])
+        return _missing(8, ["ising_poisson256"])
 
     ex = ck["extra"]
     states = np.asarray(ex["states"])
