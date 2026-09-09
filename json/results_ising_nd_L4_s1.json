@@ -1,0 +1,45 @@
+{
+  "config": {
+    "cmd": "train-nondirac",
+    "L": 4,
+    "J": 1.0,
+    "tau": 2.0,
+    "gamma": 10.0,
+    "n_samples": 200000,
+    "out": "json/results_ising_nd_L4_s1.json",
+    "ckpt_dir": "ckpt",
+    "tag": "ising_nd_L4_s1",
+    "steps": 256,
+    "iters": 3000,
+    "batch": 2048,
+    "buffer": 8,
+    "inner": 40,
+    "mb": 1024,
+    "hidden": 512,
+    "lr": 0.0003,
+    "seed": 1,
+    "eval_every": 1000000000,
+    "loss": "poisson",
+    "inner_h": 40,
+    "lr_h": 0.0003
+  },
+  "params": 1340928,
+  "source": "uniform",
+  "history": [
+    {
+      "iter": 3000,
+      "TV": 0.0359746353521269,
+      "energy_hist_TV": 0.02244019662888424,
+      "loss": 0.7124443814806952,
+      "loss_h": 0.999990465208032
+    }
+  ],
+  "final_TV": 0.035974635352126895,
+  "empirical_TV": 0.06598963951170853,
+  "iid_TV_floor": 0.05116003840587502,
+  "violations": 0,
+  "ipf1_corrector": {
+    "mean_exp_h": 0.9990861586213041,
+    "max_abs_h": 0.0717281624674797
+  }
+}
