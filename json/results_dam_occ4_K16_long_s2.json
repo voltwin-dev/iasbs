@@ -1,0 +1,97 @@
+{
+  "method": "DAM",
+  "benchmark": "occupation",
+  "config": {
+    "cmd": "occupation",
+    "target": "toy",
+    "gb1_measured": "data/gb1/elife-16965-supp1-v4.xlsx",
+    "gb1_imputed": "data/gb1/elife-16965-supp2-v4.xlsx",
+    "L": 4,
+    "J": 1.0,
+    "m": 4,
+    "N": 4,
+    "d": 0.5,
+    "tau": 1.0,
+    "gamma": 4.0,
+    "K": 16,
+    "K_num": 1,
+    "steps": 128,
+    "iters": 1200,
+    "inner": 4,
+    "batch": 512,
+    "mb": 256,
+    "buffer": 8,
+    "hidden": 256,
+    "lr": 0.001,
+    "a_clamp": 0.0,
+    "m_clip": 30.0,
+    "ess_min": 0.0,
+    "coef_cap": 0.0,
+    "eval_every": 1000000000,
+    "n_samples": 20000,
+    "seed": 2,
+    "out": "json/results_dam_occ4_K16_long_s2.json",
+    "ckpt_dir": "ckpt",
+    "tag": "dam_occ4_K16_long_s2",
+    "init_from": ""
+  },
+  "params": 139536,
+  "headline": {
+    "TV": 0.01685397713843625
+  },
+  "dam": {
+    "ess_mean": 14.191297232232145,
+    "ess_p10": 8.400539837468035,
+    "rollout_jumps": 184496527,
+    "f1_evals": 20889600,
+    "clipped_labels": 0,
+    "nonfinite_weights": 0,
+    "wall_sec": 18850.4,
+    "K": 16,
+    "K_num": 1,
+    "stab": {
+      "a_clamp": 0.0,
+      "m_clip": 30.0,
+      "ess_min": 0.0,
+      "coef_cap": 0.0,
+      "lr": 0.001
+    }
+  },
+  "violations": 0,
+  "history": [
+    {
+      "iter": 1200,
+      "TV": 0.01685397713843626,
+      "occ_hist_TV": 0.008740852272900175,
+      "loss": 15.697563150923877,
+      "ess": 15.872653033626387
+    }
+  ],
+  "log_multiplier_RMSE": [
+    [
+      0.0,
+      0.019499817666573157,
+      0.07468254343710434
+    ],
+    [
+      0.25,
+      0.007727798097434167,
+      0.03301564511991284
+    ],
+    [
+      0.5,
+      0.0069808017254267204,
+      0.019035495047940998
+    ],
+    [
+      0.75,
+      0.01271904703382013,
+      0.03643464558760279
+    ],
+    [
+      0.9921875,
+      0.13045581951469548,
+      0.2692816780717373
+    ]
+  ]
+}
