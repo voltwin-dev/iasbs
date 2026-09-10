@@ -32,13 +32,13 @@ CHEAP="--n-samples 20000 --mc-moment 50000 --mcmc-chains 50000 \
 prev=ckpt/stiefel_anneal_b50_seed0.pt
 for b in 65 80; do
   echo "########## leg beta=$b (warm start $prev) ##########"
-  $PY -u structured_asbs/stiefel.py train --betas $b $BASE $CHEAP --iters 600 \
+  $PY -u iasbs/stiefel.py train --betas $b $BASE $CHEAP --iters 600 \
       --tag chain --init-from $prev --out json/results_chain_b$b.json
   prev=ckpt/chain_b${b}_seed0.pt
 done
 
 echo "########## final leg beta=100 (warm start $prev) ##########"
-$PY -u structured_asbs/stiefel.py train --betas 100 $BASE --iters 900 \
+$PY -u iasbs/stiefel.py train --betas 100 $BASE --iters 900 \
     --n-samples 100000 --mc-moment 200000 --mcmc-chains 200000 \
     --mcmc-sweeps 3000 --mcmc-eps 0.35 --refine 2,4 \
     --tag chain --init-from $prev --out json/results_chain_b100.json

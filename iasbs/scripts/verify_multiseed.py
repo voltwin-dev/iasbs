@@ -16,7 +16,7 @@ seed and nothing else.  This script checks that mechanically:
 A clean report means "re-running this row with --seed S reproduces the seed-0
 configuration exactly".
 
-Usage:  python structured_asbs/scripts/verify_multiseed.py [--show-ok] [--row NAME]
+Usage:  python iasbs/scripts/verify_multiseed.py [--show-ok] [--row NAME]
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "structured_asbs" / "scripts" / "multiseed.sh"
+SCRIPT = ROOT / "iasbs" / "scripts" / "multiseed.sh"
 
 # Keys allowed to differ between a row and the seed-0 config.
 IGNORE = {

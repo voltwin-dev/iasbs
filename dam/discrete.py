@@ -37,9 +37,9 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import common as C                                              # noqa: E402
-from structured_asbs import fixed_ising as FI                    # noqa: E402
-from structured_asbs import occupation as OC                     # noqa: E402
-from structured_asbs import fixed_support as FS                   # noqa: E402
+from iasbs import fixed_ising as FI                    # noqa: E402
+from iasbs import occupation as OC                     # noqa: E402
+from iasbs import fixed_support as FS                   # noqa: E402
 from dam.core import (rollout_ctmc, estimate_log_adjoint, gkl_loss,
                       rates_ns, TINY, LOG_M_CLIP)                # noqa: E402
 

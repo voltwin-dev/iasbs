@@ -12,7 +12,7 @@ Reference rates are chosen as alpha = gamma E_lab / E, beta = gamma E_sup / E so
 that every legal edge carries the identical rate gamma / E and every state has
 escape rate exactly gamma.
 
-This module mirrors structured_asbs/fixed_ising.py in structure: an exact space
+This module mirrors iasbs/fixed_ising.py in structure: an exact space
 object with dense (M, E) neighbour tables, an orbit kernel built by matrix
 exponential on the small orbit lattice, a canonical-source bridge sampler that
 never materialises an M x M matrix, and exact forward propagation for

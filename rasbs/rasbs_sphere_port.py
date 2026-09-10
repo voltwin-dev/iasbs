@@ -67,7 +67,7 @@ Two departures, both mechanical rather than semantic:
 
 METRICS
 -------
-Scored with *our* measurement code, imported from `structured_asbs/`, so that
+Scored with *our* measurement code, imported from `iasbs/`, so that
 the R-ASBS column and our column in the README are produced by the same
 estimator.  Only the algorithm is theirs; the ruler is shared.
 """
@@ -81,12 +81,12 @@ import numpy as np
 import torch
 
 # common.py and the shared json/ ckpt/ fig/ directories live at the repository
-# root; the measurement helpers live one directory over, in structured_asbs/.
+# root; the measurement helpers live one directory over, in iasbs/.
 # Nothing algorithmic is imported from either -- see MEASUREMENT above.
 import os as _os, sys as _sys
 _ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 _sys.path.insert(0, _ROOT)
-_sys.path.insert(0, _os.path.join(_ROOT, "structured_asbs"))
+_sys.path.insert(0, _os.path.join(_ROOT, "iasbs"))
 import common as C
 import earthquake as Q
 import remeasure as R

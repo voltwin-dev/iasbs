@@ -10,9 +10,9 @@
 # Claiming uses mkdir, which is atomic on a local filesystem: exactly one
 # worker can create a given directory, and the loser moves to the next row.
 #
-#   bash structured_asbs/scripts/multiseed_pool.sh init <row> [<row> ...]
-#   CUDA_VISIBLE_DEVICES=0 bash structured_asbs/scripts/multiseed_pool.sh work w0
-#   bash structured_asbs/scripts/multiseed_pool.sh status
+#   bash iasbs/scripts/multiseed_pool.sh init <row> [<row> ...]
+#   CUDA_VISIBLE_DEVICES=0 bash iasbs/scripts/multiseed_pool.sh work w0
+#   bash iasbs/scripts/multiseed_pool.sh status
 #
 # Mid-eval mode is per row, not global.  occupation.py's scale-nondirac
 # evaluation block draws samples (line 1558, torch.randint + simulate_scale),
@@ -49,7 +49,7 @@ work)
         if mkdir "$POOL/claim_$row" 2>/dev/null; then
             m=$(mode_of "$row")
             echo "##### [$(date -u '+%F %T UTC')] $who CLAIMED $row ($m)"
-            bash structured_asbs/scripts/multiseed.sh "$row" "$SEEDS" "$m"
+            bash iasbs/scripts/multiseed.sh "$row" "$SEEDS" "$m"
             echo "$who $(date -u '+%F %T UTC')" > "$POOL/claim_$row/done"
             echo "##### [$(date -u '+%F %T UTC')] $who FINISHED $row"
         fi

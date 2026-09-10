@@ -12,7 +12,7 @@ requirements.txt          pinned versions every number below was produced with
 common.py                 shared kernels, quadrature, Stiefel/S^3 helpers, ckpt IO
 json/  ckpt/  fig/        artifacts, shared by both methods
 
-structured_asbs/          OUR method (IASBS)
+iasbs/          OUR method (IASBS)
   fixed_ising.py          Exp A  fixed-magnetisation Ising   (bijective discrete)
   occupation.py           Exp B  occupation process      (non-bijective discrete)
   sphere.py               Exp C  S^2                       (scalar Killing readout)
@@ -56,10 +56,10 @@ Every `json/results_*.json` carries the full `config` block it was produced
 with, so any flag not spelled out below can be read off the artifact.
 
 ```bash
-python structured_asbs/tests_math.py   # 27 mathematical unit tests
+python iasbs/tests_math.py   # 27 mathematical unit tests
 python -m dam.tests_math               # 11 gates for the DAM baseline
-python structured_asbs/figures.py      # all figures -> fig/
-python structured_asbs/gallery.py      # sample gallery -> fig/
+python iasbs/figures.py      # all figures -> fig/
+python iasbs/gallery.py      # sample gallery -> fig/
 ```
 
 Gates used below: **A1** exact-law TV <= 0.05; **A2** zero constraint
@@ -88,7 +88,7 @@ Monte-Carlo error.
 
 | | configuration |
 |---|---|
-| script | `structured_asbs/fixed_ising.py train` |
+| script | `iasbs/fixed_ising.py train` |
 | network | `SwapController`, hidden 512, 670,464 parameters |
 | integration steps | 256 |
 | iters x inner | 3000 x 40 |
@@ -115,14 +115,14 @@ Multiplier error (all 12,870 states x 32 edges), mean absolute: 0.060 at t = 0,
 0.028-0.048 in the interior, 0.170 (max 1.92) at t -> 1.
 
 ```bash
-python structured_asbs/fixed_ising.py train --steps 256 --iters 3000 \
+python iasbs/fixed_ising.py train --steps 256 --iters 3000 \
     --eval-every 200 --n-samples 20000 --loss poisson --ckpt-dir ckpt \
     --tag ising_poisson256 --out json/results_ising_poisson256.json
-python structured_asbs/remeasure.py ising   # re-derives the table from ckpt/
+python iasbs/remeasure.py ising   # re-derives the table from ckpt/
 ```
 
 Artifacts: `json/results_ising_poisson256.json`, `ckpt/ising_poisson256.pt`.
-Also produced by `bash structured_asbs/scripts/rerun_ckpt.sh` (Ising leg).
+Also produced by `bash iasbs/scripts/rerun_ckpt.sh` (Ising leg).
 
 ## 1.2 Exact control — discretisation floor
 
@@ -138,8 +138,8 @@ steps and 200,000 samples the empirical TV is 0.0517 against an iid floor of
 0.0511.
 
 ```bash
-python structured_asbs/fixed_ising.py exact       # L=4, gates A0/A1/A2
-python structured_asbs/fixed_ising.py exact --L 5 --steps-sweep 64 128 256 512 \
+python iasbs/fixed_ising.py exact       # L=4, gates A0/A1/A2
+python iasbs/fixed_ising.py exact --L 5 --steps-sweep 64 128 256 512 \
     --tag ising_t1_L5_exact --out json/results_ising_t1_L5_exact.json
 ```
 
@@ -179,9 +179,9 @@ of 0.3231 +- 0.0008; the exact control scores 0.3298 on the same measure at a
 true TV of 0.0118.
 
 ```bash
-python structured_asbs/fixed_ising.py train --L 5 --steps 512 --iters 6000 \
+python iasbs/fixed_ising.py train --L 5 --steps 512 --iters 6000 \
     --hidden 512 --tag ising_t1_L5_s512 --out json/results_ising_t1_L5_s512.json
-python structured_asbs/remeasure.py ising5
+python iasbs/remeasure.py ising5
 ```
 
 Artifacts: `json/results_ising_t1_L5.json`, `json/results_ising_t1_L5_s512.json`,
@@ -201,10 +201,10 @@ L = 5 config: 3000 iterations, 256 steps, batch 2048, 1,728,738 parameters,
 36,966 s wall (12.3 s/iter).
 
 ```bash
-python structured_asbs/fixed_ising.py train-nondirac --L 4 --steps 256 \
+python iasbs/fixed_ising.py train-nondirac --L 4 --steps 256 \
     --iters 3000 --n-samples 200000 \
     --tag ising_nd_L4 --out json/results_ising_nd_L4.json
-python structured_asbs/fixed_ising.py train-nondirac --L 5 --tau 2.0 --gamma 10.0 \
+python iasbs/fixed_ising.py train-nondirac --L 5 --tau 2.0 --gamma 10.0 \
     --steps 256 --iters 3000 --batch 2048 --buffer 8 --inner 40 --mb 1024 \
     --hidden 512 --lr 3e-4 --loss poisson --inner-h 40 --lr-h 3e-4 \
     --eval-every 25 --n-samples 200000 \
@@ -267,7 +267,7 @@ Moves are non-bijective.
 
 | | configuration |
 |---|---|
-| script | `structured_asbs/occupation.py` |
+| script | `iasbs/occupation.py` |
 | network | `OccController`, hidden 256, 139,536 parameters (136,450 in the scale sweep) |
 | integration steps | 128 (256 at m = 1000) |
 | iters x inner | 1500 x 4 (3000 at m = 32, 128) |
@@ -304,25 +304,25 @@ interior four-sample occupancy weighting cuts variance ~4x against one sample
 at m = N = 128 and 1000 also passes.
 
 ```bash
-python structured_asbs/occupation.py verify                  # gate B0
-python structured_asbs/occupation.py exact                   # exact control, step sweep
-python structured_asbs/occupation.py train --m 4 --iters 1500 --eval-every 250 \
+python iasbs/occupation.py verify                  # gate B0
+python iasbs/occupation.py exact                   # exact control, step sweep
+python iasbs/occupation.py train --m 4 --iters 1500 --eval-every 250 \
     --n-samples 20000 --estimator full --ckpt-dir ckpt \
     --tag occ4_full --out json/results_occ_full.json
-python structured_asbs/occupation.py train --m 4 --estimator uniform \
+python iasbs/occupation.py train --m 4 --estimator uniform \
     --ckpt-dir ckpt --tag occ4_uniform --out json/results_occ_uniform.json
-python structured_asbs/occupation.py train --m 4 --estimator occupancy \
+python iasbs/occupation.py train --m 4 --estimator occupancy \
     --ckpt-dir ckpt --tag occ4_occupancy --out json/results_occ_occupancy.json
-python structured_asbs/occupation.py train --m 4 --estimator full --loss mse \
+python iasbs/occupation.py train --m 4 --estimator full --loss mse \
     --ckpt-dir ckpt --tag occ4_mse --out json/results_occ_mse.json
-python structured_asbs/occupation.py var                     # gate B3
+python iasbs/occupation.py var                     # gate B3
 ```
 
 Artifacts: `json/results_occ_exact.json`,
 `json/results_occ_{full,uniform,occupancy,mse}.json`,
 `json/results_occ_var.json` + `ckpt/occ4_{full,uniform,occupancy,mse}.pt`.
 All four training legs are also produced by
-`bash structured_asbs/scripts/rerun_ckpt.sh`.
+`bash iasbs/scripts/rerun_ckpt.sh`.
 
 ## 2.2 IASBS, non-Dirac source, m = N = 4
 
@@ -335,9 +335,9 @@ Both A1 PASS. Component breakdown (uniform): occupancy-histogram TV 0.00614,
 max-occupancy TV 0.00744, mean energy 1.88671.
 
 ```bash
-python structured_asbs/occupation.py train-nondirac --m 4 \
+python iasbs/occupation.py train-nondirac --m 4 \
     --tag occ_nd_m4 --out json/results_occ_nd_m4.json
-python structured_asbs/occupation.py train-nondirac --m 4 --nu-skew \
+python iasbs/occupation.py train-nondirac --m 4 --nu-skew \
     --tag occ_nd_m4_skew --out json/results_occ_nd_m4_skew.json
 ```
 
@@ -358,18 +358,18 @@ The three rows are not budget-matched: m = 32 and 128 use 3000 iterations,
 128 steps, batch 512; m = 1000 uses 1500 iterations, 256 steps, batch 128.
 
 ```bash
-bash structured_asbs/scripts/run_scale.sh
+bash iasbs/scripts/run_scale.sh
 # or, per leg:
-python structured_asbs/occupation.py scale --m 32 --N 32 --iters 3000 \
+python iasbs/occupation.py scale --m 32 --N 32 --iters 3000 \
     --eval-every 500 --n-samples 20000 --ckpt-dir ckpt \
     --tag occ_s32 --out json/results_occ_s32.json
-python structured_asbs/occupation.py scale --m 128 --N 128 --iters 3000 \
+python iasbs/occupation.py scale --m 128 --N 128 --iters 3000 \
     --eval-every 500 --n-samples 10000 --ckpt-dir ckpt \
     --tag occ_s128 --out json/results_occ_s128.json
-python structured_asbs/occupation.py scale --m 1000 --N 1000 --steps 256 \
+python iasbs/occupation.py scale --m 1000 --N 1000 --steps 256 \
     --batch 128 --mb 512 --iters 1500 --eval-every 250 --n-samples 4000 \
     --ckpt-dir ckpt --tag occ_s1000 --out json/results_occ_s1000.json
-python structured_asbs/occupation.py scalevar --m 1000 --N 1000 \
+python iasbs/occupation.py scalevar --m 1000 --N 1000 \
     --out json/results_occ_var1000.json
 ```
 
@@ -392,11 +392,11 @@ conditioning 0.01607 vs 0.01446. Both m = 32 seeds report `bad_labels = 0`,
 `skipped_steps = 0`.
 
 ```bash
-python structured_asbs/occupation.py scale-nondirac --m 32 --N 32 \
+python iasbs/occupation.py scale-nondirac --m 32 --N 32 \
     --tag occ_nd_s32_seed0 --out json/results_occ_nd_s32_seed0.json
-python structured_asbs/occupation.py scale-nondirac --m 128 --N 128 \
+python iasbs/occupation.py scale-nondirac --m 128 --N 128 \
     --tag occ_nd_s128 --out json/results_occ_nd_s128.json
-python structured_asbs/occupation.py scale-nondirac --m 1000 --steps 256 \
+python iasbs/occupation.py scale-nondirac --m 1000 --steps 256 \
     --iters 1500 --mb 512 --n-samples 4000 \
     --tag occ_nd_s1000 --out json/results_occ_nd_s1000.json
 ```
@@ -495,11 +495,11 @@ state (index 78,344) ranked first by both, `p = 0.000908 / 0.000910` vs
 | TV, non-Dirac | 0.02157 | — | 0.01394 | 0.01918 | 0.01031 | **0.00776** |
 
 ```bash
-python structured_asbs/fixed_support.py train --target toy --steps 256 \
+python iasbs/fixed_support.py train --target toy --steps 256 \
     --iters 3000 --batch 2048 --buffer 8 --inner 40 --mb 1024 --hidden 512 \
     --lr 3e-4 --loss poisson --n-samples 20000 \
     --tag fs_toy_v2_dirac --out json/results_fs_toy_v2_dirac.json
-python structured_asbs/fixed_support.py train-nondirac --target toy \
+python iasbs/fixed_support.py train-nondirac --target toy \
     (same flags) --tag fs_toy_v2_nd --out json/results_fs_toy_v2_nd.json
 ```
 
@@ -551,7 +551,7 @@ sits at 0.78220; `gamma` = 20, 40, 80 all sit on that same floor to five
 decimals.
 
 ```bash
-bash structured_asbs/scripts/run_gb1_anneal.sh both
+bash iasbs/scripts/run_gb1_anneal.sh both
 ```
 
 Artifacts: `json/results_fs_gb1_k3_{dirac,nd}_{A,B,C}.json` +
@@ -609,7 +609,7 @@ inverse-CDF sampling draws iid target points.
 
 | | configuration |
 |---|---|
-| script | `structured_asbs/sphere.py` |
+| script | `iasbs/sphere.py` |
 | source `x_0` | `(1, 0, 0)` (Dirac) or Haar (non-Dirac) |
 | network | `ScoreNet`, hidden 256, 136,963 parameters |
 | integration steps | 128 |
@@ -660,13 +660,13 @@ KS(x_3) 0.0667.
 +-3 sigma, max |z| = 4.3 at 200,000 samples a side.
 
 ```bash
-python structured_asbs/sphere.py verify              # gate C0
-bash structured_asbs/scripts/rerun_sphere.sh         # exact + plain/anti/sym, 5 seeds each
+python iasbs/sphere.py verify              # gate C0
+bash iasbs/scripts/rerun_sphere.sh         # exact + plain/anti/sym, 5 seeds each
 # headline leg alone:
-python structured_asbs/sphere.py train --antithetic --iters 4000 --inner 16 \
+python iasbs/sphere.py train --antithetic --iters 4000 --inner 16 \
     --batch 8192 --mb 16384 --ema 0.9995 --seeds 5 --n-samples 200000 \
     --tag sphere_anti --out json/results_sphere_train_anti.json
-python structured_asbs/remeasure.py sphere
+python iasbs/remeasure.py sphere
 ```
 
 Artifacts: `json/results_sphere_exact.json`,
@@ -697,11 +697,11 @@ Gates: C1 PASS (0.0011 < 0.03), C2 PASS (0.0228 < 0.05). Exact
 wobble, KS 0.0649 (`ckpt/sphere_nd_plain_seed0.pt`).
 
 ```bash
-python structured_asbs/sphere.py train-nondirac --steps 128 --iters 4000 \
+python iasbs/sphere.py train-nondirac --steps 128 --iters 4000 \
     --inner 16 --inner-h 4 --batch 8192 --mb 16384 --mb-h 4096 --hidden 256 \
     --lr 1e-3 --ema 0.9995 --antithetic --seeds 5 --eval-every 200 \
     --n-samples 200000 --tag sphere_nd --out json/results_sphere_nd.json
-python structured_asbs/remeasure.py sphere
+python iasbs/remeasure.py sphere
 ```
 
 Artifacts: `json/results_sphere_nd.json` + `ckpt/sphere_nd_seed{0..4}.pt`,
@@ -763,7 +763,7 @@ python rasbs/rasbs_sphere_port.py --check                      # port self-check
 python rasbs/rasbs_sphere_port.py --problem bimodal --seed 0 \
     --tag rasbs_sphere_bimodal --out json/results_rasbs_sphere_bimodal.json
 bash rasbs/run_fidelity_audit.sh                               # --init matlab, 5 seeds
-python structured_asbs/_rasbs_extra.py                         # KS(phi), 2nd moment, from ckpt/
+python iasbs/_rasbs_extra.py                         # KS(phi), 2nd moment, from ckpt/
 python rasbs/rasbs_sphere_audit.py --test vmf                  # closed-form audit
 ```
 
@@ -827,11 +827,11 @@ north_err unchanged within seed noise. Halving capacity below R-ASBS's costs
 nothing further.
 
 ```bash
-python structured_asbs/sphere.py train --antithetic --seeds 5 --iters 600 \
+python iasbs/sphere.py train --antithetic --seeds 5 --iters 600 \
     --batch 500 --mb 16384 --ema 0.9995 --inner 16 --eval-every 1000 \
     --n-samples 200000 --ckpt-dir ckpt --tag sphere_m300 \
     --out json/results_sphere_matched300.json
-python structured_asbs/sphere.py train --antithetic --seeds 5 --iters 600 \
+python iasbs/sphere.py train --antithetic --seeds 5 --iters 600 \
     --batch 500 --mb 16384 --ema 0.9995 --inner 16 --hidden 48 \
     --eval-every 1000 --n-samples 200000 --ckpt-dir ckpt --tag sphere_m300h48 \
     --out json/results_sphere_matched300_h48.json
@@ -852,7 +852,7 @@ of basis, and their own beta grid. `tau = 1/beta`. IASBS uses `sigma = sqrt(2)`,
 
 | | IASBS | R-ASBS (`rasbs_port.py`) |
 |---|---|---|
-| script | `structured_asbs/stiefel.py` | port of `alg2_stiefel.m` @ `bb71d14` |
+| script | `iasbs/stiefel.py` | port of `alg2_stiefel.m` @ `bb71d14` |
 | basis | eigenbasis of `H` | ambient Z2xZ2 basis |
 | source | `E_0 = [e_1, e_2]` (Dirac) | Haar |
 | constraint | exact geodesic step | ambient Euler + QR retraction |
@@ -902,14 +902,14 @@ reference itself carries about +0.023 of error there. At beta <= 100 two
 independent chains agree to 0.0001-0.01.
 
 ```bash
-python structured_asbs/stiefel.py verify        # gate D0, incl. spin-clock test
-python structured_asbs/stiefel.py ref --mcmc-sweeps 4000 \
+python iasbs/stiefel.py verify        # gate D0, incl. spin-clock test
+python iasbs/stiefel.py ref --mcmc-sweeps 4000 \
     --betas "0.001,0.01,0.1,0.5,1.3,2,5,7,10,20,50,100,200,1000,10000,1000000"
-bash structured_asbs/scripts/run_scalefix.sh    # beta = 50, 100 at 199 steps
-bash structured_asbs/scripts/run_anneal.sh      # 50 -> 100 anneal
-bash structured_asbs/scripts/run_anneal_chain.sh    # 50 -> 65 -> 80 -> 100
-bash structured_asbs/scripts/run_anneal_b100.sh     # single beta=100 leg
-bash structured_asbs/scripts/run_anneal_b100_fine.sh # same at 796 steps
+bash iasbs/scripts/run_scalefix.sh    # beta = 50, 100 at 199 steps
+bash iasbs/scripts/run_anneal.sh      # 50 -> 100 anneal
+bash iasbs/scripts/run_anneal_chain.sh    # 50 -> 65 -> 80 -> 100
+bash iasbs/scripts/run_anneal_b100.sh     # single beta=100 leg
+bash iasbs/scripts/run_anneal_b100_fine.sh # same at 796 steps
 python rasbs/rasbs_port.py --check-retraction   # GS == sign-corrected QR
 python rasbs/rasbs_port.py --out json/results_rasbs_stiefel.json
 ```
@@ -957,7 +957,7 @@ Wall clock, single A100: IASBS ~1130 s per beta at 199 steps, ~2180 s at 398,
 `results_*.json` records `train_s` (IASBS) or `wall_s` (R-ASBS).
 
 ```bash
-python structured_asbs/_stiefel_extra.py    # no training; reads ckpt/
+python iasbs/_stiefel_extra.py    # no training; reads ckpt/
 ```
 
 Artifacts: `json/results_stiefel_extra.json`,
@@ -998,7 +998,7 @@ with `out_scale` a running RMS of the label. Removing the beta^2 loss scale
 +4.391 / +5.290 without. `json/results_stiefel_scalefix.json`.
 
 ```bash
-python structured_asbs/stiefel.py sweep --beta 2 --iters 1500 --mb 16384 \
+python iasbs/stiefel.py sweep --beta 2 --iters 1500 --mb 16384 \
     --ema 0.9995 --antithetic --tag stiefel_d3 \
     --out json/results_stiefel_sweep.json
 bash rasbs/rasbs_steps.sh                   # their beta=2 step ablation
@@ -1033,7 +1033,7 @@ Gate D2a (mean \|dE\| < 0.05) FAILs at 199 steps (0.1264); D2b (mean KS(E) <
 0.05) PASSes (0.0307). Wall 1,889 s per seed.
 
 ```bash
-bash structured_asbs/scripts/run_fair_stiefel.sh frame
+bash iasbs/scripts/run_fair_stiefel.sh frame
 ```
 
 Artifacts: `json/results_stiefel_frame_s5.json` +
@@ -1100,9 +1100,9 @@ is in `json/results_stiefel_extra.json` (beta = 1.3 / 2 / 5: \|dE\| 0.1548 /
 0.1372 / 0.1100, KS(E) 0.0537 / 0.0718 / 0.1369).
 
 ```bash
-bash structured_asbs/scripts/run_fair_stiefel.sh frame      # IASBS native, 5 seeds
-bash structured_asbs/scripts/run_fair_stiefel.sh frame600   # IASBS600 frame, 5 seeds
-bash structured_asbs/scripts/run_fair_stiefel.sh trace600   # IASBS600 trace, 3 seeds/beta
+bash iasbs/scripts/run_fair_stiefel.sh frame      # IASBS native, 5 seeds
+bash iasbs/scripts/run_fair_stiefel.sh frame600   # IASBS600 frame, 5 seeds
+bash iasbs/scripts/run_fair_stiefel.sh trace600   # IASBS600 trace, 3 seeds/beta
 bash rasbs/run_fair.sh frame                                # R-ASBS frame, 5 seeds
 bash rasbs/run_fair.sh trace                                # R-ASBS trace, 3 seeds/beta
 ```
@@ -1137,7 +1137,7 @@ form and `log Z = log(4 pi sinh kappa / kappa) = 595.4409474111932`.
 
 | | configuration |
 |---|---|
-| script | `structured_asbs/earthquake.py` |
+| script | `iasbs/earthquake.py` |
 | source `x_0` | fixed point on S^2 (Dirac) |
 | network | multi-scale random-Fourier score net, hidden 512, 931,331 parameters |
 | kappa schedule | annealed 150 -> 300 -> 450 -> 600, one warm-started net + EMA |
@@ -1189,9 +1189,9 @@ heat-smoothed target. Measured at `r01 = 1`: initial density over uniform ranges
 No figure code path exists for this experiment.
 
 ```bash
-python structured_asbs/earthquake.py verify                    # sampler + log Z identities
-python structured_asbs/earthquake.py exact --kappa 20          # quadrature control, step sweep
-python structured_asbs/earthquake.py train --kappa 600 \
+python iasbs/earthquake.py verify                    # sampler + log Z identities
+python iasbs/earthquake.py exact --kappa 20          # quadrature control, step sweep
+python iasbs/earthquake.py train --kappa 600 \
     --anneal 150 300 450 600 --steps 512 --iters 6000 --hidden 512 \
     --n-dir 384 --bw-hi 128 --max-drift 200 \
     --tag earthquake_k600 --out json/results_earthquake_k600.json
@@ -1304,7 +1304,7 @@ That the added runs differ from the published ones *only* in the seed is checked
 mechanically rather than by inspection:
 
 ```bash
-python structured_asbs/scripts/verify_multiseed.py
+python iasbs/scripts/verify_multiseed.py
 # 0 mismatch(es), 0 skip(s)   over 30 row/stage combinations
 ```
 
@@ -1379,16 +1379,16 @@ Structural observations that hold across the sweep:
 
 ```bash
 # one row, seeds 1 and 2
-bash structured_asbs/scripts/multiseed.sh <row> "1 2" <keep|drop>
+bash iasbs/scripts/multiseed.sh <row> "1 2" <keep|drop>
 
 # the whole group:main sweep, two GPUs sharing one atomic work pool
-bash structured_asbs/scripts/multiseed_pool.sh init
-CUDA_VISIBLE_DEVICES=0 bash structured_asbs/scripts/multiseed_pool.sh work w0 &
-CUDA_VISIBLE_DEVICES=1 bash structured_asbs/scripts/multiseed_pool.sh work w1 &
+bash iasbs/scripts/multiseed_pool.sh init
+CUDA_VISIBLE_DEVICES=0 bash iasbs/scripts/multiseed_pool.sh work w0 &
+CUDA_VISIBLE_DEVICES=1 bash iasbs/scripts/multiseed_pool.sh work w1 &
 
 # collapse to mean +- sd
-python structured_asbs/scripts/aggregate_seeds.py --json json/seed_summary_main.json <bases...>
-python structured_asbs/scripts/aggregate_seeds.py --stage C --json json/seed_summary_gb1.json \
+python iasbs/scripts/aggregate_seeds.py --json json/seed_summary_main.json <bases...>
+python iasbs/scripts/aggregate_seeds.py --stage C --json json/seed_summary_gb1.json \
     fs_gb1_k3_dirac fs_gb1_k3_nd dam_fs_gb1_k3_K16
 ```
 
@@ -1409,19 +1409,19 @@ Artifacts: `json/seed_summary_main.json`, `json/seed_summary_gb1.json`, and
 
 | script | produces | checkpoints |
 |---|---|---|
-| `structured_asbs/scripts/rerun_ckpt.sh` | `results_ising_poisson256`, `results_occ_{full,uniform,occupancy,mse}`, `results_occ_s{32,128,1000}` | `ising_poisson256.pt`, `occ4_*.pt`, `occ_s*.pt` |
-| `structured_asbs/scripts/run_scale.sh` | `results_occ_s{32,128,1000}`, `results_occ_var{128,1000}` | — |
-| `structured_asbs/scripts/run_occ.sh` | `results_occ_{full,mse}` | — |
-| `structured_asbs/scripts/rerun_sphere.sh` | `results_sphere_exact`, `results_sphere_train_{plain,anti,sym}` | `sphere_{plain,anti,sym}_seed{0..4}.pt` |
-| `structured_asbs/scripts/run_scalefix.sh` | `results_stiefel_{scalefix,fill}` | `stiefel_{scalefix,fill}_b*_seed0.pt` (+ `_mcmc.pt`) |
-| `structured_asbs/scripts/run_anneal*.sh` | `results_stiefel_anneal_b{50,100,100_fine}`, `results_chain_b{65,80,100}` | `stiefel_anneal*_b*_seed0.pt`, `chain_b*_seed0.pt` |
-| `structured_asbs/scripts/run_gb1_anneal.sh` | `results_fs_gb1_k3_{dirac,nd}_{A,B,C}` | `fs_gb1_k3_{dirac,nd}_{A,B,C}.pt` |
-| `structured_asbs/scripts/multiseed.sh` | per-seed replicas `results_<base>_s<S>` | `<base>_s<S>.pt` |
-| `structured_asbs/scripts/aggregate_seeds.py` | across-seed mean +- std | reads only |
-| `structured_asbs/remeasure.py {ising,ising5,sphere}` | re-derives those tables | reads only |
-| `structured_asbs/_stiefel_extra.py` | `results_stiefel_extra` | reads only |
-| `structured_asbs/_rasbs_extra.py` | KS(phi) + second moment for §4.3 | reads only |
-| `structured_asbs/figures.py`, `gallery.py` | everything in `fig/` | reads only |
+| `iasbs/scripts/rerun_ckpt.sh` | `results_ising_poisson256`, `results_occ_{full,uniform,occupancy,mse}`, `results_occ_s{32,128,1000}` | `ising_poisson256.pt`, `occ4_*.pt`, `occ_s*.pt` |
+| `iasbs/scripts/run_scale.sh` | `results_occ_s{32,128,1000}`, `results_occ_var{128,1000}` | — |
+| `iasbs/scripts/run_occ.sh` | `results_occ_{full,mse}` | — |
+| `iasbs/scripts/rerun_sphere.sh` | `results_sphere_exact`, `results_sphere_train_{plain,anti,sym}` | `sphere_{plain,anti,sym}_seed{0..4}.pt` |
+| `iasbs/scripts/run_scalefix.sh` | `results_stiefel_{scalefix,fill}` | `stiefel_{scalefix,fill}_b*_seed0.pt` (+ `_mcmc.pt`) |
+| `iasbs/scripts/run_anneal*.sh` | `results_stiefel_anneal_b{50,100,100_fine}`, `results_chain_b{65,80,100}` | `stiefel_anneal*_b*_seed0.pt`, `chain_b*_seed0.pt` |
+| `iasbs/scripts/run_gb1_anneal.sh` | `results_fs_gb1_k3_{dirac,nd}_{A,B,C}` | `fs_gb1_k3_{dirac,nd}_{A,B,C}.pt` |
+| `iasbs/scripts/multiseed.sh` | per-seed replicas `results_<base>_s<S>` | `<base>_s<S>.pt` |
+| `iasbs/scripts/aggregate_seeds.py` | across-seed mean +- std | reads only |
+| `iasbs/remeasure.py {ising,ising5,sphere}` | re-derives those tables | reads only |
+| `iasbs/_stiefel_extra.py` | `results_stiefel_extra` | reads only |
+| `iasbs/_rasbs_extra.py` | KS(phi) + second moment for §4.3 | reads only |
+| `iasbs/figures.py`, `gallery.py` | everything in `fig/` | reads only |
 | `rasbs/rasbs_steps.sh`, `rasbs_steps_highbeta.sh` | `results_rasbs_steps_*`, `results_rasbs_highbeta_steps_*` | `rasbs_*.pt` |
 | `rasbs/run_fidelity_audit.sh` | `results_rasbs_sphere_matlabinit_s{0..4}`, `results_rasbs_audit_{uniform,vmf}_mi` | matching `.pt` |
 | `rasbs/regen_f64.sh` | `results_{rasbs_b2,stiefel_b2}_f64` | float64 `rasbs_b2.pt`, `stiefel_grid_b2_seed0.pt` |
@@ -1431,12 +1431,12 @@ Artifacts: `json/seed_summary_main.json`, `json/seed_summary_gb1.json`, and
 
 Runs with no wrapper script are the single commands given in each section above.
 
-Multi-seed replication: `bash structured_asbs/scripts/multiseed.sh <row|group:X|all>
+Multi-seed replication: `bash iasbs/scripts/multiseed.sh <row|group:X|all>
 [seeds] [drop|keep]` re-issues each row's recorded flags with `--seed S --tag
 <base>_sS --out json/results_<base>_sS.json`. `multiseed.sh list` prints the row
 names. The third argument defaults to `drop`, which appends
 `--eval-every 1000000000` so only the final evaluation runs. Collapse the
-per-seed files with `python structured_asbs/scripts/aggregate_seeds.py <base>
+per-seed files with `python iasbs/scripts/aggregate_seeds.py <base>
 [...]` (add `--stage C` for the GB1 chain). The request table is
 `multiseed_requests.md`.
 

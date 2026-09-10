@@ -10,13 +10,13 @@
 # only the optimiser's path through it changes.  The same schedule applies to
 # DAM (dam/run_dam.sh) so the head-to-head stays matched.
 #
-#   bash structured_asbs/scripts/run_gb1_anneal.sh dirac
-#   bash structured_asbs/scripts/run_gb1_anneal.sh nd
-#   bash structured_asbs/scripts/run_gb1_anneal.sh both
+#   bash iasbs/scripts/run_gb1_anneal.sh dirac
+#   bash iasbs/scripts/run_gb1_anneal.sh nd
+#   bash iasbs/scripts/run_gb1_anneal.sh both
 set -u
 cd "$(dirname "$0")/../.."
 PY=${PY:-python}
-mkdir -p structured_asbs/logs
+mkdir -p iasbs/logs
 WHICH=${1:-both}
 
 GB1="--target gb1 \
@@ -41,10 +41,10 @@ anneal() {                       # anneal <cmd> <stem> [extra flags...]
         local init=""
         [ -n "$prev" ] && init="--init-from ckpt/${prev}.pt"
         echo "=== [$(date -u '+%F %T UTC')] START $tag  tau=$tau  ${init:-cold}"
-        "$PY" -u structured_asbs/fixed_support.py "$cmd" $GB1 $COMMON "$@" \
+        "$PY" -u iasbs/fixed_support.py "$cmd" $GB1 $COMMON "$@" \
             --tau "$tau" --iters "$IT" --n-samples "$ns" $init \
             --tag "$tag" --out "json/results_${tag}.json" \
-            > "structured_asbs/logs/${tag}.log" 2>&1
+            > "iasbs/logs/${tag}.log" 2>&1
         echo "=== [$(date -u '+%F %T UTC')] END   $tag  exit=$?"
         prev="$tag"
         case $stage in A) stage=B ;; B) stage=C ;; esac

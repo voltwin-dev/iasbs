@@ -2,7 +2,7 @@
 
 Every numeric field recorded by `group:main` at seeds 0, 1 and 2. Seed 0 is the
 run published in the paper and in `README.md`; seeds 1 and 2 were produced by
-`structured_asbs/scripts/multiseed_pool.sh` and differ from it only in the seed
+`iasbs/scripts/multiseed_pool.sh` and differ from it only in the seed
 (`verify_multiseed.py`: 0 mismatches, 0 skips over 30 row/stage combinations).
 
 18 rows / 24 row-stages, 53 runs total. The five long DAM rows of `group:last`

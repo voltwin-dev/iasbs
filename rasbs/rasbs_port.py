@@ -255,7 +255,7 @@ def check_retraction(device=DEV):
 def evaluate(netU, args, Hm, Cm, steps, device, ref_E=None):
     """Terminal metrics for a trained control propagated on `steps` steps.
 
-    Identical statistics to `structured_asbs/stiefel.py:energy_metrics`, so
+    Identical statistics to `iasbs/stiefel.py:energy_metrics`, so
     the two columns of the comparison are computed by the same formulas: mean
     and std of E, max |X^T X - I|, mean tr(C^T X), and -- when a reference
     sample is supplied -- the KS distance of the energy law against it plus

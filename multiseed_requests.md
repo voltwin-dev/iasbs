@@ -60,10 +60,10 @@ short enough to run with the main batch.
 
 ## Running the added seeds
 
-`bash structured_asbs/scripts/multiseed.sh <row|group:X|all> [seeds] [drop|keep]`
+`bash iasbs/scripts/multiseed.sh <row|group:X|all> [seeds] [drop|keep]`
 re-issues each row's recorded flags with `--seed S --tag <base>_sS --out
 json/results_<base>_sS.json`, so nothing collides with the seed-0 artifacts.
-`bash structured_asbs/scripts/multiseed.sh list` prints the row names.
+`bash iasbs/scripts/multiseed.sh list` prints the row names.
 
 The third argument controls mid-run evaluation and defaults to `drop`, which
 appends `--eval-every 1000000000`.  Every evaluation site in the four discrete
@@ -77,7 +77,7 @@ two-GPU wall from roughly 64 h to roughly 50 h.  Pass `keep` to reproduce a
 row's original evaluation cadence as well.
 
 Collapse the per-seed files with
-`python structured_asbs/scripts/aggregate_seeds.py <base> [...]`
+`python iasbs/scripts/aggregate_seeds.py <base> [...]`
 (add `--stage C` for the GB1 chain).
 
 ## Already in flight
@@ -87,7 +87,7 @@ IASBS600 and R-ASBS -- are covered by the fair-comparison run currently on the
 box:
 
 - `bash rasbs/run_fair.sh trace` -> `json/results_rasbs_m600.json`, 3 seeds per $\beta$
-- `bash structured_asbs/scripts/run_fair_stiefel.sh trace600` -> `json/results_stiefel_matched_s3.json`, 3 seeds per $\beta$
+- `bash iasbs/scripts/run_fair_stiefel.sh trace600` -> `json/results_stiefel_matched_s3.json`, 3 seeds per $\beta$
 
 The frame-sensitive St(4,2) legs (`stiefel_frame_s5`, `stiefel_frame600`,
 `rasbs_frame`) already run 5 seeds and are not listed above.

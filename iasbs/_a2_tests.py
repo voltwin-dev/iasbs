@@ -1,6 +1,6 @@
 """Appendix A.2 fixed-support deterministic tests (A2.1 - A2.14).
 
-Imported by structured_asbs/tests_math.py; every test here must pass before any
+Imported by iasbs/tests_math.py; every test here must pass before any
 fixed-support training run is started (Section 14/19 of the experiment spec).
 """
 
@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from scipy.linalg import expm
 
-from structured_asbs import fixed_support as FS
+from iasbs import fixed_support as FS
 
 MICRO = dict(n=5, k=2, r=4)
 GB1_M = "data/gb1/elife-16965-supp1-v4.xlsx"

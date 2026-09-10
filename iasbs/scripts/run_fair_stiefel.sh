@@ -18,14 +18,14 @@
 #             3 seeds, refined to 398.  Extends the single-seed
 #             json/results_stiefel_matched.json to a seed spread.
 #
-#   bash structured_asbs/scripts/run_fair_stiefel.sh frame
-#   bash structured_asbs/scripts/run_fair_stiefel.sh frame600
-#   bash structured_asbs/scripts/run_fair_stiefel.sh trace600
-#   bash structured_asbs/scripts/run_fair_stiefel.sh all
+#   bash iasbs/scripts/run_fair_stiefel.sh frame
+#   bash iasbs/scripts/run_fair_stiefel.sh frame600
+#   bash iasbs/scripts/run_fair_stiefel.sh trace600
+#   bash iasbs/scripts/run_fair_stiefel.sh all
 set -u
 cd "$(dirname "$0")/../.."
 PY=${PY:-/root/miniconda3/envs/SML_env/bin/python}
-mkdir -p structured_asbs/logs
+mkdir -p iasbs/logs
 WHICH=${1:-all}
 
 REF="--mcmc-chains 200000 --mcmc-sweeps 3000 --mcmc-eps 0.35 --n-samples 100000"
@@ -33,11 +33,11 @@ REF="--mcmc-chains 200000 --mcmc-sweeps 3000 --mcmc-eps 0.35 --n-samples 100000"
 leg() {                              # leg <tag> <extra flags...>
     local tag="$1"; shift
     echo "=== [$(date -u '+%F %T UTC')] START $tag"
-    "$PY" -u structured_asbs/stiefel.py train --steps 199 --nq 64 \
+    "$PY" -u iasbs/stiefel.py train --steps 199 --nq 64 \
         --inner 8 --hidden 256 --lr 1e-3 --ema 0.9995 --nbuf 4 \
         $REF --verbose "$@" \
         --tag "$tag" --out "json/results_${tag}.json" \
-        > "structured_asbs/logs/${tag}.log" 2>&1
+        > "iasbs/logs/${tag}.log" 2>&1
     echo "=== [$(date -u '+%F %T UTC')] END   $tag  exit=$?"
 }
 

@@ -6,7 +6,7 @@ cd "$(dirname "$0")/../.."   # repo root: json/, ckpt/ and fig/ live here
 # two-leg script after beta=50.  No `set -e` here for the same reason.
 PY=${PY:-python}
 export CUDA_VISIBLE_DEVICES=1
-$PY -u structured_asbs/stiefel.py train --betas 100 \
+$PY -u iasbs/stiefel.py train --betas 100 \
     --sigma 1.4142135623730951 --nq 64 --iters 1500 --inner 8 \
     --batch 2048 --mb 16384 --hidden 256 --lr 0.001 --ema 0.9995 --nbuf 4 \
     --seeds 1 --eval-every 250 --n-samples 100000 --mc-moment 200000 \

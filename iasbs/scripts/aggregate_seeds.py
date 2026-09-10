@@ -9,8 +9,8 @@ numeric leaf outside ``config``/``history`` into a dot path, and reports the
 across-seed mean, sample standard deviation and per-seed values for every path
 all the seeds agree on.
 
-    python structured_asbs/scripts/aggregate_seeds.py occ_s32 ising_nd_L4
-    python structured_asbs/scripts/aggregate_seeds.py --json json/seed_summary.json occ_s32
+    python iasbs/scripts/aggregate_seeds.py occ_s32 ising_nd_L4
+    python iasbs/scripts/aggregate_seeds.py --json json/seed_summary.json occ_s32
 
 For the GB1 chain pass the stage-C stem, e.g. ``fs_gb1_k3_dirac`` with
 ``--stage C``; the script then looks for ``fs_gb1_k3_dirac_s<S>_C.json``.

@@ -31,7 +31,7 @@ The two sets are disjoint; their union is exactly complete.  Wild type is
 
 ## How the experiment uses them
 
-`structured_asbs/fixed_support.py::load_gb1` merges both sheets into a dense
+`iasbs/fixed_support.py::load_gb1` merges both sheets into a dense
 `(20,20,20,20)` fitness array.  The fixed-support target restricts to the
 Hamming-distance-3 shell around the wild type,
 
@@ -46,5 +46,5 @@ where label `0` means "wild-type residue at this site".  The energy is
 Reproduce the loader check (test `[A2.14]`) with:
 
 ```bash
-python structured_asbs/tests_math.py
+python iasbs/tests_math.py
 ```
