@@ -1,0 +1,99 @@
+{
+  "provenance": {
+    "kB_eV_per_K": 8.617333262145e-05,
+    "files": {
+      "data/cuau/CI_params_ECI_CuAu_Final_Submission.json": "d7de15ebfef8683e379c61be86c81d125ca0f317612d30dc9f38b2d23b567234",
+      "data/cuau/cuau_fcc_2x2x4_supercell.vasp": "e830dcf51775b733ae31e7d9dcae18df61415a3a488207d708bd71f7f8fbb1eb",
+      "data/cuau/cuau_fcc_4x4x4_supercell.vasp": "78b97329fe99fed04024e325ddf55806c83b12201a956d0bc21f704624334f4c"
+    },
+    "metadns_commit": "ae46941ff7a3027c87ca6a6bd97c5b0064e06c8c",
+    "versions": {
+      "python": "3.11.16",
+      "torch": "2.5.1+cu124",
+      "numpy": "1.26.4"
+    }
+  },
+  "config": {
+    "cmd": "exact",
+    "size": [
+      2,
+      2,
+      4
+    ],
+    "temp": 1200.0,
+    "gamma": 10.0,
+    "steps_sweep": [
+      128,
+      512
+    ],
+    "n_samples": 50000,
+    "device": "cuda:0",
+    "out": "",
+    "fn": "<function cmd_exact at 0x789eef8ea520>"
+  },
+  "N": 16,
+  "M": 12870,
+  "temp_k": 1200.0,
+  "tau_eV": 0.10340799914574,
+  "exact": {
+    "mean_E_per_atom_meV": -7.060767171189976,
+    "Cv_per_atom": 2.7850490203357093e-05,
+    "mean_Qmax": 0.5346336229368926
+  },
+  "rows": [
+    {
+      "tag": "oracle steps=128",
+      "TV": 0.025690932626114334,
+      "KL": 0.0020236583861702583,
+      "Hellinger": 0.022462817123632038,
+      "energy_hist_TV": 0.02249870664856492,
+      "Qmax_hist_TV": 0.01388277616825942,
+      "mean_E_per_atom_meV": -6.343333588491968,
+      "exact_mean_E_per_atom_meV": -7.060767171189976,
+      "mean_E_err_meV_per_atom": 0.7174335826980078,
+      "Cv_per_atom": 2.681417676852801e-05,
+      "exact_Cv_per_atom": 2.7850490203357093e-05,
+      "Cv_rel_err": 0.0372098813077325,
+      "mean_Qmax": 0.5258212017740618,
+      "exact_mean_Qmax": 0.5346336229368926,
+      "mass_leak": 0.0,
+      "steps": 128,
+      "sec": 0.12
+    },
+    {
+      "tag": "oracle steps=512",
+      "TV": 0.00643656586892461,
+      "KL": 0.00012662209481378623,
+      "Hellinger": 0.005624316991959025,
+      "energy_hist_TV": 0.005663745185569643,
+      "Qmax_hist_TV": 0.0035356803150489342,
+      "mean_E_per_atom_meV": -6.8797857456913345,
+      "exact_mean_E_per_atom_meV": -7.060767171189976,
+      "mean_E_err_meV_per_atom": 0.1809814254986417,
+      "Cv_per_atom": 2.759558455320489e-05,
+      "exact_Cv_per_atom": 2.7850490203357093e-05,
+      "Cv_rel_err": 0.009152645008793337,
+      "mean_Qmax": 0.5324135657483052,
+      "exact_mean_Qmax": 0.5346336229368926,
+      "mass_leak": 1.1102230246251565e-16,
+      "steps": 512,
+      "sec": 0.15
+    }
+  ],
+  "violations": 0,
+  "empirical_TV": 0.16253225753057635,
+  "iid_TV_floor": 0.16138551175660726,
+  "iid_TV_floor_sd": 0.0018201464820534195,
+  "oracle_floor_TV": 0.00643656586892461,
+  "energy_calls": {
+    "configs": 12870,
+    "calls": 1,
+    "seconds": 0.047,
+    "by_tag": {
+      "train": {
+        "configs": 12870,
+        "seconds": 0.047
+      }
+    }
+  }
+}

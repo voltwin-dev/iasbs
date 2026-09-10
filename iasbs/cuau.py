@@ -1341,6 +1341,97 @@ def cmd_train(args):
     return 0 if viol == 0 else 1
 
 
+def cmd_distill(args):
+    """Capacity control: supervised regression of the net onto the exact Doob
+    control, then the same exact-law evaluation used by ``train``.
+
+    This isolates approximation capacity from the training objective.  The
+    oracle log-multiplier ``a*(t, x, edge)`` is a closed form on CuAu-S, so a
+    plain L2 fit over all ``|Omega| x steps`` pairs measures what the chosen
+    architecture can represent at all.  If this reaches the oracle TV then the
+    plateau seen by ``train`` is a property of the loss and its on-policy data,
+    not of the parameter count.
+    """
+    from iasbs.fixed_ising import (ExactControl, SwapController,
+                                   net_mult_all_states, propagate_exact)
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    size = tuple(args.size)
+    tables = build_ce_tables(size, verbose=True)
+    energy = TorchCuAuEnergy(tables, device=args.device)
+    sp = CuAuExact(size=size, temp_k=args.temp, gamma=args.gamma,
+                   device=args.device, energy=energy, verbose=True)
+    steps = args.steps
+    ctrl = ExactControl(sp, steps)
+    net = SwapController(sp.n, hidden=args.hidden).to(sp.device)
+    n_par = sum(p.numel() for p in net.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=args.iters, eta_min=args.lr * 0.05)
+    gen = torch.Generator(device=sp.device).manual_seed(args.seed + 99)
+
+    print(f"CuAu distill  N={sp.n}  |Omega|={sp.M}  T={sp.temp_k} K  "
+          f"gamma={sp.gamma}  steps={steps}  params={n_par}")
+
+    hist, t0 = [], time.time()
+    for it in range(1, args.iters + 1):
+        s_idx = int(torch.randint(steps, (1,), generator=None).item())
+        t = s_idx / steps
+        idx = torch.randint(sp.M, (args.mb,), device=sp.device, generator=gen)
+        with torch.no_grad():
+            tgt = ctrl.on_states(t, idx)                       # (mb, n_edges)
+        x = sp.S[idx]
+        tt = torch.full((idx.shape[0],), float(t), device=sp.device)
+        a = net(tt, x)
+        b = torch.arange(idx.shape[0], device=sp.device).unsqueeze(1)
+        pred = a[b, sp.edge_i[idx], sp.edge_j[idx]].to(torch.float64)
+        loss = ((pred - tgt) ** 2).mean()
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+        opt.step()
+        sched.step()
+        if it % args.eval_every == 0 or it == args.iters:
+            with torch.no_grad():
+                p = propagate_exact(
+                    sp, lambda tq: net_mult_all_states(sp, net, tq), steps)
+                rep = sp.exact_report(p, "distill")
+                errs = []
+                for s in (0, steps // 2, steps - 1):
+                    d = (net_mult_all_states(sp, net, s / steps)
+                         - ctrl.all_states(s / steps)).abs()
+                    errs.append((s / steps, float(d.mean()), float(d.max())))
+            row = {"it": it, "mse": float(loss), "TV": rep["TV"],
+                   "mult_err": errs, "secs": round(time.time() - t0, 1)}
+            hist.append(row)
+            print(f"  it {it:6d}  mse {float(loss):10.5f}  "
+                  f"TV {rep['TV']:.5f}  "
+                  f"mean|da| t=0 {errs[0][1]:.4f} t=1 {errs[2][1]:.4f}  "
+                  f"{row['secs']:.0f}s")
+
+    with torch.no_grad():
+        p = propagate_exact(sp, lambda tq: net_mult_all_states(sp, net, tq),
+                            steps)
+        fin = sp.exact_report(p, "final")
+        p_or = propagate_exact(sp, ctrl.all_states, steps)
+        orc = sp.exact_report(p_or, "oracle")
+    res = {"provenance": provenance(), "config": vars(args), "params": n_par,
+           "history": hist, "final": fin, "oracle": orc,
+           "energy_calls": sp.energy.report()}
+    out = args.out or (f"json/results_cuau_distill_{sp.n}_{int(sp.temp_k)}K_"
+                       f"g{int(sp.gamma)}_s{args.seed}.json")
+    with open(out, "w") as f:
+        json.dump(res, f, indent=2, default=str)
+    print(f"\n  distilled TV {fin['TV']:.5f}   oracle TV {orc['TV']:.5f}")
+    print(f"  wrote {out}")
+    print("\n=== GATES ===")
+    ok = fin["TV"] <= args.tv_gate
+    print(f"D1  distilled TV <= {args.tv_gate} : {'PASS' if ok else 'FAIL'} "
+          f"({fin['TV']:.5f})  [capacity {'sufficient' if ok else 'suspect'}]")
+    return 0 if ok else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1366,6 +1457,22 @@ def main(argv=None):
     e.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     e.add_argument("--out", default="")
     e.set_defaults(fn=cmd_exact)
+
+    d = sub.add_parser("distill", help="capacity control: fit the exact Doob control")
+    d.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])
+    d.add_argument("--temp", type=float, default=500.0)
+    d.add_argument("--gamma", type=float, default=10.0)
+    d.add_argument("--steps", type=int, default=512)
+    d.add_argument("--iters", type=int, default=4000)
+    d.add_argument("--mb", type=int, default=512)
+    d.add_argument("--hidden", type=int, default=512)
+    d.add_argument("--lr", type=float, default=1e-3)
+    d.add_argument("--seed", type=int, default=0)
+    d.add_argument("--eval-every", type=int, default=250)
+    d.add_argument("--tv-gate", type=float, default=0.05)
+    d.add_argument("--device", default="cuda")
+    d.add_argument("--out", default=None)
+    d.set_defaults(fn=cmd_distill)
 
     t = sub.add_parser("train", help="IASBS training on CuAu")
     t.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])
