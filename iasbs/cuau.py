@@ -38,6 +38,7 @@ Run everything in the dedicated ``cuau_env`` environment; see
 from __future__ import annotations
 
 import argparse
+import itertools
 import hashlib
 import json
 import os
@@ -1699,6 +1700,160 @@ def cmd_train_nd(args):
     return 0 if (ok and viol == 0) else 1
 
 
+def symmetry_perms(tables, tol=1e-9, n_probe=512, seed=7, quant=24):
+    """Site permutations that leave the CE energy invariant.  ``(G, N)``.
+
+    Candidates are the translations mapping the site set to itself, built in
+    FRACTIONAL coordinates: the supercells here are not cubic and their
+    positions do not span an integer number of lattice constants along every
+    axis, so keying on ``pos / a`` misses the wrap and yields only the
+    identity.  Working in ``pos @ inv(cell)`` modulo 1 enumerates the
+    translation subgroup correctly.
+
+    Each candidate is then VERIFIED numerically against the CE on random
+    equiatomic states, so a permutation enters the group only if it actually
+    preserves the energy.  Point-group operations are not enumerated: the
+    non-cubic supercells do not admit them, and inventing them would let the
+    symmetrization average over maps the Hamiltonian does not respect.
+    """
+    pos = tables["positions"]
+    cell = np.asarray(tables["cell"], dtype=np.float64)
+    N = int(tables["N"])
+    frac = pos @ np.linalg.inv(cell)
+    key = {tuple(np.round(f * quant).astype(int) % quant): m
+           for m, f in enumerate(frac)}
+    if len(key) != N:
+        raise RuntimeError(f"fractional site keys collide ({len(key)} of {N})")
+
+    # Candidates are translation x point operation.  The 48 signed axis
+    # permutations are applied in CARTESIAN space and then re-expressed in
+    # fractional coordinates; a candidate survives only if it maps the site set
+    # bijectively onto itself.  Translations alone are not enough here: they
+    # connect only 2 of the 6 degenerate L1_0 ground states, which caps
+    # symmetrization at TV 4/6, whereas the full group puts all 6 in a single
+    # orbit.
+    ops = []
+    for pm in itertools.permutations(range(3)):
+        for sg in itertools.product([1, -1], repeat=3):
+            R = np.zeros((3, 3))
+            for i, ax in enumerate(pm):
+                R[i, ax] = sg[i]
+            ops.append(R)
+
+    seen, cands = set(), []
+    for R in ops:
+        fr2 = (pos @ R.T) @ np.linalg.inv(cell)
+        for m in range(N):
+            shift = frac[m] - fr2[0]
+            perm = np.full(N, -1, dtype=np.int64)
+            for q, f in enumerate(fr2):
+                k = tuple(np.round((f + shift) * quant).astype(int) % quant)
+                perm[q] = key.get(k, -1)
+            if (perm >= 0).all() and len(set(perm.tolist())) == N:
+                tup = tuple(perm.tolist())
+                if tup not in seen:
+                    seen.add(tup)
+                    cands.append(perm)
+
+    rng = np.random.default_rng(seed)
+    X = np.zeros((n_probe, N), dtype=np.int64)
+    for r in range(n_probe):
+        X[r, rng.permutation(N)[: N // 2]] = 1
+    en = TorchCuAuEnergy(tables, device="cpu")
+    e0 = en.energy_torch(torch.as_tensor(X)).numpy()
+    keep = []
+    for perm in cands:
+        e1 = en.energy_torch(torch.as_tensor(X[:, perm])).numpy()
+        if np.abs(e1 - e0).max() < tol:
+            keep.append(perm)
+    if not keep:
+        raise RuntimeError("no energy-preserving permutation found")
+    return np.stack(keep, 0)
+
+
+class SymControl:
+    """Group-averaged log-multiplier of a learned controller.
+
+    With a source DISTRIBUTION that is itself invariant (Uniform(Omega) is),
+    the optimal control satisfies a*(t, gx, g e) = a*(t, x, e) for every site
+    permutation g preserving the energy.  A network with arbitrary weights does
+    not, and nothing in the Bregman loss asks it to: the six exactly degenerate
+    L1_0 ground states can therefore receive wildly unequal mass while the
+    energy histogram looks correct.  Averaging log a over the group is the
+    orthogonal projection onto the equivariant subspace, which contains the
+    optimum, so it cannot move the control away from a*.
+    """
+
+    def __init__(self, space, net, perms):
+        self.space = space
+        self.net = net
+        self.G = torch.as_tensor(perms, dtype=torch.int64, device=space.device)
+        self.inv = torch.empty_like(self.G)
+        ar = torch.arange(self.G.shape[1], device=space.device)
+        for g in range(self.G.shape[0]):
+            self.inv[g, self.G[g]] = ar
+
+    def all_states(self, t):
+        sp = self.space
+        acc = None
+        for g in range(self.G.shape[0]):
+            pg, ig = self.G[g], self.inv[g]
+            out = []
+            for a0 in range(0, sp.M, 4096):
+                b0 = min(a0 + 4096, sp.M)
+                idx = torch.arange(a0, b0, device=sp.device)
+                x = sp.S[idx][:, pg]
+                tt = torch.full((idx.shape[0],), float(t), device=sp.device)
+                av = self.net(tt, x)
+                ei = ig[sp.edge_i[idx]]
+                ej = ig[sp.edge_j[idx]]
+                bb = torch.arange(idx.shape[0], device=sp.device).unsqueeze(1)
+                out.append(av[bb, ei, ej].to(torch.float64))
+            v = torch.cat(out, 0)
+            acc = v if acc is None else acc + v
+        return acc / self.G.shape[0]
+
+
+def cmd_symcheck(args):
+    """Evaluate a trained controller with and without group symmetrization."""
+    from iasbs.fixed_ising import (SwapController, net_mult_all_states,
+                                   propagate_exact)
+
+    size = tuple(args.size)
+    tables = build_ce_tables(size, verbose=False)
+    energy = TorchCuAuEnergy(tables, device=args.device)
+    sp = CuAuExact(size=size, temp_k=args.temp, gamma=args.gamma,
+                   device=args.device, energy=energy, verbose=False)
+    perms = symmetry_perms(tables)
+    print(f"symmetry group order {perms.shape[0]}  (energy-verified)")
+
+    blob = torch.load(args.ckpt, map_location=sp.device, weights_only=False)
+    sd = blob.get("state_dict") or blob["state_dicts"]["net"]
+    net = SwapController(sp.n, hidden=args.hidden).to(sp.device)
+    net.load_state_dict(sd)
+
+    p0 = None
+    if args.source == "uniform":
+        p0 = torch.full((sp.M,), 1.0 / sp.M, device=sp.device,
+                        dtype=torch.float64)
+    with torch.no_grad():
+        pa = propagate_exact(sp, lambda t: net_mult_all_states(sp, net, t),
+                             args.steps, p0=p0)
+        ra = sp.exact_report(pa, "plain")
+        sc = SymControl(sp, net, perms)
+        pb = propagate_exact(sp, sc.all_states, args.steps, p0=p0)
+        rb = sp.exact_report(pb, "symmetrized")
+    print(f"  plain        TV {ra['TV']:.5f}   E-hist {ra['energy_hist_TV']:.5f}")
+    print(f"  symmetrized  TV {rb['TV']:.5f}   E-hist {rb['energy_hist_TV']:.5f}")
+    res = {"provenance": provenance(), "config": arg_config(args),
+           "group_order": int(perms.shape[0]), "plain": ra, "sym": rb}
+    out = args.out or f"json/results_cuau_symcheck_{sp.n}_{int(sp.temp_k)}K.json"
+    with open(out, "w") as f:
+        json.dump(res, f, indent=2, default=str)
+    print(f"  wrote {out}")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1724,6 +1879,18 @@ def main(argv=None):
     e.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     e.add_argument("--out", default="")
     e.set_defaults(fn=cmd_exact)
+
+    sc = sub.add_parser("symcheck", help="evaluate a ckpt with group symmetrization")
+    sc.add_argument("--ckpt", required=True)
+    sc.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])
+    sc.add_argument("--temp", type=float, default=500.0)
+    sc.add_argument("--gamma", type=float, default=10.0)
+    sc.add_argument("--steps", type=int, default=512)
+    sc.add_argument("--hidden", type=int, default=512)
+    sc.add_argument("--source", default="uniform", choices=["uniform", "dirac"])
+    sc.add_argument("--device", default="cuda")
+    sc.add_argument("--out", default=None)
+    sc.set_defaults(fn=cmd_symcheck)
 
     nd = sub.add_parser("train-nd", help="non-Dirac source + learned corrector")
     nd.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])

@@ -1,0 +1,658 @@
+{
+  "provenance": {
+    "kB_eV_per_K": 8.617333262145e-05,
+    "files": {
+      "data/cuau/CI_params_ECI_CuAu_Final_Submission.json": "d7de15ebfef8683e379c61be86c81d125ca0f317612d30dc9f38b2d23b567234",
+      "data/cuau/cuau_fcc_2x2x4_supercell.vasp": "e830dcf51775b733ae31e7d9dcae18df61415a3a488207d708bd71f7f8fbb1eb",
+      "data/cuau/cuau_fcc_4x4x4_supercell.vasp": "78b97329fe99fed04024e325ddf55806c83b12201a956d0bc21f704624334f4c"
+    },
+    "metadns_commit": "ae46941ff7a3027c87ca6a6bd97c5b0064e06c8c",
+    "versions": {
+      "python": "3.11.16",
+      "torch": "2.5.1+cu124",
+      "numpy": "1.26.4"
+    }
+  },
+  "config": {
+    "cmd": "train-nd",
+    "size": [
+      2,
+      2,
+      4
+    ],
+    "temp": 500.0,
+    "gamma": 10.0,
+    "steps": 512,
+    "iters": 3000,
+    "batch": 256,
+    "mb": 512,
+    "inner": 5,
+    "inner_h": 5,
+    "buffer": 20,
+    "hidden": 512,
+    "lr": 0.001,
+    "lr_h": 0.001,
+    "seed": 0,
+    "eval_every": 100,
+    "n_samples": 200000,
+    "tv_gate": 0.05,
+    "device": "cuda:1",
+    "ckpt_dir": "ckpt",
+    "tag": "nd_s0",
+    "out": null
+  },
+  "params": 670464,
+  "history": [
+    {
+      "iter": 100,
+      "loss": -4.251657859466025,
+      "loss_h": 1.0000677543676142,
+      "TV": 0.9907515693914419,
+      "energy_hist_TV": 0.9904302382957899,
+      "secs": 58.0,
+      "energy_calls": {
+        "configs": 294470,
+        "calls": 601,
+        "seconds": 0.516,
+        "by_tag": {
+          "train": {
+            "configs": 294470,
+            "seconds": 0.516
+          }
+        }
+      }
+    },
+    {
+      "iter": 200,
+      "loss": -24.14770981456923,
+      "loss_h": 0.9994834842944951,
+      "TV": 0.9905666289496802,
+      "energy_hist_TV": 0.9903364013327971,
+      "secs": 115.5,
+      "energy_calls": {
+        "configs": 576070,
+        "calls": 1201,
+        "seconds": 0.987,
+        "by_tag": {
+          "train": {
+            "configs": 576070,
+            "seconds": 0.987
+          }
+        }
+      }
+    },
+    {
+      "iter": 300,
+      "loss": -804.4081786884167,
+      "loss_h": 1.0001917100089615,
+      "TV": 0.952047640957658,
+      "energy_hist_TV": 0.951265033816437,
+      "secs": 172.6,
+      "energy_calls": {
+        "configs": 857670,
+        "calls": 1801,
+        "seconds": 1.455,
+        "by_tag": {
+          "train": {
+            "configs": 857670,
+            "seconds": 1.455
+          }
+        }
+      }
+    },
+    {
+      "iter": 400,
+      "loss": -3.408500776707945,
+      "loss_h": 0.9995710013599682,
+      "TV": 0.8299344258226854,
+      "energy_hist_TV": 0.44502545030459933,
+      "secs": 229.6,
+      "energy_calls": {
+        "configs": 1139270,
+        "calls": 2401,
+        "seconds": 1.923,
+        "by_tag": {
+          "train": {
+            "configs": 1139270,
+            "seconds": 1.923
+          }
+        }
+      }
+    },
+    {
+      "iter": 500,
+      "loss": -700.2108241915435,
+      "loss_h": 0.9997690203132488,
+      "TV": 0.8323198677594128,
+      "energy_hist_TV": 0.11014208713829685,
+      "secs": 286.6,
+      "energy_calls": {
+        "configs": 1420870,
+        "calls": 3001,
+        "seconds": 2.39,
+        "by_tag": {
+          "train": {
+            "configs": 1420870,
+            "seconds": 2.39
+          }
+        }
+      }
+    },
+    {
+      "iter": 600,
+      "loss": 2.9460664098333504,
+      "loss_h": 0.9992682183672454,
+      "TV": 0.8286474616120493,
+      "energy_hist_TV": 0.4438231534664018,
+      "secs": 343.3,
+      "energy_calls": {
+        "configs": 1702470,
+        "calls": 3601,
+        "seconds": 2.857,
+        "by_tag": {
+          "train": {
+            "configs": 1702470,
+            "seconds": 2.857
+          }
+        }
+      }
+    },
+    {
+      "iter": 700,
+      "loss": 2.8839873551941446,
+      "loss_h": 1.0002180743984397,
+      "TV": 0.7987656667835856,
+      "energy_hist_TV": 0.2307850902722837,
+      "secs": 400.2,
+      "energy_calls": {
+        "configs": 1984070,
+        "calls": 4201,
+        "seconds": 3.325,
+        "by_tag": {
+          "train": {
+            "configs": 1984070,
+            "seconds": 3.325
+          }
+        }
+      }
+    },
+    {
+      "iter": 800,
+      "loss": 2.6673320101155715,
+      "loss_h": 0.9993915699554013,
+      "TV": 0.6661548356338146,
+      "energy_hist_TV": 0.21834640653015558,
+      "secs": 457.1,
+      "energy_calls": {
+        "configs": 2265670,
+        "calls": 4801,
+        "seconds": 3.79,
+        "by_tag": {
+          "train": {
+            "configs": 2265670,
+            "seconds": 3.79
+          }
+        }
+      }
+    },
+    {
+      "iter": 900,
+      "loss": -0.005823395232443129,
+      "loss_h": 0.9997551963501088,
+      "TV": 0.8227773806211948,
+      "energy_hist_TV": 0.37145184667295844,
+      "secs": 514.4,
+      "energy_calls": {
+        "configs": 2547270,
+        "calls": 5401,
+        "seconds": 4.259,
+        "by_tag": {
+          "train": {
+            "configs": 2547270,
+            "seconds": 4.259
+          }
+        }
+      }
+    },
+    {
+      "iter": 1000,
+      "loss": 3.5448475445302035,
+      "loss_h": 0.9995143669814432,
+      "TV": 0.8332973524091322,
+      "energy_hist_TV": 0.022006195928457505,
+      "secs": 571.5,
+      "energy_calls": {
+        "configs": 2828870,
+        "calls": 6001,
+        "seconds": 4.727,
+        "by_tag": {
+          "train": {
+            "configs": 2828870,
+            "seconds": 4.727
+          }
+        }
+      }
+    },
+    {
+      "iter": 1100,
+      "loss": 0.5835118122218201,
+      "loss_h": 0.9999094411175486,
+      "TV": 0.8009300736529954,
+      "energy_hist_TV": 0.32638466511705927,
+      "secs": 628.6,
+      "energy_calls": {
+        "configs": 3110470,
+        "calls": 6601,
+        "seconds": 5.197,
+        "by_tag": {
+          "train": {
+            "configs": 3110470,
+            "seconds": 5.197
+          }
+        }
+      }
+    },
+    {
+      "iter": 1200,
+      "loss": -129.0091126275899,
+      "loss_h": 0.9998208974417895,
+      "TV": 0.8323440260167444,
+      "energy_hist_TV": 0.2580309318396482,
+      "secs": 685.7,
+      "energy_calls": {
+        "configs": 3392070,
+        "calls": 7201,
+        "seconds": 5.667,
+        "by_tag": {
+          "train": {
+            "configs": 3392070,
+            "seconds": 5.667
+          }
+        }
+      }
+    },
+    {
+      "iter": 1300,
+      "loss": -1149.0186177515277,
+      "loss_h": 0.9997587870972016,
+      "TV": 0.8339061603003539,
+      "energy_hist_TV": 0.029360696161144024,
+      "secs": 743.0,
+      "energy_calls": {
+        "configs": 3673670,
+        "calls": 7801,
+        "seconds": 6.139,
+        "by_tag": {
+          "train": {
+            "configs": 3673670,
+            "seconds": 6.139
+          }
+        }
+      }
+    },
+    {
+      "iter": 1400,
+      "loss": 2.4621622602280633,
+      "loss_h": 0.9992955042441782,
+      "TV": 0.8327851681069405,
+      "energy_hist_TV": 0.11534898521616778,
+      "secs": 799.9,
+      "energy_calls": {
+        "configs": 3955270,
+        "calls": 8401,
+        "seconds": 6.607,
+        "by_tag": {
+          "train": {
+            "configs": 3955270,
+            "seconds": 6.607
+          }
+        }
+      }
+    },
+    {
+      "iter": 1500,
+      "loss": -91.8656394908702,
+      "loss_h": 0.9995071475783275,
+      "TV": 0.8310136849436334,
+      "energy_hist_TV": 0.19674403454682482,
+      "secs": 856.8,
+      "energy_calls": {
+        "configs": 4236870,
+        "calls": 9001,
+        "seconds": 7.077,
+        "by_tag": {
+          "train": {
+            "configs": 4236870,
+            "seconds": 7.077
+          }
+        }
+      }
+    },
+    {
+      "iter": 1600,
+      "loss": 1.6501564224767762,
+      "loss_h": 0.9995602910143222,
+      "TV": 0.8315969797924198,
+      "energy_hist_TV": 0.14078018069908904,
+      "secs": 913.8,
+      "energy_calls": {
+        "configs": 4518470,
+        "calls": 9601,
+        "seconds": 7.546,
+        "by_tag": {
+          "train": {
+            "configs": 4518470,
+            "seconds": 7.546
+          }
+        }
+      }
+    },
+    {
+      "iter": 1700,
+      "loss": -133.9263932853417,
+      "loss_h": 0.9998634483029399,
+      "TV": 0.8302863304998989,
+      "energy_hist_TV": 0.28697499249934366,
+      "secs": 970.5,
+      "energy_calls": {
+        "configs": 4800070,
+        "calls": 10201,
+        "seconds": 8.013,
+        "by_tag": {
+          "train": {
+            "configs": 4800070,
+            "seconds": 8.013
+          }
+        }
+      }
+    },
+    {
+      "iter": 1800,
+      "loss": 1.7056454646757668,
+      "loss_h": 0.9998096260013521,
+      "TV": 0.8283558550067776,
+      "energy_hist_TV": 0.07310007273926916,
+      "secs": 1027.5,
+      "energy_calls": {
+        "configs": 5081670,
+        "calls": 10801,
+        "seconds": 8.483,
+        "by_tag": {
+          "train": {
+            "configs": 5081670,
+            "seconds": 8.483
+          }
+        }
+      }
+    },
+    {
+      "iter": 1900,
+      "loss": -197.87798217098333,
+      "loss_h": 0.9998018485062223,
+      "TV": 0.8038510896071563,
+      "energy_hist_TV": 0.029710234058776763,
+      "secs": 1084.5,
+      "energy_calls": {
+        "configs": 5363270,
+        "calls": 11401,
+        "seconds": 8.953,
+        "by_tag": {
+          "train": {
+            "configs": 5363270,
+            "seconds": 8.953
+          }
+        }
+      }
+    },
+    {
+      "iter": 2000,
+      "loss": 1.9257220644691322,
+      "loss_h": 0.9999660837813122,
+      "TV": 0.8307800168348314,
+      "energy_hist_TV": 0.2207698234713071,
+      "secs": 1141.4,
+      "energy_calls": {
+        "configs": 5644870,
+        "calls": 12001,
+        "seconds": 9.421,
+        "by_tag": {
+          "train": {
+            "configs": 5644870,
+            "seconds": 9.421
+          }
+        }
+      }
+    },
+    {
+      "iter": 2100,
+      "loss": 1.5408720677818646,
+      "loss_h": 1.0000022605564431,
+      "TV": 0.8337527470031827,
+      "energy_hist_TV": 0.12154135224947621,
+      "secs": 1198.4,
+      "energy_calls": {
+        "configs": 5926470,
+        "calls": 12601,
+        "seconds": 9.891,
+        "by_tag": {
+          "train": {
+            "configs": 5926470,
+            "seconds": 9.891
+          }
+        }
+      }
+    },
+    {
+      "iter": 2200,
+      "loss": -474.314969538755,
+      "loss_h": 0.9995649969396074,
+      "TV": 0.8335315391036568,
+      "energy_hist_TV": 0.11478395247957204,
+      "secs": 1255.2,
+      "energy_calls": {
+        "configs": 6208070,
+        "calls": 13201,
+        "seconds": 10.359,
+        "by_tag": {
+          "train": {
+            "configs": 6208070,
+            "seconds": 10.359
+          }
+        }
+      }
+    },
+    {
+      "iter": 2300,
+      "loss": 1.849208217895808,
+      "loss_h": 0.9994788078595243,
+      "TV": 0.833568500879097,
+      "energy_hist_TV": 0.15870979162420812,
+      "secs": 1312.0,
+      "energy_calls": {
+        "configs": 6489670,
+        "calls": 13801,
+        "seconds": 10.827,
+        "by_tag": {
+          "train": {
+            "configs": 6489670,
+            "seconds": 10.827
+          }
+        }
+      }
+    },
+    {
+      "iter": 2400,
+      "loss": 1.5829683749166092,
+      "loss_h": 0.9995812852209864,
+      "TV": 0.8336809380261916,
+      "energy_hist_TV": 0.09331998838457033,
+      "secs": 1368.9,
+      "energy_calls": {
+        "configs": 6771270,
+        "calls": 14401,
+        "seconds": 11.295,
+        "by_tag": {
+          "train": {
+            "configs": 6771270,
+            "seconds": 11.295
+          }
+        }
+      }
+    },
+    {
+      "iter": 2500,
+      "loss": 1.706284109480479,
+      "loss_h": 0.9999028129608456,
+      "TV": 0.8336910234297746,
+      "energy_hist_TV": 0.10019361194424443,
+      "secs": 1425.7,
+      "energy_calls": {
+        "configs": 7052870,
+        "calls": 15001,
+        "seconds": 11.763,
+        "by_tag": {
+          "train": {
+            "configs": 7052870,
+            "seconds": 11.763
+          }
+        }
+      }
+    },
+    {
+      "iter": 2600,
+      "loss": 1.324107458068971,
+      "loss_h": 0.9999004342602396,
+      "TV": 0.8333848175515927,
+      "energy_hist_TV": 0.15522782143070116,
+      "secs": 1482.5,
+      "energy_calls": {
+        "configs": 7334470,
+        "calls": 15601,
+        "seconds": 12.228,
+        "by_tag": {
+          "train": {
+            "configs": 7334470,
+            "seconds": 12.228
+          }
+        }
+      }
+    },
+    {
+      "iter": 2700,
+      "loss": -229.19735694566683,
+      "loss_h": 0.999933722071034,
+      "TV": 0.8337564413816467,
+      "energy_hist_TV": 0.04386977622858971,
+      "secs": 1539.4,
+      "energy_calls": {
+        "configs": 7616070,
+        "calls": 16201,
+        "seconds": 12.694,
+        "by_tag": {
+          "train": {
+            "configs": 7616070,
+            "seconds": 12.694
+          }
+        }
+      }
+    },
+    {
+      "iter": 2800,
+      "loss": -124.59507190195143,
+      "loss_h": 1.0001203141906854,
+      "TV": 0.8336985566184856,
+      "energy_hist_TV": 0.050161579381171814,
+      "secs": 1596.2,
+      "energy_calls": {
+        "configs": 7897670,
+        "calls": 16801,
+        "seconds": 13.161,
+        "by_tag": {
+          "train": {
+            "configs": 7897670,
+            "seconds": 13.161
+          }
+        }
+      }
+    },
+    {
+      "iter": 2900,
+      "loss": 1.867138359157187,
+      "loss_h": 0.9996204694642911,
+      "TV": 0.8335074613016418,
+      "energy_hist_TV": 0.10605710603015675,
+      "secs": 1653.5,
+      "energy_calls": {
+        "configs": 8179270,
+        "calls": 17401,
+        "seconds": 13.631,
+        "by_tag": {
+          "train": {
+            "configs": 8179270,
+            "seconds": 13.631
+          }
+        }
+      }
+    },
+    {
+      "iter": 3000,
+      "loss": -170.0320048466885,
+      "loss_h": 0.9994587073689878,
+      "TV": 0.8338343210410967,
+      "energy_hist_TV": 0.05275402024522405,
+      "secs": 1710.4,
+      "energy_calls": {
+        "configs": 8460870,
+        "calls": 18001,
+        "seconds": 14.098,
+        "by_tag": {
+          "train": {
+            "configs": 8460870,
+            "seconds": 14.098
+          }
+        }
+      }
+    }
+  ],
+  "final": {
+    "tag": "final",
+    "TV": 0.8338343210410967,
+    "KL": 1.929728071210821,
+    "Hellinger": 0.7731249522615625,
+    "energy_hist_TV": 0.05275402024522407,
+    "Qmax_hist_TV": 0.05209953188553647,
+    "mean_E_per_atom_meV": -34.635766857024265,
+    "exact_mean_E_per_atom_meV": -36.006089302026325,
+    "mean_E_err_meV_per_atom": 1.3703224450020632,
+    "Cv_per_atom": 3.165662455540068e-05,
+    "exact_Cv_per_atom": 4.2893955472555465e-06,
+    "Cv_rel_err": 6.380206419912781,
+    "mean_Qmax": 0.9854488676050313,
+    "exact_mean_Qmax": 0.996062543712411,
+    "mass_leak": 2.220446049250313e-16
+  },
+  "best": {
+    "TV": 0.6661548356338146,
+    "iter": 800
+  },
+  "ipf1": {
+    "mean_exp_h": 0.9952239263352862,
+    "max_abs_h": 0.05329189449548721,
+    "mean_Q": 0.9710503913360005
+  },
+  "violations": 0,
+  "empirical_TV": 0.8340296847636546,
+  "iid_TV_floor": 0.004920860006442889,
+  "iid_TV_floor_sd": 0.0008663106333096534,
+  "energy_calls": {
+    "configs": 8460870,
+    "calls": 18001,
+    "seconds": 14.098,
+    "by_tag": {
+      "train": {
+        "configs": 8460870,
+        "seconds": 14.098
+      }
+    }
+  }
+}

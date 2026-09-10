@@ -1,0 +1,67 @@
+{
+  "provenance": {
+    "kB_eV_per_K": 8.617333262145e-05,
+    "files": {
+      "data/cuau/CI_params_ECI_CuAu_Final_Submission.json": "d7de15ebfef8683e379c61be86c81d125ca0f317612d30dc9f38b2d23b567234",
+      "data/cuau/cuau_fcc_2x2x4_supercell.vasp": "e830dcf51775b733ae31e7d9dcae18df61415a3a488207d708bd71f7f8fbb1eb",
+      "data/cuau/cuau_fcc_4x4x4_supercell.vasp": "78b97329fe99fed04024e325ddf55806c83b12201a956d0bc21f704624334f4c"
+    },
+    "metadns_commit": "ae46941ff7a3027c87ca6a6bd97c5b0064e06c8c",
+    "versions": {
+      "python": "3.11.16",
+      "torch": "2.5.1+cu124",
+      "numpy": "1.26.4"
+    }
+  },
+  "config": {
+    "cmd": "symcheck",
+    "ckpt": "ckpt/nd_s0.pt",
+    "size": [
+      2,
+      2,
+      4
+    ],
+    "temp": 500.0,
+    "gamma": 10.0,
+    "steps": 512,
+    "hidden": 512,
+    "source": "uniform",
+    "device": "cuda:1",
+    "out": null
+  },
+  "group_order": 16,
+  "plain": {
+    "tag": "plain",
+    "TV": 0.8338343210410967,
+    "KL": 1.929728071210821,
+    "Hellinger": 0.7731249522615625,
+    "energy_hist_TV": 0.05275402024522407,
+    "Qmax_hist_TV": 0.05209953188553648,
+    "mean_E_per_atom_meV": -34.635766857024265,
+    "exact_mean_E_per_atom_meV": -36.006089302026325,
+    "mean_E_err_meV_per_atom": 1.3703224450020632,
+    "Cv_per_atom": 3.165662455540068e-05,
+    "exact_Cv_per_atom": 4.2893955472555465e-06,
+    "Cv_rel_err": 6.380206419912781,
+    "mean_Qmax": 0.9854488676050313,
+    "exact_mean_Qmax": 0.996062543712411,
+    "mass_leak": 2.220446049250313e-16
+  },
+  "sym": {
+    "tag": "symmetrized",
+    "TV": 0.6631561992577262,
+    "KL": 3.687196973522137,
+    "Hellinger": 0.7608836262803857,
+    "energy_hist_TV": 0.5558710424969654,
+    "Qmax_hist_TV": 0.5549115892858256,
+    "mean_E_per_atom_meV": -16.783103654729235,
+    "exact_mean_E_per_atom_meV": -36.006089302026325,
+    "mean_E_err_meV_per_atom": 19.222985647297094,
+    "Cv_per_atom": 0.00024572768280831494,
+    "exact_Cv_per_atom": 4.2893955472555465e-06,
+    "Cv_rel_err": 56.28725180533586,
+    "mean_Qmax": 0.7559562335071406,
+    "exact_mean_Qmax": 0.996062543712411,
+    "mass_leak": 0.0
+  }
+}
