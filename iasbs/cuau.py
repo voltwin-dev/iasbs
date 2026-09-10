@@ -423,6 +423,15 @@ def legal_mask(x: torch.Tensor) -> torch.Tensor:
     return (au.unsqueeze(2) & (~au).unsqueeze(1))
 
 
+def all_legal_edges(x: torch.Tensor):
+    """``(B, k(N-k))`` ordered legal edges of every row, row-major order."""
+    B, n = x.shape
+    k = int(x[0].sum())
+    e = torch.nonzero(legal_mask(x).reshape(B, -1), as_tuple=False)[:, 1]
+    e = e.reshape(B, k * (n - k))
+    return e // n, e % n
+
+
 def sample_uniform_legal_edge(x: torch.Tensor, generator=None):
     """Uniform draw from ``E(x)``, the ``k(N-k)`` ordered legal swaps of ``x``."""
     B, n = x.shape
@@ -1210,17 +1219,34 @@ def cmd_train(args):
             with torch.no_grad():
                 Xt = sample_bridge_direct(sp, X1, ti, log_kap0, log_kap1,
                                           generator=gen)
-                lam_l, i_l, j_l = [], [], []
-                for _ in range(args.edge_samples):
-                    ei, ej = sample_uniform_legal_edge(Xt, generator=gen)
-                    lam_l.append(terminal_log_label_edge(sp, X1, E1, ei, ej))
-                    i_l.append(ei)
-                    j_l.append(ej)
-                i, j = torch.cat(i_l), torch.cat(j_l)
-                lam = torch.exp(torch.cat(lam_l).clamp(-20.0, 20.0))
+                if args.all_edges:
+                    # exact edge average: every legal edge of X_t.  Only
+                    # affordable because the CE evaluator is batched on GPU;
+                    # used as the variance control for edge minibatching.
+                    ei, ej = all_legal_edges(Xt)
+                    rep = ei.shape[1]
+                    X1r = X1.repeat_interleave(rep, 0)
+                    E1r = E1.repeat_interleave(rep, 0)
+                    i, j = ei.reshape(-1), ej.reshape(-1)
+                    lam = torch.exp(terminal_log_label_edge(
+                        sp, X1r, E1r, i, j).clamp(-20.0, 20.0))
+                else:
+                    rep = args.edge_samples
+                    lam_l, i_l, j_l = [], [], []
+                    for _ in range(rep):
+                        ei, ej = sample_uniform_legal_edge(Xt, generator=gen)
+                        lam_l.append(terminal_log_label_edge(sp, X1, E1, ei, ej))
+                        i_l.append(ei)
+                        j_l.append(ej)
+                    i, j = torch.cat(i_l), torch.cat(j_l)
+                    lam = torch.exp(torch.cat(lam_l).clamp(-20.0, 20.0))
 
-            tt = (ti.to(torch.float64) / steps).repeat(args.edge_samples)
-            a = net(tt, Xt.repeat(args.edge_samples, 1))
+            if args.all_edges:
+                tt = (ti.to(torch.float64) / steps).repeat_interleave(rep)
+                a = net(tt, Xt.repeat_interleave(rep, 0))
+            else:
+                tt = (ti.to(torch.float64) / steps).repeat(rep)
+                a = net(tt, Xt.repeat(rep, 1))
             b = torch.arange(a.shape[0], device=sp.device)
             av = a[b, i, j].clamp(-20.0, 20.0).to(torch.float64)
             loss = (poisson_edge_loss(av, lam) if args.loss == "poisson"
@@ -1352,6 +1378,8 @@ def main(argv=None):
     t.add_argument("--inner", type=int, default=4)
     t.add_argument("--buffer", type=int, default=8)
     t.add_argument("--edge-samples", type=int, default=1)
+    t.add_argument("--all-edges", action="store_true",
+                   help="exact edge average instead of sampled edges (control)")
     t.add_argument("--hidden", type=int, default=512)
     t.add_argument("--lr", type=float, default=3e-4)
     t.add_argument("--loss", choices=["poisson", "l2"], default="poisson")
