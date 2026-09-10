@@ -1183,6 +1183,16 @@ def cmd_train(args):
              source=src, energy=energy, verbose=True)
 
     net = SwapController(sp.n, hidden=args.hidden).to(sp.device)
+    if args.init_ckpt:
+        # Temperature curriculum: warm start from a net trained at a higher
+        # temperature, where pi is broad and every basin is reachable, then
+        # continue in the spiky regime.  Only the controller is carried over;
+        # the space, kappa tables and labels are rebuilt at the new tau.
+        sd = torch.load(args.init_ckpt, map_location=sp.device,
+                        weights_only=False)
+        sd = sd.get("net", sd)
+        net.load_state_dict(sd)
+        print(f"  warm start from {args.init_ckpt}")
     n_par = sum(p.numel() for p in net.parameters())
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     steps = args.steps
@@ -1203,7 +1213,25 @@ def cmd_train(args):
     for it in range(1, args.iters + 1):
         sp.energy.tag = "train"
         with torch.no_grad():
-            X1n = simulate_direct(sp, net, args.batch, steps, generator=gen)
+            # Exploration mixing.  The buffer is otherwise filled purely by the
+            # current controller, so once it favours one of the six degenerate
+            # L1_0 ground states the other five receive no label signal at all
+            # and the loss has no term that can recover them.  A fraction of
+            # each push is therefore drawn from the zero controller, i.e. the
+            # base swap process, which is basin-agnostic by construction.  The
+            # Poisson loss is an average over terminal states, so broadening
+            # the terminal pool changes which states are visited, not the
+            # per-state fixed point.
+            n_exp = int(round(args.explore_frac * args.batch))
+            n_pol = args.batch - n_exp
+            parts = []
+            if n_pol > 0:
+                parts.append(simulate_direct(sp, net, n_pol, steps,
+                                             generator=gen))
+            if n_exp > 0:
+                parts.append(simulate_direct(sp, None, n_exp, steps,
+                                             generator=gen))
+            X1n = torch.cat(parts, 0) if len(parts) > 1 else parts[0]
             E1n = sp.energy.energy_torch(X1n).to(torch.float64)
         replay.append((X1n.detach(), E1n.detach()))
         if len(replay) > args.buffer:
@@ -1485,6 +1513,11 @@ def main(argv=None):
     t.add_argument("--inner", type=int, default=4)
     t.add_argument("--buffer", type=int, default=8)
     t.add_argument("--edge-samples", type=int, default=1)
+    t.add_argument("--explore-frac", type=float, default=0.0,
+                   help="fraction of each buffer push drawn from the zero "
+                        "controller (base process) instead of the net")
+    t.add_argument("--init-ckpt", default=None,
+                   help="warm-start the controller from this checkpoint")
     t.add_argument("--all-edges", action="store_true",
                    help="exact edge average instead of sampled edges (control)")
     t.add_argument("--hidden", type=int, default=512)
