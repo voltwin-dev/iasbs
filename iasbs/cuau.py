@@ -732,6 +732,171 @@ def all_edge_poisson_loss(a, lam_full, mask):
 
 
 # ----------------------------------------------------------------------------
+# CuAu-S: the enumerated 16-site sector, for exact evaluation only
+# ----------------------------------------------------------------------------
+
+
+class CuAuExact(CuAuSpace):
+    """``CuAuSpace`` plus the enumeration tables that only ``N=16`` affords.
+
+    The canonical sector has ``C(16,8) = 12,870`` states, so the exact Gibbs
+    law, the exact terminal law of the discretised controlled chain and the
+    oracle (Doob) control are all computable.  Every attribute name matches
+    :class:`iasbs.fixed_ising.FixedIsingSpace`, so ``step_probs``,
+    ``propagate_exact``, ``simulate``, ``ExactControl``, ``net_mult_on_index``
+    and ``net_mult_all_states`` are reused from that module verbatim -- the
+    exact-evaluation numerics are literally the ones already validated on the
+    Ising benchmark.
+    """
+
+    def __init__(self, size=(2, 2, 4), **kw):
+        super().__init__(size=size, **kw)
+        n, k, dev = self.n, self.k, self.device
+        if n > 20:
+            raise RuntimeError(f"refusing to enumerate {n} sites")
+
+        S = C.enumerate_fixed_count(n, k).astype(np.int64)
+        self.M = M = S.shape[0]
+        self.S_np = S
+        self.S = torch.as_tensor(S, device=dev)
+        self.Sf = self.S.to(torch.float32)
+
+        pow2 = (1 << np.arange(n)).astype(np.int64)
+        masks = (S * pow2).sum(axis=1)
+        lut = np.full(1 << n, -1, dtype=np.int64)
+        lut[masks] = np.arange(M)
+        self.masks = masks
+        self.pow2 = torch.as_tensor(pow2, device=dev)
+        self.lut_t = torch.as_tensor(lut, device=dev)
+
+        occ = np.nonzero(S == 1)[1].reshape(M, k)
+        emp = np.nonzero(S == 0)[1].reshape(M, n - k)
+        self.occ = torch.as_tensor(occ, device=dev)
+        self.emp = torch.as_tensor(emp, device=dev)
+
+        tgt_mask = (masks[:, None, None] ^ pow2[occ][:, :, None]
+                    ^ pow2[emp][:, None, :])
+        tgt = lut[tgt_mask].reshape(M, self.n_edges)
+        if tgt.min() < 0:
+            raise RuntimeError("swap target left the fixed-count sector")
+        self.tgt = torch.as_tensor(tgt, device=dev)
+
+        pair_id = np.full((n, n), -1, dtype=np.int64)
+        pairs = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                pair_id[i, j] = pair_id[j, i] = len(pairs)
+                pairs.append((i, j))
+        self.pairs = torch.as_tensor(np.asarray(pairs), device=dev)
+        self.n_pairs = len(pairs)
+        self.pair_id = torch.as_tensor(pair_id, device=dev)
+        ei = np.repeat(occ, n - k, axis=1)
+        ej = np.tile(emp, (1, k))
+        self.edge_i = torch.as_tensor(ei, device=dev)
+        self.edge_j = torch.as_tensor(ej, device=dev)
+        self.edge_pair = torch.as_tensor(pair_id[ei, ej], device=dev)
+
+        # exact canonical law under the pinned CE (total eV)
+        self.E = self.energy.energy_torch(self.S).to(torch.float64)
+        if not bool(torch.isfinite(self.E).all()):
+            raise RuntimeError("non-finite CE energy on the enumerated sector")
+        logw = -self.E / self.tau
+        logw = logw - logw.max()
+        w = torch.exp(logw)
+        self.pi = w / w.sum()
+
+        self.i0 = int(lut[int((self.x0.cpu().numpy() * pow2).sum())])
+        self.dist0 = self.k - (self.S * self.x0).sum(dim=1)
+
+        # f1 and the distance-weight matrix for the oracle control
+        logf1 = -self.E / self.tau - self.log_kappa_full[self.dist0]
+        self.logf1 = logf1 - logf1.max()
+        self.f1 = torch.exp(self.logf1)
+        ov = self.Sf @ self.Sf.T                                # (M, M)
+        J = min(k, n - k)
+        self.W = torch.stack([((ov == (k - jj)).to(self.f1.dtype)
+                               * self.f1).sum(1) for jj in range(J + 1)], 1)
+        del ov
+
+        # order parameters of every state, for exact Q laws
+        self.Q = self.order_parameters(self.S)                  # (M, 3)
+        self.Qmax = self.Q.max(dim=1).values
+
+    # -- exact metrics -------------------------------------------------------
+
+    def heat_capacity(self, p):
+        """``Cv/N`` in eV/K per atom for a law ``p`` over the sector."""
+        m1 = float((p * self.E).sum())
+        m2 = float((p * self.E * self.E).sum())
+        var = max(m2 - m1 * m1, 0.0)
+        return var / (self.n * KB_EV_PER_K * self.temp_k ** 2)
+
+    def exact_report(self, p, tag="", extra=None):
+        pi = self.pi
+        p = p / p.sum()
+        tv = 0.5 * float((p - pi).abs().sum())
+        kl = float((p * (torch.log(p.clamp_min(1e-300))
+                         - torch.log(pi.clamp_min(1e-300)))).sum())
+        hell = float(torch.sqrt(0.5 * ((p.sqrt() - pi.sqrt()) ** 2).sum()))
+        # CE energies are generically all distinct in float64, so quantise to
+        # 1 ueV before binning; otherwise this metric degenerates to full TV.
+        lv, inv = torch.unique(torch.round(self.E * 1e6), return_inverse=True)
+        a = torch.zeros(len(lv), device=self.device, dtype=p.dtype).index_add(0, inv, p)
+        b = torch.zeros(len(lv), device=self.device, dtype=pi.dtype).index_add(0, inv, pi)
+        e_hist_tv = 0.5 * float((a - b).abs().sum())
+        mE = float((p * self.E).sum())
+        mE_ex = float((pi * self.E).sum())
+        cv, cv_ex = self.heat_capacity(p), self.heat_capacity(pi)
+        # Qmax law on bins fixed by the exact reference
+        edges = torch.linspace(0.0, 1.0, 21, device=self.device,
+                               dtype=torch.float64)
+        bin_idx = torch.clamp(torch.bucketize(self.Qmax, edges) - 1, 0, 19)
+        qa = torch.zeros(20, device=self.device, dtype=p.dtype).index_add(0, bin_idx, p)
+        qb = torch.zeros(20, device=self.device, dtype=pi.dtype).index_add(0, bin_idx, pi)
+        out = {
+            "tag": tag,
+            "TV": tv,
+            "KL": kl,
+            "Hellinger": hell,
+            "energy_hist_TV": e_hist_tv,
+            "Qmax_hist_TV": 0.5 * float((qa - qb).abs().sum()),
+            "mean_E_per_atom_meV": 1000.0 * mE / self.n,
+            "exact_mean_E_per_atom_meV": 1000.0 * mE_ex / self.n,
+            "mean_E_err_meV_per_atom": 1000.0 * abs(mE - mE_ex) / self.n,
+            "Cv_per_atom": cv,
+            "exact_Cv_per_atom": cv_ex,
+            "Cv_rel_err": abs(cv - cv_ex) / max(cv_ex, 1e-300),
+            "mean_Qmax": float((p * self.Qmax).sum()),
+            "exact_mean_Qmax": float((pi * self.Qmax).sum()),
+            "mass_leak": abs(float(p.sum()) - 1.0),
+        }
+        if extra:
+            out.update(extra)
+        return out
+
+    def empirical_law(self, x):
+        """Index a batch of direct states and return its empirical law."""
+        check_states(x, self.k, "empirical")
+        idx = self.lut_t[(x * self.pow2).sum(dim=1)]
+        if int(idx.min()) < 0:
+            raise RuntimeError("state outside the enumerated sector")
+        c = torch.bincount(idx, minlength=self.M).to(torch.float64)
+        return c / c.sum()
+
+    def iid_tv_floor(self, n_samples, reps=5, seed=0):
+        """Finite-sample TV floor of ``n_samples`` exact iid draws."""
+        g = torch.Generator(device=self.device).manual_seed(seed)
+        vals = []
+        for _ in range(reps):
+            idx = torch.multinomial(self.pi, n_samples, replacement=True,
+                                    generator=g)
+            e = torch.bincount(idx, minlength=self.M).to(torch.float64)
+            e = e / e.sum()
+            vals.append(0.5 * float((e - self.pi).abs().sum()))
+        return float(np.mean(vals)), float(np.std(vals))
+
+
+# ----------------------------------------------------------------------------
 # validate: Phase 1 hard gates
 # ----------------------------------------------------------------------------
 
@@ -915,6 +1080,241 @@ def cmd_validate(args):
     return 0
 
 
+def cmd_exact(args):
+    """Phase 3: exact CuAu-S law + oracle-control discretization sweep."""
+    from iasbs.fixed_ising import ExactControl, propagate_exact, simulate
+
+    sp = CuAuExact(size=tuple(args.size), temp_k=args.temp, gamma=args.gamma,
+                   device=args.device, verbose=True)
+    kap = np.exp(sp.log_kappa_full.cpu().numpy())
+    print(f"CuAu-S  size={sp.size}  N={sp.n}  k={sp.k}  |Omega|={sp.M}")
+    print(f"T={sp.temp_k} K  tau={sp.tau:.6f} eV  gamma={sp.gamma}")
+    print(f"kappa(.|x0) range {kap.min():.3e} .. {kap.max():.3e}  "
+          f"(ratio {kap.max()/kap.min():.3e})")
+    print(f"exact <E>/N = {1000*float((sp.pi*sp.E).sum())/sp.n:.4f} meV/atom   "
+          f"source E/N = {1000*float(sp.E[sp.i0])/sp.n:.4f} meV/atom")
+    print(f"exact <Qmax> = {float((sp.pi*sp.Qmax).sum()):.4f}   "
+          f"Cv/N = {sp.heat_capacity(sp.pi):.6e} eV/K")
+    print(f"pi: max {float(sp.pi.max()):.3e}  min {float(sp.pi.min()):.3e}  "
+          f"top-1 state E/N {1000*float(sp.E[int(sp.pi.argmax())])/sp.n:.4f} meV/atom")
+    print()
+
+    rows = []
+    for steps in args.steps_sweep:
+        ctrl = ExactControl(sp, steps)
+        t0 = time.time()
+        p = propagate_exact(sp, ctrl.all_states, steps)
+        r = sp.exact_report(p, f"oracle steps={steps}",
+                            {"steps": steps, "sec": round(time.time() - t0, 2)})
+        rows.append(r)
+        print(f"  steps={steps:4d}  TV={r['TV']:.5f}  KL={r['KL']:.3e}  "
+              f"Hell={r['Hellinger']:.5f}  E-hist TV={r['energy_hist_TV']:.5f}  "
+              f"dE={r['mean_E_err_meV_per_atom']:.4f} meV/atom  "
+              f"Cv rel {r['Cv_rel_err']:.4f}  leak={r['mass_leak']:.1e}  "
+              f"{r['sec']}s")
+
+    steps = args.steps_sweep[-1]
+    ctrl = ExactControl(sp, steps)
+    idx = simulate(sp, ctrl.on_states, args.n_samples, steps,
+                   generator=torch.Generator(device=sp.device).manual_seed(0))
+    X = sp.S[idx]
+    viol = int((X.sum(dim=1) != sp.k).sum())
+    emp = torch.bincount(idx, minlength=sp.M).to(torch.float64)
+    emp = emp / emp.sum()
+    tv_emp = 0.5 * float((emp - sp.pi).abs().sum())
+    floor, floor_sd = sp.iid_tv_floor(args.n_samples)
+    print(f"\n  oracle sampled N={args.n_samples} at steps={steps}: "
+          f"violations={viol}  empirical TV={tv_emp:.5f}  "
+          f"iid floor={floor:.5f} +- {floor_sd:.5f}")
+
+    best = min(r["TV"] for r in rows)
+    res = {"provenance": provenance(), "config": vars(args),
+           "N": sp.n, "M": sp.M, "temp_k": sp.temp_k, "tau_eV": sp.tau,
+           "exact": {"mean_E_per_atom_meV": 1000 * float((sp.pi * sp.E).sum()) / sp.n,
+                     "Cv_per_atom": sp.heat_capacity(sp.pi),
+                     "mean_Qmax": float((sp.pi * sp.Qmax).sum())},
+           "rows": rows, "violations": viol, "empirical_TV": tv_emp,
+           "iid_TV_floor": floor, "iid_TV_floor_sd": floor_sd,
+           "oracle_floor_TV": best,
+           "energy_calls": sp.energy.report()}
+    out = args.out or f"json/results_cuau_exact_{sp.n}_{int(sp.temp_k)}K.json"
+    with open(out, "w") as f:
+        json.dump(res, f, indent=2, default=str)
+    print(f"  wrote {out}")
+
+    print("\n=== GATES ===")
+    ok_tv = best <= 0.05
+    print(f"S1  oracle floor TV <= 0.05 : {'PASS' if ok_tv else 'FAIL'} "
+          f"({best:.5f})")
+    print(f"S2  constraint violations 0 : {'PASS' if viol == 0 else 'FAIL'} "
+          f"({viol})")
+    return 0 if (ok_tv and viol == 0) else 1
+
+
+def cmd_train(args):
+    """IASBS training on CuAu with direct tensors and edge minibatching."""
+    from iasbs.fixed_ising import (ExactControl, SwapController,
+                                   net_mult_all_states, propagate_exact)
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    size = tuple(args.size)
+    exact = int(np.prod(size)) <= 16 and not args.no_exact
+    cls = CuAuExact if exact else CuAuSpace
+
+    tables = build_ce_tables(size, verbose=True)
+    energy = TorchCuAuEnergy(tables, device=args.device)
+    if args.source == "l10x":                  # ordered-source stress test
+        src = ideal_l10_state(energy.positions, l10_q_vectors(energy.a)[0])
+    elif args.source == "random":
+        src = None                             # deterministic seed-1729 default
+    else:
+        raise RuntimeError(f"unknown source policy {args.source!r}")
+    sp = cls(size=size, temp_k=args.temp, gamma=args.gamma, device=args.device,
+             source=src, energy=energy, verbose=True)
+
+    net = SwapController(sp.n, hidden=args.hidden).to(sp.device)
+    n_par = sum(p.numel() for p in net.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    steps = args.steps
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=args.iters * args.inner, eta_min=args.lr * 0.05)
+    log_kap0, log_kap1 = sp.bridge_kernels(steps)
+    gen = torch.Generator(device=sp.device).manual_seed(args.seed + 1234)
+
+    print(f"CuAu train  size={size}  N={sp.n}  k={sp.k}  T={sp.temp_k} K  "
+          f"gamma={sp.gamma}  steps={steps}  params={n_par}  exact={exact}")
+    if exact:
+        print(f"  |Omega|={sp.M}  exact <E>/N = "
+              f"{1000*float((sp.pi*sp.E).sum())/sp.n:.4f} meV/atom")
+
+    replay, hist = [], []
+    t_start = time.time()
+    best = {"TV": float("inf")}
+    for it in range(1, args.iters + 1):
+        sp.energy.tag = "train"
+        with torch.no_grad():
+            X1n = simulate_direct(sp, net, args.batch, steps, generator=gen)
+            E1n = sp.energy.energy_torch(X1n).to(torch.float64)
+        replay.append((X1n.detach(), E1n.detach()))
+        if len(replay) > args.buffer:
+            replay.pop(0)
+        pool_x = torch.cat([p[0] for p in replay], 0)
+        pool_e = torch.cat([p[1] for p in replay], 0)
+
+        for _ in range(args.inner):
+            sel = torch.randint(len(pool_x), (args.mb,), device=sp.device,
+                                generator=gen)
+            X1, E1 = pool_x[sel], pool_e[sel]
+            ti = torch.randint(steps, (args.mb,), device=sp.device, generator=gen)
+            with torch.no_grad():
+                Xt = sample_bridge_direct(sp, X1, ti, log_kap0, log_kap1,
+                                          generator=gen)
+                lam_l, i_l, j_l = [], [], []
+                for _ in range(args.edge_samples):
+                    ei, ej = sample_uniform_legal_edge(Xt, generator=gen)
+                    lam_l.append(terminal_log_label_edge(sp, X1, E1, ei, ej))
+                    i_l.append(ei)
+                    j_l.append(ej)
+                i, j = torch.cat(i_l), torch.cat(j_l)
+                lam = torch.exp(torch.cat(lam_l).clamp(-20.0, 20.0))
+
+            tt = (ti.to(torch.float64) / steps).repeat(args.edge_samples)
+            a = net(tt, Xt.repeat(args.edge_samples, 1))
+            b = torch.arange(a.shape[0], device=sp.device)
+            av = a[b, i, j].clamp(-20.0, 20.0).to(torch.float64)
+            loss = (poisson_edge_loss(av, lam) if args.loss == "poisson"
+                    else ((torch.exp(av) - lam) ** 2).mean())
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+            opt.step()
+            sched.step()
+
+        if it == 1:
+            print(f"  label Lambda: mean {float(lam.mean()):.3f}  "
+                  f"p50 {float(lam.median()):.3f}  max {float(lam.max()):.2f}  "
+                  f"frac==1 {float((lam-1).abs().lt(1e-9).double().mean()):.3f}")
+
+        if it % args.eval_every == 0 or it == args.iters:
+            row = {"iter": it, "loss": float(loss),
+                   "train_ce_configs": sp.energy.by_tag.get("train", {}).get("configs", 0),
+                   "sec": round(time.time() - t_start, 1)}
+            if exact:
+                sp.energy.tag = "eval"
+                with torch.no_grad():
+                    p = propagate_exact(
+                        sp, lambda t: net_mult_all_states(sp, net, t), steps)
+                row.update(sp.exact_report(p, f"it={it}"))
+            hist.append(row)
+            msg = (f"  it {it:5d}  loss {float(loss):11.4f}  "
+                   f"CE {row['train_ce_configs']:>10,}  {row['sec']:.0f}s")
+            if exact:
+                msg += (f"  TV {row['TV']:.5f}  E-hist {row['energy_hist_TV']:.5f}"
+                        f"  dE {row['mean_E_err_meV_per_atom']:.4f} meV/at")
+                if row["TV"] < best["TV"]:
+                    best = dict(row)
+            print(msg, flush=True)
+
+    # final sampling + gates
+    sp.energy.tag = "eval"
+    with torch.no_grad():
+        Xs = simulate_direct(sp, net, args.n_samples, steps, generator=gen)
+    viol = int((Xs.sum(1) != sp.k).sum())
+    res = {"provenance": provenance(), "config": vars(args), "params": n_par,
+           "history": hist, "violations": viol,
+           "energy_calls": sp.energy.report()}
+    if exact:
+        with torch.no_grad():
+            p = propagate_exact(
+                sp, lambda t: net_mult_all_states(sp, net, t), steps)
+        fin = sp.exact_report(p, "final")
+        emp = sp.empirical_law(Xs)
+        floor, floor_sd = sp.iid_tv_floor(args.n_samples)
+        ctrl = ExactControl(sp, steps)
+        errs = []
+        with torch.no_grad():
+            for s in (0, steps // 4, steps // 2, 3 * steps // 4, steps - 1):
+                d = (net_mult_all_states(sp, net, s / steps)
+                     - ctrl.all_states(s / steps)).abs()
+                errs.append((s / steps, float(d.mean()), float(d.max())))
+        res.update({"final": fin, "best": best, "mult_err": errs,
+                    "empirical_TV": 0.5 * float((emp - sp.pi).abs().sum()),
+                    "iid_TV_floor": floor, "iid_TV_floor_sd": floor_sd})
+        print(f"\n  final exact-law TV {fin['TV']:.5f}  (best {best['TV']:.5f})"
+              f"  empirical TV {res['empirical_TV']:.5f}  "
+              f"iid floor {floor:.5f}")
+        print("  learned vs oracle log-multiplier:")
+        for t, me, mx in errs:
+            print(f"    t={t:.3f}  mean|da|={me:.4f}  max={mx:.4f}")
+    else:
+        qs = sp.order_parameters(Xs)
+        Es = sp.energy.energy_torch(Xs)
+        res.update({"sample_mean_E_per_atom_meV": 1000 * float(Es.mean()) / sp.n,
+                    "sample_mean_Qmax": float(qs.max(dim=1).values.mean())})
+
+    out = args.out or (f"json/results_cuau_train_{sp.n}_{int(sp.temp_k)}K_"
+                       f"g{int(sp.gamma)}_s{args.seed}.json")
+    with open(out, "w") as f:
+        json.dump(res, f, indent=2, default=str)
+    print(f"  wrote {out}")
+    if args.ckpt_dir:
+        pth = C.save_ckpt(args.ckpt_dir, args.tag or f"cuau{sp.n}_s{args.seed}",
+                          net=net, samples=Xs.to(torch.int8),
+                          extra={"config": vars(args),
+                                 "result": {k: v for k, v in res.items()
+                                            if k != "provenance"}})
+        print(f"  ckpt -> {pth}")
+    print("\n=== GATES ===")
+    print(f"T1  constraint violations 0 : {'PASS' if viol == 0 else 'FAIL'} ({viol})")
+    if exact:
+        ok = res["final"]["TV"] <= args.tv_gate
+        print(f"T2  exact-law TV <= {args.tv_gate} : {'PASS' if ok else 'FAIL'} "
+              f"({res['final']['TV']:.5f})")
+        return 0 if (ok and viol == 0) else 1
+    return 0 if viol == 0 else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -929,6 +1329,43 @@ def main(argv=None):
     v.add_argument("--seed", type=int, default=0)
     v.add_argument("--no-cache", action="store_true")
     v.set_defaults(fn=cmd_validate)
+
+    e = sub.add_parser("exact", help="Phase 3 exact CuAu-S law + oracle sweep")
+    e.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])
+    e.add_argument("--temp", type=float, default=500.0)
+    e.add_argument("--gamma", type=float, default=10.0)
+    e.add_argument("--steps-sweep", type=int, nargs="+",
+                   default=[32, 64, 128, 256, 512])
+    e.add_argument("--n-samples", type=int, default=200_000)
+    e.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    e.add_argument("--out", default="")
+    e.set_defaults(fn=cmd_exact)
+
+    t = sub.add_parser("train", help="IASBS training on CuAu")
+    t.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])
+    t.add_argument("--temp", type=float, default=500.0)
+    t.add_argument("--gamma", type=float, default=10.0)
+    t.add_argument("--steps", type=int, default=128)
+    t.add_argument("--iters", type=int, default=1000)
+    t.add_argument("--batch", type=int, default=256)
+    t.add_argument("--mb", type=int, default=256)
+    t.add_argument("--inner", type=int, default=4)
+    t.add_argument("--buffer", type=int, default=8)
+    t.add_argument("--edge-samples", type=int, default=1)
+    t.add_argument("--hidden", type=int, default=512)
+    t.add_argument("--lr", type=float, default=3e-4)
+    t.add_argument("--loss", choices=["poisson", "l2"], default="poisson")
+    t.add_argument("--source", choices=["random", "l10x"], default="random")
+    t.add_argument("--seed", type=int, default=0)
+    t.add_argument("--eval-every", type=int, default=100)
+    t.add_argument("--n-samples", type=int, default=65_536)
+    t.add_argument("--tv-gate", type=float, default=0.05)
+    t.add_argument("--no-exact", action="store_true")
+    t.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    t.add_argument("--ckpt-dir", default="ckpt")
+    t.add_argument("--tag", default="")
+    t.add_argument("--out", default="")
+    t.set_defaults(fn=cmd_train)
 
     a = ap.parse_args(argv)
     C.use_repo_root()
