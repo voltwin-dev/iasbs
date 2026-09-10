@@ -1,0 +1,20 @@
+# CuAu benchmark environment -- SEPARATE from requirements.txt.
+#
+# The original requirements.txt pins NumPy 2.x for the enumerable IASBS/DAM
+# experiments and must not be modified.  The CuAu cluster-expansion stack
+# (clease/icet/mchammer) is only tested against NumPy 1.x, so CuAu runs in its
+# own conda environment:
+#
+#   conda create -y -n cuau_env python=3.11
+#   /root/miniconda3/envs/cuau_env/bin/pip install -r requirements-cuau.txt
+#
+# Versions below are the exact resolved set used for every CuAu result JSON.
+python_version == "3.11"          # informational; enforced by the conda env
+torch==2.5.1                      # cu124 wheel, same major/minor as the main env
+numpy==1.26.4
+scipy==1.17.1
+pandas==3.0.5
+ase==3.29.0
+clease==1.2.0
+icet==4.0
+mchammer-pt==0.27.1
