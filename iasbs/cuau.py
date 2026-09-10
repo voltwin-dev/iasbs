@@ -46,6 +46,7 @@ import time
 
 import numpy as np
 import torch
+from scipy.special import gammaln
 
 # common.py and the shared json/ ckpt/ directories live at the repository root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -428,6 +429,306 @@ def sample_uniform_legal_edge(x: torch.Tensor, generator=None):
     m = legal_mask(x).reshape(B, -1).to(torch.float32)
     e = torch.multinomial(m, 1, generator=generator).squeeze(1)
     return e // n, e % n
+
+
+def random_fixed_source(n, k, seed=1729) -> torch.Tensor:
+    """Deterministic pseudorandom equiatomic source (playbook 13, headline)."""
+    g = torch.Generator().manual_seed(int(seed))
+    perm = torch.randperm(n, generator=g)
+    x = torch.zeros(n, dtype=torch.int64)
+    x[perm[:k]] = 1
+    return x
+
+
+def check_states(x, k, tag="state"):
+    """Hard guard: binary values and exact fixed count (playbook 31)."""
+    if x.dtype not in (torch.int64, torch.int32, torch.bool):
+        raise RuntimeError(f"{tag}: non-integer state tensor {x.dtype}")
+    xl = x.long()
+    if int(xl.min()) < 0 or int(xl.max()) > 1:
+        raise RuntimeError(f"{tag}: non-binary state values")
+    if not bool((xl.sum(-1) == k).all()):
+        raise RuntimeError(f"{tag}: fixed count violated (k={k})")
+    return xl
+
+
+# ----------------------------------------------------------------------------
+# CuAuSpace: the fixed-composition state space without enumeration
+# ----------------------------------------------------------------------------
+
+
+class CuAuSpace:
+    """``Omega_{N,k}`` for CuAu: direct ``(B, N)`` tensors, no enumeration.
+
+    Everything the IASBS fixed-composition branch needs that does *not* depend
+    on enumeration is reused verbatim from :mod:`iasbs.fixed_ising`: the Johnson
+    orbit kernel ``kappa``, the occupancy-class bridge tables, the uniform
+    legal-swap reference rate ``gamma / (k (N-k))``, and the Dirac terminal
+    label.  The two differences are (i) states are stored as binary tensors and
+    (ii) the energy is the pinned CuAu cluster expansion.
+    """
+
+    def __init__(self, size=(4, 4, 4), temp_k=500.0, gamma=10.0, source=None,
+                 device="cuda", energy=None, count=True, verbose=False):
+        self.size = tuple(int(v) for v in size)
+        self.device = torch.device(device)
+        self.temp_k = float(temp_k)
+        self.tau = KB_EV_PER_K * self.temp_k          # eV; E is total eV
+        self.gamma = float(gamma)
+
+        if energy is None:
+            tables = build_ce_tables(self.size, verbose=verbose)
+            energy = TorchCuAuEnergy(tables, device=device)
+        self.energy = CountedEnergy(energy) if count else energy
+        self.n = self.n_sites = int(energy.N)
+        if self.n != int(np.prod(self.size)):
+            raise RuntimeError("CE structure site count != prod(size)")
+        self.k = self.n // 2
+        if 2 * self.k != self.n:
+            raise RuntimeError("CuAu benchmark requires an even site count")
+        self.n_edges = self.k * (self.n - self.k)
+        self.positions = np.asarray(energy.positions, dtype=np.float64)
+        self.a = float(energy.a)
+
+        # L10 phase tables for the order parameters
+        q = l10_q_vectors(self.a)
+        ph = self.positions @ q.T
+        self.cosp = torch.as_tensor(np.cos(ph), dtype=torch.float64,
+                                    device=self.device)
+        self.sinp = torch.as_tensor(np.sin(ph), dtype=torch.float64,
+                                    device=self.device)
+
+        # source state
+        if source is None:
+            src = random_fixed_source(self.n, self.k)
+        elif isinstance(source, torch.Tensor):
+            src = source.detach().cpu().long()
+        else:
+            src = torch.as_tensor(np.asarray(source, dtype=np.int64))
+        check_states(src.unsqueeze(0), self.k, "source")
+        self.x0 = src.to(self.device)
+
+        # Johnson reference kernel over the full horizon
+        kap = C.binary_orbit_kernel(self.n, self.k, self.gamma)
+        if not np.all(np.isfinite(kap)) or np.any(kap <= 0.0):
+            raise RuntimeError("invalid Johnson orbit kernel")
+        self.log_kappa_full = torch.as_tensor(np.log(kap), dtype=torch.float64,
+                                              device=self.device)
+        self._bridge_tables()
+
+    # -- bridge --------------------------------------------------------------
+
+    def _bridge_tables(self):
+        """Occupancy-class tables; copied from ``FixedIsingSpace`` unchanged.
+
+        Depends only on ``(n, k)``: the four blocks A = both endpoints,
+        B = source only, C = terminal only, D = neither have sizes
+        ``(k-m, m, m, n-k-m)`` for Johnson distance ``m``, and the bridge weight
+        is constant on a class of size ``C(|A|,a) C(|B|,b) C(|C|,c) C(|D|,d)``.
+        """
+        n, k = self.n, self.k
+        J = min(k, n - k)
+        lc = lambda N, r: (gammaln(N + 1.0) - gammaln(r + 1.0)
+                           - gammaln(N - r + 1.0))
+        rows = []
+        for m in range(J + 1):
+            sz = (k - m, m, m, n - k - m)
+            cur = [(a, b, c, k - a - b - c,
+                    sum(lc(sz[i], v) for i, v in
+                        enumerate((a, b, c, k - a - b - c))))
+                   for a in range(sz[0] + 1)
+                   for b in range(sz[1] + 1)
+                   for c in range(sz[2] + 1)
+                   if 0 <= k - a - b - c <= sz[3]]
+            rows.append(cur)
+        Lm = max(len(r) for r in rows)
+        A = np.zeros((J + 1, Lm, 4), dtype=np.int64)
+        Wt = np.full((J + 1, Lm), -np.inf)
+        D0 = np.zeros((J + 1, Lm), dtype=np.int64)
+        D1 = np.zeros((J + 1, Lm), dtype=np.int64)
+        for m, cur in enumerate(rows):
+            for i, (a, b, c, d, w) in enumerate(cur):
+                A[m, i] = (a, b, c, d)
+                Wt[m, i] = w
+                D0[m, i] = k - a - b
+                D1[m, i] = k - a - c
+        dev = self.device
+        self.br_abcd = torch.as_tensor(A, device=dev)
+        self.br_lmult = torch.as_tensor(Wt, dtype=torch.float64, device=dev)
+        self.br_d0 = torch.as_tensor(D0, device=dev)
+        self.br_d1 = torch.as_tensor(D1, device=dev)
+        self.br_size = torch.as_tensor(
+            np.array([[k - m, m, m, n - k - m] for m in range(J + 1)]),
+            device=dev)
+
+    # -- helpers -------------------------------------------------------------
+
+    def distance(self, x0, x1):
+        """Johnson distance ``d = k - <x0, x1>``; broadcasts over batches."""
+        return self.k - (x0.long() * x1.long()).sum(-1)
+
+    def kappa_grid(self, ts):
+        """``kappa_{gamma (1-t)}[d]`` for every ``t`` in ``ts``.  ``(T, J+1)``."""
+        Gam = np.maximum(self.gamma * (1.0 - np.asarray(ts, dtype=np.float64)),
+                         1e-12)
+        kap = np.stack([np.maximum(C.binary_orbit_kernel(self.n, self.k, float(g)),
+                                   1e-300) for g in Gam])
+        return torch.as_tensor(kap, dtype=torch.float64, device=self.device)
+
+    def bridge_kernels(self, steps):
+        """``(log_kap0, log_kap1)`` on the ``steps``-point training grid.
+
+        ``log_kap0[s]`` is the kernel of the elapsed time ``t_s = s / steps``
+        and ``log_kap1[s]`` that of the remaining time ``1 - t_s``, matching
+        ``fixed_ising.run_train``.
+        """
+        ts = np.arange(steps, dtype=np.float64) / steps
+        log_kap0 = torch.log(self.kappa_grid(1.0 - ts))
+        log_kap1 = torch.log(self.kappa_grid(ts))
+        if not bool(torch.isfinite(log_kap0).all() and torch.isfinite(log_kap1).all()):
+            raise RuntimeError("non-finite log kappa on the bridge grid")
+        return log_kap0, log_kap1
+
+    def order_parameters(self, x):
+        """``(..., 3)`` L10 structure factors ``Q_alpha``."""
+        return l10_order_parameters_torch(x, self.cosp, self.sinp)
+
+    def ideal_l10(self, axis=0):
+        q = l10_q_vectors(self.a)[axis]
+        return torch.as_tensor(ideal_l10_state(self.positions, q),
+                               device=self.device)
+
+
+# ----------------------------------------------------------------------------
+# direct bridge / simulation / labels  (playbook 8-10)
+# ----------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def sample_bridge_direct(space, X1, t_idx, log_kap0, log_kap1, generator=None,
+                         X0=None):
+    """Exact reference bridge ``X_t | x_0, X_1`` on direct binary tensors.
+
+    Identical construction to ``fixed_ising.sample_bridge``; the only changes
+    are that ``X1`` arrives as a ``(B, N)`` tensor instead of an enumeration
+    index and the result is returned as a tensor instead of an index.
+    """
+    B, n = X1.shape
+    x0b = space.x0.unsqueeze(0).expand(B, -1) if X0 is None else X0.long()
+    m = space.distance(x0b, X1)
+
+    lw = (space.br_lmult[m]
+          + torch.gather(log_kap0[t_idx], 1, space.br_d0[m])
+          + torch.gather(log_kap1[t_idx], 1, space.br_d1[m]))
+    lw = lw - lw.max(dim=1, keepdim=True).values
+    sel = torch.multinomial(torch.exp(lw), 1, generator=generator).squeeze(1)
+
+    cnt = space.br_abcd[m, sel]                                # (B, 4)
+    sizes = space.br_size[m]                                   # (B, 4)
+
+    blk = 2 * (1 - x0b) + (1 - X1.long())                      # A,B,C,D labels
+    key = torch.rand(B, n, device=X1.device, generator=generator)
+    order = torch.argsort(blk.to(key.dtype) * 2.0 + key, dim=1)
+    bs = torch.gather(blk, 1, order)
+
+    start = torch.cat([torch.zeros_like(sizes[:, :1]),
+                       sizes.cumsum(1)[:, :3]], dim=1)
+    pos = torch.arange(n, device=X1.device).expand(B, n)
+    take = (pos - torch.gather(start, 1, bs)) < torch.gather(cnt, 1, bs)
+
+    x = torch.zeros(B, n, dtype=torch.int64, device=X1.device)
+    x.scatter_(1, order, take.long())
+    return check_states(x, space.k, "bridge")
+
+
+@torch.no_grad()
+def simulate_direct(space, net, batch, steps, generator=None, x0=None,
+                    return_path=False):
+    """Frozen-rate, at most one jump per grid bin -- same scheme as the Ising branch."""
+    if x0 is None:
+        x = space.x0.unsqueeze(0).expand(batch, -1).clone()
+    else:
+        x = x0.long().to(space.device).clone()
+        if x.shape[0] != batch:
+            x = x.expand(batch, -1).clone()
+    check_states(x, space.k, "sim init")
+
+    dt = 1.0 / steps
+    base = space.gamma / space.n_edges
+    path = [x.clone()] if return_path else None
+
+    for s in range(steps):
+        tt = torch.full((batch,), s * dt, device=space.device, dtype=torch.float64)
+        if net is None:
+            a = torch.zeros(batch, space.n, space.n, device=space.device,
+                            dtype=torch.float64)
+        else:
+            a = net(tt, x).to(torch.float64).clamp(-20.0, 20.0)
+        u = base * torch.exp(a) * legal_mask(x)
+        flat = u.reshape(batch, -1)
+        R = flat.sum(dim=1)
+        p_stay = torch.exp(-R * dt)
+
+        jump = torch.rand(batch, device=space.device, generator=generator) > p_stay
+        if bool(jump.any()):
+            rows = torch.nonzero(jump, as_tuple=False).squeeze(1)
+            e = torch.multinomial(flat[rows], 1, generator=generator).squeeze(1)
+            i, j = e // space.n, e % space.n
+            x = x.clone()
+            x[rows, i] = 0
+            x[rows, j] = 1
+        if return_path:
+            path.append(x.clone())
+
+    check_states(x, space.k, "sim final")
+    return (x, path) if return_path else x
+
+
+@torch.no_grad()
+def terminal_log_label_edge(space, X1, E1, i, j, check=False):
+    """``log Lambda_{(i,j)}(X1)`` for one sampled edge per row.  ``(B,)``."""
+    Xg = transpose_batch(X1, i, j)
+    Eg = space.energy.energy_torch(Xg).to(torch.float64)
+    if not bool(torch.isfinite(Eg).all()):
+        raise RuntimeError("non-finite CE energy in terminal label")
+
+    x0b = space.x0.unsqueeze(0)
+    d1 = space.distance(x0b, X1).long()
+    dg = space.distance(x0b, Xg).long()
+    out = (-(Eg - E1.to(torch.float64)) / space.tau
+           + space.log_kappa_full[d1] - space.log_kappa_full[dg])
+    if not bool(torch.isfinite(out).all()):
+        raise RuntimeError("non-finite terminal label before clipping")
+    if check:
+        b = torch.arange(X1.shape[0], device=X1.device)
+        same = X1[b, i] == X1[b, j]
+        if bool(same.any()) and float(out[same].abs().max()) > 1e-9:
+            raise RuntimeError("equal-symbol transposition did not give Lambda=1")
+    return out
+
+
+@torch.no_grad()
+def terminal_log_label_all_pairs(space, X1, E1, pairs):
+    """``log Lambda_g`` for every unordered pair ``g``.  ``(B, Np)``; tests only."""
+    B = X1.shape[0]
+    out = torch.empty(B, pairs.shape[0], dtype=torch.float64, device=X1.device)
+    for p in range(pairs.shape[0]):
+        i = torch.full((B,), int(pairs[p, 0]), device=X1.device)
+        j = torch.full((B,), int(pairs[p, 1]), device=X1.device)
+        out[:, p] = terminal_log_label_edge(space, X1, E1, i, j)
+    return out
+
+
+def poisson_edge_loss(a_edge, lam):
+    """Bregman/Poisson loss on the sampled edges; ``exp(a) - a * Lambda``."""
+    return (torch.exp(a_edge) - a_edge * lam).mean()
+
+
+def all_edge_poisson_loss(a, lam_full, mask):
+    """Exact edge-averaged loss for the same quantities; reference for tests."""
+    m = mask.to(a.dtype)
+    per = (torch.exp(a) - a * lam_full) * m
+    return (per.sum(dim=(1, 2)) / m.sum(dim=(1, 2))).mean()
 
 
 # ----------------------------------------------------------------------------
