@@ -1479,6 +1479,226 @@ def cmd_distill(args):
     return 0 if ok else 1
 
 
+def random_sector_batch(n, k, batch, device, generator=None):
+    """``(batch, n)`` uniform draws from the fixed-count sector.
+
+    A uniformly random permutation per row puts the k ones in a uniformly
+    random position set, which is exactly Uniform(Omega).
+    """
+    r = torch.rand(batch, n, device=device, generator=generator)
+    idx = r.argsort(dim=1)[:, :k]
+    x = torch.zeros(batch, n, dtype=torch.int64, device=device)
+    x.scatter_(1, idx, 1)
+    return x
+
+
+@torch.no_grad()
+def corrector_label_edge(space, X0, X1, i, j):
+    """``log Q = log kappa[d(X0, gX1)] - log kappa[d(X0, X1)]`` per row.
+
+    Unbiased single-sample estimator of the corrector ratio
+    ``fhat_1(gX1)/fhat_1(X1)``, valid only when ``(X0, X1)`` is an endpoint
+    PAIR of the controlled process: the conditional law ``p*(X0 | X1)`` is what
+    makes ``E[Q | X1]`` equal that ratio.  Drawing X0 independently of X1 gives
+    a biased corrector.
+    """
+    Xg = transpose_batch(X1, i, j)
+    d1 = space.distance(X0, X1).long()
+    dg = space.distance(X0, Xg).long()
+    return space.log_kappa_full[dg] - space.log_kappa_full[d1]
+
+
+def net_edge(net, t, x, i, j, steps=None):
+    """Read a SwapController on one edge per row.  ``(B,)`` float64."""
+    a = net(t, x)
+    b = torch.arange(x.shape[0], device=x.device)
+    return a[b, i, j].to(torch.float64)
+
+
+def cmd_train_nd(args):
+    """Non-Dirac source: nu_0 = Uniform(Omega) with a learned corrector.
+
+    The Dirac branch folds the closed-form base kernel ratio
+    ``log kappa[d(x0,X1)] - log kappa[d(x0,gX1)]`` into the terminal label.
+    That term is what ties every label to the single source x0, and at low
+    temperature it is what makes the label heavy tailed (Lambda max 573 at
+    500 K against 11 at 1200 K).  With a source DISTRIBUTION the ratio becomes
+
+        fhat_1(z) = sum_{x0} p_base(z | x0) f_0(x0) nu_0(x0),
+
+    which contains f_0 and so is not closed form; the loop becomes an IPF
+    fixed point.  What is available is the unbiased single-sample estimator
+    Q(X0, X1) above, regressed with the same Poisson-Bregman loss.
+
+    Everything else -- controller, bridge sampler, exact propagation, target
+    pi -- is shared with the Dirac driver.
+    """
+    from iasbs.fixed_ising import (SwapController, net_mult_all_states,
+                                   propagate_exact)
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    size = tuple(args.size)
+    tables = build_ce_tables(size, verbose=True)
+    energy = TorchCuAuEnergy(tables, device=args.device)
+    sp = CuAuExact(size=size, temp_k=args.temp, gamma=args.gamma,
+                   device=args.device, energy=energy, verbose=True)
+
+    net = SwapController(sp.n, hidden=args.hidden).to(sp.device)
+    net_h = SwapController(sp.n, hidden=args.hidden).to(sp.device)
+    n_par = sum(p.numel() for p in net.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    opt_h = torch.optim.Adam(net_h.parameters(), lr=args.lr_h)
+    steps = args.steps
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=args.iters * args.inner, eta_min=args.lr * 0.05)
+    sched_h = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt_h, T_max=args.iters * args.inner_h, eta_min=args.lr_h * 0.05)
+    log_kap0, log_kap1 = sp.bridge_kernels(steps)
+    gen = torch.Generator(device=sp.device).manual_seed(args.seed + 1234)
+    p0_unif = torch.full((sp.M,), 1.0 / sp.M, device=sp.device,
+                         dtype=torch.float64)
+
+    print(f"CuAu train-nd  N={sp.n}  |Omega|={sp.M}  T={sp.temp_k} K  "
+          f"gamma={sp.gamma}  steps={steps}  params={n_par}x2  "
+          f"source=Uniform(Omega)")
+
+    buf, hist, it1 = [], [], {}
+    best = {"TV": float("inf")}
+    t_start = time.time()
+    for it in range(1, args.iters + 1):
+        sp.energy.tag = "train"
+        with torch.no_grad():
+            X0n = random_sector_batch(sp.n, sp.k, args.batch, sp.device, gen)
+            X1n = simulate_direct(sp, net, args.batch, steps, generator=gen,
+                                  x0=X0n)
+            E1n = sp.energy.energy_torch(X1n).to(torch.float64)
+        buf.append((X0n.detach(), X1n.detach(), E1n.detach()))
+        if len(buf) > args.buffer:
+            buf.pop(0)
+        pool0 = torch.cat([b[0] for b in buf], 0)
+        pool1 = torch.cat([b[1] for b in buf], 0)
+        poole = torch.cat([b[2] for b in buf], 0)
+
+        # --- corrector: exp(h) -> E[Q | X1, edge] ---------------------------
+        for _ in range(args.inner_h):
+            sel = torch.randint(len(pool1), (args.mb,), device=sp.device,
+                                generator=gen)
+            X0, X1 = pool0[sel], pool1[sel]
+            ei, ej = sample_uniform_legal_edge(X1, generator=gen)
+            with torch.no_grad():
+                q = torch.exp(corrector_label_edge(
+                    sp, X0, X1, ei, ej).clamp(-20.0, 20.0))
+            tt1 = torch.ones(args.mb, device=sp.device, dtype=torch.float64)
+            hv = net_edge(net_h, tt1, X1, ei, ej).clamp(-20.0, 20.0)
+            loss_h = (torch.exp(hv) - hv * q).mean()
+            opt_h.zero_grad(set_to_none=True)
+            loss_h.backward()
+            torch.nn.utils.clip_grad_norm_(net_h.parameters(), 10.0)
+            opt_h.step()
+            sched_h.step()
+
+        # --- controller: same loop, corrected label -------------------------
+        for _ in range(args.inner):
+            sel = torch.randint(len(pool1), (args.mb,), device=sp.device,
+                                generator=gen)
+            X0, X1, E1 = pool0[sel], pool1[sel], poole[sel]
+            ti = torch.randint(steps, (args.mb,), device=sp.device,
+                               generator=gen)
+            with torch.no_grad():
+                Xt = sample_bridge_direct(sp, X1, ti, log_kap0, log_kap1,
+                                          generator=gen, X0=X0)
+                ei, ej = sample_uniform_legal_edge(Xt, generator=gen)
+                Xg = transpose_batch(X1, ei, ej)
+                Eg = sp.energy.energy_torch(Xg).to(torch.float64)
+                tt1 = torch.ones(args.mb, device=sp.device, dtype=torch.float64)
+                hg = net_edge(net_h, tt1, X1, ei, ej)
+                lam = torch.exp((-(Eg - E1) / sp.tau - hg).clamp(-20.0, 20.0))
+            tt = ti.to(torch.float64) / steps
+            av = net_edge(net, tt, Xt, ei, ej).clamp(-20.0, 20.0)
+            loss = (torch.exp(av) - av * lam).mean()
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+            opt.step()
+            sched.step()
+
+        if it == 1:
+            # IPF iteration 1 has f_0 = 1 (the controller is zero-initialised),
+            # so the endpoints are a BASE-process pair.  The Johnson graph is
+            # distance-regular, hence fhat_1 = sum_d N_d kappa_d is constant in
+            # z and every corrector ratio is exactly 1.  A learned corrector
+            # far from 0 here is an estimator bug, not a hard problem.
+            with torch.no_grad():
+                Xs = pool1[:2048]
+                qi, qj = sample_uniform_legal_edge(Xs, generator=gen)
+                t1 = torch.ones(Xs.shape[0], device=sp.device,
+                                dtype=torch.float64)
+                hv = net_edge(net_h, t1, Xs, qi, qj)
+                qq = corrector_label_edge(sp, pool0[:2048], Xs, qi, qj)
+                it1 = {"mean_exp_h": float(torch.exp(hv).mean()),
+                       "max_abs_h": float(hv.abs().max()),
+                       "mean_Q": float(torch.exp(qq).mean())}
+            print(f"  IPF-1 corrector vs exact 1: mean exp(h) "
+                  f"{it1['mean_exp_h']:.5f}  max|h| {it1['max_abs_h']:.5f}  "
+                  f"mean Q {it1['mean_Q']:.5f}")
+
+        if it % args.eval_every == 0 or it == args.iters:
+            with torch.no_grad():
+                p = propagate_exact(
+                    sp, lambda t: net_mult_all_states(sp, net, t), steps,
+                    p0=p0_unif)
+            rep = sp.exact_report(p, "train")
+            row = {"iter": it, "loss": float(loss), "loss_h": float(loss_h),
+                   "TV": rep["TV"], "energy_hist_TV": rep["energy_hist_TV"],
+                   "secs": round(time.time() - t_start, 1),
+                   "energy_calls": sp.energy.report()}
+            hist.append(row)
+            if rep["TV"] < best["TV"]:
+                best = {"TV": rep["TV"], "iter": it}
+            print(f"  it {it:5d}  loss {float(loss):10.4f}  "
+                  f"loss_h {float(loss_h):8.4f}  TV {rep['TV']:.5f}  "
+                  f"E-hist {rep['energy_hist_TV']:.5f}  {row['secs']:.0f}s")
+
+    sp.energy.tag = "eval"
+    with torch.no_grad():
+        X0s = random_sector_batch(sp.n, sp.k, args.n_samples, sp.device, gen)
+        Xs = simulate_direct(sp, net, args.n_samples, steps, generator=gen,
+                             x0=X0s)
+        p = propagate_exact(sp, lambda t: net_mult_all_states(sp, net, t),
+                            steps, p0=p0_unif)
+    fin = sp.exact_report(p, "final")
+    viol = int((Xs.sum(1) != sp.k).sum())
+    emp = sp.empirical_law(Xs)
+    floor, floor_sd = sp.iid_tv_floor(args.n_samples)
+    res = {"provenance": provenance(), "config": arg_config(args),
+           "params": n_par, "history": hist, "final": fin, "best": best,
+           "ipf1": it1, "violations": viol,
+           "empirical_TV": 0.5 * float((emp - sp.pi).abs().sum()),
+           "iid_TV_floor": floor, "iid_TV_floor_sd": floor_sd,
+           "energy_calls": sp.energy.report()}
+    out = args.out or (f"json/results_cuau_nd_{sp.n}_{int(sp.temp_k)}K_"
+                       f"g{int(sp.gamma)}_s{args.seed}.json")
+    with open(out, "w") as f:
+        json.dump(res, f, indent=2, default=str)
+    print(f"\n  final exact-law TV {fin['TV']:.5f}  (best {best['TV']:.5f})"
+          f"  empirical TV {res['empirical_TV']:.5f}  iid floor {floor:.5f}")
+    print(f"  wrote {out}")
+    if args.ckpt_dir:
+        pth = C.save_ckpt(args.ckpt_dir,
+                          args.tag or f"cuaund{sp.n}_s{args.seed}",
+                          nets={"net": net, "net_h": net_h},
+                          samples=Xs.to(torch.int8),
+                          extra={"config": arg_config(args)})
+        print(f"  ckpt -> {pth}")
+    print("\n=== GATES ===")
+    print(f"N1  constraint violations 0 : {'PASS' if viol == 0 else 'FAIL'} ({viol})")
+    ok = fin["TV"] <= args.tv_gate
+    print(f"N2  exact-law TV <= {args.tv_gate} : {'PASS' if ok else 'FAIL'} "
+          f"({fin['TV']:.5f})")
+    return 0 if (ok and viol == 0) else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1504,6 +1724,30 @@ def main(argv=None):
     e.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     e.add_argument("--out", default="")
     e.set_defaults(fn=cmd_exact)
+
+    nd = sub.add_parser("train-nd", help="non-Dirac source + learned corrector")
+    nd.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])
+    nd.add_argument("--temp", type=float, default=500.0)
+    nd.add_argument("--gamma", type=float, default=10.0)
+    nd.add_argument("--steps", type=int, default=512)
+    nd.add_argument("--iters", type=int, default=3000)
+    nd.add_argument("--batch", type=int, default=256)
+    nd.add_argument("--mb", type=int, default=512)
+    nd.add_argument("--inner", type=int, default=5)
+    nd.add_argument("--inner-h", type=int, default=5)
+    nd.add_argument("--buffer", type=int, default=20)
+    nd.add_argument("--hidden", type=int, default=512)
+    nd.add_argument("--lr", type=float, default=1e-3)
+    nd.add_argument("--lr-h", type=float, default=1e-3)
+    nd.add_argument("--seed", type=int, default=0)
+    nd.add_argument("--eval-every", type=int, default=100)
+    nd.add_argument("--n-samples", type=int, default=200000)
+    nd.add_argument("--tv-gate", type=float, default=0.05)
+    nd.add_argument("--device", default="cuda")
+    nd.add_argument("--ckpt-dir", default="ckpt")
+    nd.add_argument("--tag", default=None)
+    nd.add_argument("--out", default=None)
+    nd.set_defaults(fn=cmd_train_nd)
 
     d = sub.add_parser("distill", help="capacity control: fit the exact Doob control")
     d.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])
