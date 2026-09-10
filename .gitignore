@@ -33,3 +33,4 @@ reference/
 # generated CuAu CE caches (rebuilt deterministically by `python -m iasbs.cuau validate`)
 data/cuau/ce_tables_*.npz
 data/cuau/cubic_perm_*.npy
+data/cuau/symperms_*.npy

@@ -1737,7 +1737,236 @@ def cmd_train_nd(args):
     return 0 if (ok and viol == 0) else 1
 
 
-def symmetry_perms(tables, tol=1e-9, n_probe=512, seed=7, quant=24):
+def sampled_observables(sp, X, temp_k):
+    """``<E>/N``, ``<Qmax>`` and ``Cv/N`` from a batch of terminal samples.
+
+    Identical estimators to the ones :mod:`iasbs.cuau_reference` applies to the
+    PT chain, so the two numbers are comparable without a correction: same
+    per-atom convention (meV), same ``Cv = Var(E) / (k_B T^2)`` per atom, same
+    ``Qmax = max_alpha Q_alpha``.
+    """
+    E = sp.energy.energy_torch(X).to(torch.float64)
+    Q = l10_order_parameters_torch(X, sp.cosp, sp.sinp).max(-1).values
+    tau = KB_EV_PER_K * float(temp_k)
+    return {"E_per_N_meV": float(E.mean()) / sp.n * 1000.0,
+            "Qmax": float(Q.mean()),
+            "Cv_per_N": float(E.var(unbiased=True)) / (tau * float(temp_k))
+                        / sp.n,
+            "E_per_N_meV_sem": float(E.std(unbiased=True))
+                               / np.sqrt(X.shape[0]) / sp.n * 1000.0,
+            "Qmax_sem": float(Q.std(unbiased=True)) / np.sqrt(X.shape[0]),
+            "n": int(X.shape[0])}
+
+
+def cmd_train_big(args):
+    """IASBS on a sector too large to enumerate, scored against PT.
+
+    The training loop is byte-for-byte the recipe that won on CuAu-S: uniform
+    source with a learned corrector plus symmetry augmentation of the endpoint
+    pairs.  What changes is only what can be *measured*.  At N = 64 there are
+    1.8e18 states, so there is no exact law, no exact-law TV and no oracle; the
+    controller is scored on the same observables the parallel-tempering
+    reference reports, with the reference's own between-chain spread as the
+    resolution limit.
+
+    That is the honest metric at this size: a claim of agreement finer than the
+    reference noise floor is not a measurement.
+    """
+    from iasbs.fixed_ising import SwapController
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    size = tuple(args.size)
+    tables = build_ce_tables(size, verbose=True)
+    energy = TorchCuAuEnergy(tables, device=args.device)
+    sp = CuAuSpace(size=size, temp_k=args.temp, gamma=args.gamma,
+                   device=args.device, energy=energy, verbose=True)
+
+    ref = None
+    if args.ref_json and os.path.exists(args.ref_json):
+        with open(args.ref_json) as f:
+            ref = json.load(f)
+        if list(ref.get("size", [])) != list(size):
+            raise RuntimeError(f"{args.ref_json} is for size {ref.get('size')}"
+                               f", not {list(size)}")
+        print(f"  PT reference: <E>/N {ref['E_per_N_meV']:.4f} +/- "
+              f"{ref['E_per_N_meV_sd']:.4f} meV   Qmax {ref['Qmax']:.4f} "
+              f"+/- {ref['Qmax_sd']:.4f}")
+
+    net = SwapController(sp.n, hidden=args.hidden).to(sp.device)
+    net_h = SwapController(sp.n, hidden=args.hidden).to(sp.device)
+    if args.init_ckpt:
+        blob = torch.load(args.init_ckpt, map_location=sp.device,
+                          weights_only=False)
+        sds = blob.get("state_dicts")
+        if sds is None:
+            raise RuntimeError(f"{args.init_ckpt} has no state_dicts pair")
+        net.load_state_dict(sds["net"])
+        net_h.load_state_dict(sds["net_h"])
+        print(f"  warm start from {args.init_ckpt} (net + net_h)")
+    n_par = sum(p.numel() for p in net.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    opt_h = torch.optim.Adam(net_h.parameters(), lr=args.lr_h)
+    steps = args.steps
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=args.iters * args.inner, eta_min=args.lr * 0.05)
+    sched_h = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt_h, T_max=args.iters * args.inner_h, eta_min=args.lr_h * 0.05)
+    log_kap0, log_kap1 = sp.bridge_kernels(steps)
+    gen = torch.Generator(device=sp.device).manual_seed(args.seed + 1234)
+
+    Gt = None
+    if args.sym_aug:
+        perms = symmetry_perms(tables)
+        Gt = torch.as_tensor(perms, dtype=torch.int64, device=sp.device)
+        print(f"  symmetry augmentation: group order {Gt.shape[0]} "
+              f"(energy-verified)")
+
+    def augment(X0, X1):
+        if Gt is None:
+            return X0, X1
+        g = torch.randint(Gt.shape[0], (X0.shape[0],), device=sp.device,
+                          generator=gen)
+        pg = Gt[g]
+        return torch.gather(X0, 1, pg), torch.gather(X1, 1, pg)
+
+    print(f"CuAu train-big  N={sp.n}  k={sp.k}  T={sp.temp_k} K  "
+          f"gamma={sp.gamma}  steps={steps}  params={n_par}x2  "
+          f"source=Uniform(Omega)  (no enumeration)")
+
+    buf, hist = [], []
+    t_start = time.time()
+    for it in range(1, args.iters + 1):
+        sp.energy.tag = "train"
+        with torch.no_grad():
+            X0n = random_sector_batch(sp.n, sp.k, args.batch, sp.device, gen)
+            X1n = simulate_direct(sp, net, args.batch, steps, generator=gen,
+                                  x0=X0n)
+            E1n = sp.energy.energy_torch(X1n).to(torch.float64)
+        buf.append((X0n.detach(), X1n.detach(), E1n.detach()))
+        if len(buf) > args.buffer:
+            buf.pop(0)
+        pool0 = torch.cat([b[0] for b in buf], 0)
+        pool1 = torch.cat([b[1] for b in buf], 0)
+        poole = torch.cat([b[2] for b in buf], 0)
+
+        for _ in range(args.inner_h):
+            sel = torch.randint(len(pool1), (args.mb,), device=sp.device,
+                                generator=gen)
+            X0, X1 = augment(pool0[sel], pool1[sel])
+            ei, ej = sample_uniform_legal_edge(X1, generator=gen)
+            with torch.no_grad():
+                q = torch.exp(corrector_label_edge(
+                    sp, X0, X1, ei, ej).clamp(-20.0, 20.0))
+            tt1 = torch.ones(args.mb, device=sp.device, dtype=torch.float64)
+            hv = net_edge(net_h, tt1, X1, ei, ej).clamp(-20.0, 20.0)
+            loss_h = (torch.exp(hv) - hv * q).mean()
+            opt_h.zero_grad(set_to_none=True)
+            loss_h.backward()
+            torch.nn.utils.clip_grad_norm_(net_h.parameters(), 10.0)
+            opt_h.step()
+            sched_h.step()
+
+        for _ in range(args.inner):
+            sel = torch.randint(len(pool1), (args.mb,), device=sp.device,
+                                generator=gen)
+            X0, X1 = augment(pool0[sel], pool1[sel])
+            E1 = poole[sel]
+            ti = torch.randint(steps, (args.mb,), device=sp.device,
+                               generator=gen)
+            with torch.no_grad():
+                Xt = sample_bridge_direct(sp, X1, ti, log_kap0, log_kap1,
+                                          generator=gen, X0=X0)
+                ei, ej = sample_uniform_legal_edge(Xt, generator=gen)
+                Xg = transpose_batch(X1, ei, ej)
+                Eg = sp.energy.energy_torch(Xg).to(torch.float64)
+                tt1 = torch.ones(args.mb, device=sp.device, dtype=torch.float64)
+                hg = net_edge(net_h, tt1, X1, ei, ej)
+                lam = torch.exp((-(Eg - E1) / sp.tau - hg).clamp(-20.0, 20.0))
+            tt = ti.to(torch.float64) / steps
+            av = net_edge(net, tt, Xt, ei, ej).clamp(-20.0, 20.0)
+            loss = (torch.exp(av) - av * lam).mean()
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+            opt.step()
+            sched.step()
+
+        if it % args.eval_every == 0 or it == args.iters:
+            sp.energy.tag = "eval"
+            with torch.no_grad():
+                X0e = random_sector_batch(sp.n, sp.k, args.n_eval, sp.device,
+                                          gen)
+                Xe = simulate_direct(sp, net, args.n_eval, steps,
+                                     generator=gen, x0=X0e)
+                obs = sampled_observables(sp, Xe, sp.temp_k)
+            obs["iter"] = it
+            obs["loss"] = float(loss)
+            obs["loss_h"] = float(loss_h)
+            obs["secs"] = round(time.time() - t_start, 1)
+            obs["violations"] = int((Xe.sum(1) != sp.k).sum())
+            if ref is not None:
+                obs["dE_per_N_meV"] = abs(obs["E_per_N_meV"]
+                                          - ref["E_per_N_meV"])
+                obs["dQmax"] = abs(obs["Qmax"] - ref["Qmax"])
+            hist.append(obs)
+            msg = (f"  it {it:5d}  loss {float(loss):10.4f}  "
+                   f"loss_h {float(loss_h):8.4f}  "
+                   f"<E>/N {obs['E_per_N_meV']:9.4f} meV  "
+                   f"Qmax {obs['Qmax']:.4f}")
+            if ref is not None:
+                msg += (f"  dE {obs['dE_per_N_meV']:7.4f}  "
+                        f"dQ {obs['dQmax']:.4f}")
+            print(msg + f"  {obs['secs']:.0f}s", flush=True)
+            sp.energy.tag = "train"
+
+    sp.energy.tag = "final"
+    with torch.no_grad():
+        X0s = random_sector_batch(sp.n, sp.k, args.n_samples, sp.device, gen)
+        Xs = simulate_direct(sp, net, args.n_samples, steps, generator=gen,
+                             x0=X0s)
+        fin = sampled_observables(sp, Xs, sp.temp_k)
+    viol = int((Xs.sum(1) != sp.k).sum())
+    res = {"provenance": provenance(), "config": arg_config(args),
+           "params": n_par, "history": hist, "final": fin,
+           "violations": viol, "reference": ref,
+           "energy_calls": sp.energy.report()}
+    if ref is not None:
+        res["dE_per_N_meV"] = abs(fin["E_per_N_meV"] - ref["E_per_N_meV"])
+        res["dQmax"] = abs(fin["Qmax"] - ref["Qmax"])
+    out = args.out or (f"json/results_cuau_big_{sp.n}_{int(sp.temp_k)}K_"
+                       f"g{int(sp.gamma)}_s{args.seed}.json")
+    with open(out, "w") as f:
+        json.dump(res, f, indent=2, default=str)
+    print(f"\n  final <E>/N {fin['E_per_N_meV']:.4f} +/- "
+          f"{fin['E_per_N_meV_sem']:.4f} meV/atom   "
+          f"Qmax {fin['Qmax']:.4f} +/- {fin['Qmax_sem']:.4f}   "
+          f"Cv/N {fin['Cv_per_N']:.6e}")
+    print(f"  wrote {out}")
+    if args.ckpt_dir:
+        pth = C.save_ckpt(args.ckpt_dir,
+                          args.tag or f"cuaubig{sp.n}_s{args.seed}",
+                          nets={"net": net, "net_h": net_h},
+                          samples=Xs[:65536].to(torch.int8),
+                          extra={"config": arg_config(args)})
+        print(f"  ckpt -> {pth}")
+    print("\n=== GATES ===")
+    print(f"M1  constraint violations 0 : {'PASS' if viol == 0 else 'FAIL'} "
+          f"({viol})")
+    ok = True
+    if ref is not None:
+        e_ok = res["dE_per_N_meV"] <= args.e_gate
+        q_ok = res["dQmax"] <= args.q_gate
+        print(f"M2  |d<E>/N| <= {args.e_gate} meV : "
+              f"{'PASS' if e_ok else 'FAIL'} ({res['dE_per_N_meV']:.4f})")
+        print(f"M3  |dQmax| <= {args.q_gate} : "
+              f"{'PASS' if q_ok else 'FAIL'} ({res['dQmax']:.4f})")
+        ok = e_ok and q_ok
+    return 0 if (ok and viol == 0) else 1
+
+
+def symmetry_perms(tables, tol=1e-9, n_probe=128, seed=7, quant=24,
+                   device="cpu", chunk=64, cache=True):
     """Site permutations that leave the CE energy invariant.  ``(G, N)``.
 
     Candidates are the translations mapping the site set to itself, built in
@@ -1756,6 +1985,10 @@ def symmetry_perms(tables, tol=1e-9, n_probe=512, seed=7, quant=24):
     pos = tables["positions"]
     cell = np.asarray(tables["cell"], dtype=np.float64)
     N = int(tables["N"])
+    sz = "x".join(str(int(v)) for v in tables["size"])
+    cache_path = f"data/cuau/symperms_{sz}.npy" if cache else ""
+    if cache_path and os.path.exists(cache_path):
+        return np.load(cache_path)
     frac = pos @ np.linalg.inv(cell)
     key = {tuple(np.round(f * quant).astype(int) % quant): m
            for m, f in enumerate(frac)}
@@ -1796,16 +2029,32 @@ def symmetry_perms(tables, tol=1e-9, n_probe=512, seed=7, quant=24):
     X = np.zeros((n_probe, N), dtype=np.int64)
     for r in range(n_probe):
         X[r, rng.permutation(N)[: N // 2]] = 1
-    en = TorchCuAuEnergy(tables, device="cpu")
-    e0 = en.energy_torch(torch.as_tensor(X)).numpy()
+    # Verify every candidate in one batched pass.  Looping candidate by
+    # candidate on the CPU costs |cands| separate evaluations of the full
+    # orbit tensor, which at N = 64 (3072 candidates) is minutes of wall
+    # clock; the group is a fixed property of the supercell, so it is also
+    # cached to disk and paid for only once.
+    en = TorchCuAuEnergy(tables, device=device)
+    Xt = torch.as_tensor(X, device=en.device)
+    e0 = en.energy_torch(Xt)
+    P = torch.as_tensor(np.stack(cands, 0), device=en.device)   # (G, N)
     keep = []
-    for perm in cands:
-        e1 = en.energy_torch(torch.as_tensor(X[:, perm])).numpy()
-        if np.abs(e1 - e0).max() < tol:
-            keep.append(perm)
-    if not keep:
+    for lo in range(0, P.shape[0], chunk):
+        pc = P[lo:lo + chunk]
+        # (c, n_probe, N) -> flatten so one energy call covers the chunk
+        xb = Xt.unsqueeze(0).expand(pc.shape[0], -1, -1)
+        xb = torch.gather(xb, 2, pc.unsqueeze(1).expand(-1, n_probe, -1))
+        e1 = en.energy_torch(xb.reshape(-1, N)).view(pc.shape[0], n_probe)
+        ok = (e1 - e0.unsqueeze(0)).abs().max(1).values < tol
+        keep.append(pc[ok].cpu().numpy())
+    keep = np.concatenate([k for k in keep if len(k)], 0) if any(
+        len(k) for k in keep) else np.empty((0, N), dtype=np.int64)
+    if not len(keep):
         raise RuntimeError("no energy-preserving permutation found")
-    return np.stack(keep, 0)
+    if cache_path:
+        os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+        np.save(cache_path, keep)
+    return keep
 
 
 class SymControl:
@@ -1956,6 +2205,39 @@ def main(argv=None):
     nd.add_argument("--tag", default=None)
     nd.add_argument("--out", default=None)
     nd.set_defaults(fn=cmd_train_nd)
+
+    bg = sub.add_parser("train-big",
+                        help="IASBS on a non-enumerable sector, scored vs PT")
+    bg.add_argument("--size", type=int, nargs=3, default=[4, 4, 4])
+    bg.add_argument("--temp", type=float, default=500.0)
+    bg.add_argument("--gamma", type=float, default=10.0)
+    bg.add_argument("--steps", type=int, default=512)
+    bg.add_argument("--iters", type=int, default=4000)
+    bg.add_argument("--batch", type=int, default=256)
+    bg.add_argument("--mb", type=int, default=512)
+    bg.add_argument("--inner", type=int, default=5)
+    bg.add_argument("--inner-h", type=int, default=5)
+    bg.add_argument("--buffer", type=int, default=20)
+    bg.add_argument("--hidden", type=int, default=512)
+    bg.add_argument("--lr", type=float, default=1e-3)
+    bg.add_argument("--lr-h", type=float, default=1e-3)
+    bg.add_argument("--init-ckpt", default=None)
+    bg.add_argument("--sym-aug", action="store_true")
+    bg.add_argument("--seed", type=int, default=0)
+    bg.add_argument("--eval-every", type=int, default=100)
+    bg.add_argument("--n-eval", type=int, default=8192,
+                    help="samples per in-training observable evaluation")
+    bg.add_argument("--n-samples", type=int, default=200000)
+    bg.add_argument("--ref-json", default="",
+                    help="PT reference JSON from iasbs.cuau_reference")
+    bg.add_argument("--e-gate", type=float, default=0.5,
+                    help="meV/atom tolerance on <E>/N against PT")
+    bg.add_argument("--q-gate", type=float, default=0.02)
+    bg.add_argument("--device", default="cuda")
+    bg.add_argument("--ckpt-dir", default="ckpt")
+    bg.add_argument("--tag", default=None)
+    bg.add_argument("--out", default=None)
+    bg.set_defaults(fn=cmd_train_big)
 
     d = sub.add_parser("distill", help="capacity control: fit the exact Doob control")
     d.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])
