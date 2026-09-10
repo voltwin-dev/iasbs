@@ -1547,6 +1547,20 @@ def cmd_train_nd(args):
 
     net = SwapController(sp.n, hidden=args.hidden).to(sp.device)
     net_h = SwapController(sp.n, hidden=args.hidden).to(sp.device)
+    if args.init_ckpt:
+        # Warm restart.  Both networks must be carried: the corrector is not
+        # reconstructible from the controller, and restarting with a fresh
+        # corrector would feed the controller a wrong label for as long as the
+        # corrector takes to re-converge.
+        blob = torch.load(args.init_ckpt, map_location=sp.device,
+                          weights_only=False)
+        sds = blob.get("state_dicts")
+        if sds is None:
+            raise RuntimeError(f"{args.init_ckpt} has no state_dicts pair; "
+                               "train-nd checkpoints store net and net_h")
+        net.load_state_dict(sds["net"])
+        net_h.load_state_dict(sds["net_h"])
+        print(f"  warm start from {args.init_ckpt} (net + net_h)")
     n_par = sum(p.numel() for p in net.parameters())
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     opt_h = torch.optim.Adam(net_h.parameters(), lr=args.lr_h)
@@ -1929,6 +1943,8 @@ def main(argv=None):
     nd.add_argument("--hidden", type=int, default=512)
     nd.add_argument("--lr", type=float, default=1e-3)
     nd.add_argument("--lr-h", type=float, default=1e-3)
+    nd.add_argument("--init-ckpt", default=None,
+                    help="warm start both networks from this checkpoint")
     nd.add_argument("--sym-aug", action="store_true",
                     help="augment endpoint pairs with the CE symmetry group")
     nd.add_argument("--seed", type=int, default=0)
