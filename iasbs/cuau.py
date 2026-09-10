@@ -1559,6 +1559,28 @@ def cmd_train_nd(args):
     gen = torch.Generator(device=sp.device).manual_seed(args.seed + 1234)
     p0_unif = torch.full((sp.M,), 1.0 / sp.M, device=sp.device,
                          dtype=torch.float64)
+    Gt = None
+    if args.sym_aug:
+        # Symmetry augmentation.  The CE is invariant under this group and the
+        # Johnson distance is preserved by any site permutation, so permuting
+        # an endpoint PAIR (X0, X1) leaves every label exactly valid and costs
+        # no extra CE evaluations -- E1 is carried through unchanged.  This
+        # pushes the controller towards the equivariant subspace that contains
+        # a*, instead of averaging log-multipliers after the fact, which
+        # changes the dynamics nonlinearly and was measured to wreck the
+        # energy law.
+        perms = symmetry_perms(tables)
+        Gt = torch.as_tensor(perms, dtype=torch.int64, device=sp.device)
+        print(f"  symmetry augmentation: group order {Gt.shape[0]} "
+              f"(energy-verified)")
+
+    def augment(X0, X1):
+        if Gt is None:
+            return X0, X1
+        g = torch.randint(Gt.shape[0], (X0.shape[0],), device=sp.device,
+                          generator=gen)
+        pg = Gt[g]
+        return torch.gather(X0, 1, pg), torch.gather(X1, 1, pg)
 
     print(f"CuAu train-nd  N={sp.n}  |Omega|={sp.M}  T={sp.temp_k} K  "
           f"gamma={sp.gamma}  steps={steps}  params={n_par}x2  "
@@ -1585,7 +1607,7 @@ def cmd_train_nd(args):
         for _ in range(args.inner_h):
             sel = torch.randint(len(pool1), (args.mb,), device=sp.device,
                                 generator=gen)
-            X0, X1 = pool0[sel], pool1[sel]
+            X0, X1 = augment(pool0[sel], pool1[sel])
             ei, ej = sample_uniform_legal_edge(X1, generator=gen)
             with torch.no_grad():
                 q = torch.exp(corrector_label_edge(
@@ -1603,7 +1625,8 @@ def cmd_train_nd(args):
         for _ in range(args.inner):
             sel = torch.randint(len(pool1), (args.mb,), device=sp.device,
                                 generator=gen)
-            X0, X1, E1 = pool0[sel], pool1[sel], poole[sel]
+            X0, X1 = augment(pool0[sel], pool1[sel])
+            E1 = poole[sel]
             ti = torch.randint(steps, (args.mb,), device=sp.device,
                                generator=gen)
             with torch.no_grad():
@@ -1906,6 +1929,8 @@ def main(argv=None):
     nd.add_argument("--hidden", type=int, default=512)
     nd.add_argument("--lr", type=float, default=1e-3)
     nd.add_argument("--lr-h", type=float, default=1e-3)
+    nd.add_argument("--sym-aug", action="store_true",
+                    help="augment endpoint pairs with the CE symmetry group")
     nd.add_argument("--seed", type=int, default=0)
     nd.add_argument("--eval-every", type=int, default=100)
     nd.add_argument("--n-samples", type=int, default=200000)
