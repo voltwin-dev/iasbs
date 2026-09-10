@@ -1137,7 +1137,7 @@ def cmd_exact(args):
           f"iid floor={floor:.5f} +- {floor_sd:.5f}")
 
     best = min(r["TV"] for r in rows)
-    res = {"provenance": provenance(), "config": vars(args),
+    res = {"provenance": provenance(), "config": arg_config(args),
            "N": sp.n, "M": sp.M, "temp_k": sp.temp_k, "tau_eV": sp.tau,
            "exact": {"mean_E_per_atom_meV": 1000 * float((sp.pi * sp.E).sum()) / sp.n,
                      "Cv_per_atom": sp.heat_capacity(sp.pi),
@@ -1158,6 +1158,17 @@ def cmd_exact(args):
     print(f"S2  constraint violations 0 : {'PASS' if viol == 0 else 'FAIL'} "
           f"({viol})")
     return 0 if (ok_tv and viol == 0) else 1
+
+
+def arg_config(args):
+    """``arg_config(args)`` without the subcommand callable.
+
+    argparse stores the dispatch function under ``fn``, and pickling that into
+    a checkpoint makes the checkpoint loadable only from a process where the
+    same ``__main__`` module resolves the name.  The config is metadata, so
+    keep it plain.
+    """
+    return {k: v for k, v in vars(args).items() if k != "fn"}
 
 
 def cmd_train(args):
@@ -1188,9 +1199,17 @@ def cmd_train(args):
         # temperature, where pi is broad and every basin is reachable, then
         # continue in the spiky regime.  Only the controller is carried over;
         # the space, kappa tables and labels are rebuilt at the new tau.
-        sd = torch.load(args.init_ckpt, map_location=sp.device,
-                        weights_only=False)
-        sd = sd.get("net", sd)
+        blob = torch.load(args.init_ckpt, map_location=sp.device,
+                          weights_only=False)
+        # common.save_ckpt stores weights under "state_dict" (or "state_dicts"
+        # keyed by name for multi-network runs), so accept both layouts and a
+        # bare state dict.
+        if "state_dict" in blob:
+            sd = blob["state_dict"]
+        elif "state_dicts" in blob:
+            sd = blob["state_dicts"]["net"]
+        else:
+            sd = blob
         net.load_state_dict(sd)
         print(f"  warm start from {args.init_ckpt}")
     n_par = sum(p.numel() for p in net.parameters())
@@ -1315,7 +1334,7 @@ def cmd_train(args):
     with torch.no_grad():
         Xs = simulate_direct(sp, net, args.n_samples, steps, generator=gen)
     viol = int((Xs.sum(1) != sp.k).sum())
-    res = {"provenance": provenance(), "config": vars(args), "params": n_par,
+    res = {"provenance": provenance(), "config": arg_config(args), "params": n_par,
            "history": hist, "violations": viol,
            "energy_calls": sp.energy.report()}
     if exact:
@@ -1355,7 +1374,7 @@ def cmd_train(args):
     if args.ckpt_dir:
         pth = C.save_ckpt(args.ckpt_dir, args.tag or f"cuau{sp.n}_s{args.seed}",
                           net=net, samples=Xs.to(torch.int8),
-                          extra={"config": vars(args),
+                          extra={"config": arg_config(args),
                                  "result": {k: v for k, v in res.items()
                                             if k != "provenance"}})
         print(f"  ckpt -> {pth}")
@@ -1444,7 +1463,7 @@ def cmd_distill(args):
         fin = sp.exact_report(p, "final")
         p_or = propagate_exact(sp, ctrl.all_states, steps)
         orc = sp.exact_report(p_or, "oracle")
-    res = {"provenance": provenance(), "config": vars(args), "params": n_par,
+    res = {"provenance": provenance(), "config": arg_config(args), "params": n_par,
            "history": hist, "final": fin, "oracle": orc,
            "energy_calls": sp.energy.report()}
     out = args.out or (f"json/results_cuau_distill_{sp.n}_{int(sp.temp_k)}K_"
