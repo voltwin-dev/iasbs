@@ -288,13 +288,16 @@ def esp_sample(logw, jrow, generator=None, E=None):
     if bool((r < 0).any()) or bool((r > m).any()):
         raise ValueError("shell size outside the candidate set")
     sel = torch.zeros(B, m, dtype=torch.bool, device=logw.device)
+    # all uniforms in one draw: the backward walk is a python loop over m and
+    # every avoided kernel launch is pure wall clock at N = 64.
+    LU = torch.rand(B, m, device=logw.device, dtype=logw.dtype,
+                    generator=generator).clamp_min(1e-300).log()
     for i in range(m, 0, -1):
         rm1 = (r - 1).clamp(min=0)
         num = logw[:, i - 1] + E[:, i - 1, :].gather(1, rm1[:, None]).squeeze(1)
         den = E[:, i, :].gather(1, r[:, None]).squeeze(1)
         lp = num - den
-        u = torch.rand(B, device=logw.device, dtype=logw.dtype,
-                       generator=generator).clamp_min(1e-300).log()
+        u = LU[:, i - 1]
         inc = (u < lp) & (r > 0)
         sel[:, i - 1] = inc
         r = r - inc.long()
@@ -534,6 +537,11 @@ def log_q_shell(lw_rem, lw_add, sel_r, sel_a, jrow, si):
     B = lw_rem.shape[0]
     ar = torch.arange(B, device=lw_rem.device)
     wr, wa = lw_rem[ar, si], lw_add[ar, si]
+    if wr.shape[1] == wa.shape[1] and sel_r.shape[1] == sel_a.shape[1]:
+        out = log_esp_select(torch.cat([wr, wa], dim=0),
+                             torch.cat([sel_r, sel_a], dim=0),
+                             torch.cat([jrow, jrow], dim=0))
+        return out[:B] + out[B:]
     return (log_esp_select(wr, sel_r, jrow)
             + log_esp_select(wa, sel_a, jrow))
 
@@ -590,10 +598,20 @@ def simulate_radial(space, net, batch, steps, generator=None, x0=None,
         jmax = int(jrow.max())
         wr = lw_rem[rows, si][:, :space.k]
         wa = lw_add[rows, si][:, :space.n - space.k]
-        sel_r = esp_sample(wr, jrow, generator=generator,
-                           E=log_esp_prefix(wr, jmax))
-        sel_a = esp_sample(wa, jrow, generator=generator,
-                           E=log_esp_prefix(wa, jmax))
+        if wr.shape[1] == wa.shape[1]:
+            # half filling: one DP over the stacked removal/addition logits
+            # halves the python-loop kernel launches, which dominate wall clock.
+            w2 = torch.cat([wr, wa], dim=0)
+            j2 = torch.cat([jrow, jrow], dim=0)
+            s2 = esp_sample(w2, j2, generator=generator,
+                            E=log_esp_prefix(w2, jmax))
+            nb = wr.shape[0]
+            sel_r, sel_a = s2[:nb], s2[nb:]
+        else:
+            sel_r = esp_sample(wr, jrow, generator=generator,
+                               E=log_esp_prefix(wr, jmax))
+            sel_a = esp_sample(wa, jrow, generator=generator,
+                               E=log_esp_prefix(wa, jmax))
         xr = apply_masks(x[rows], occ[rows], emp[rows], sel_r, sel_a)
         x = x.clone()
         x[rows] = xr
