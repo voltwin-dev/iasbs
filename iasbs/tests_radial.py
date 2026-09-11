@@ -29,12 +29,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import common as C  # noqa: E402
 from iasbs.cuau import CuAuSpace  # noqa: E402
 from iasbs.cuau_radial import (PiecewiseShellSchedule, RadialController,  # noqa: E402
-                               apply_masks, apply_pairs, esp_sample,
+                               ShellCorrector,
+                               apply_masks, apply_pairs,
+                               corrector_label_shell, esp_sample,
                                log_esp_prefix, log_esp_select, log_q_shell,
                                named_schedule,
-                               occupied_empty, sample_uniform_shell,
-                               sel_mask, shell_logits, shell_move,
-                               simulate_radial)
+                               occupied_empty, propagate_exact_radial,
+                               radial_rate_rows, sample_uniform_shell,
+                               sel_mask, shell_head_value, shell_logits,
+                               shell_move, simulate_radial)
 
 FAIL = []
 PASS = []
@@ -717,9 +720,162 @@ def test_O():
            f"rel {rel:.2e}")
 
 
+def test_P():
+    """``radial_rate_rows`` against the enumerated controlled generator.
+
+    The dense evaluation row is a different algorithm from the sampler: it gets
+    ``sum_{i in R} w^-_i`` from a matrix product against the whole enumeration
+    instead of a gather, and it reads the shell off the Johnson distance instead
+    of drawing it.  It must agree with the explicit shell enumeration of
+    ``_controlled_rates`` to machine precision, entry by entry.
+    """
+    n, k = 8, 4
+    shells = (1, 2, 3, 4)
+    gtot = 1.7
+    sch = PiecewiseShellSchedule(shells, [0.0, 1.0],
+                                 [[0.4, 0.3, 0.2, 0.1]], gtot)
+    sp = TinySpace(n, k, schedule=sch)
+    st = enumerate_fixed(n, k)
+    sp.S = torch.as_tensor(st.astype(np.int64))
+    sp.M = len(st)
+    net = _random_net(n, shells, seed=5)
+    gam = torch.as_tensor(np.array(sch.rates(0.0)))
+    imap = {tuple(x.tolist()): i for i, x in enumerate(st)}
+    U = radial_rate_rows(sp, net, 0.0, torch.arange(sp.M))
+    diag = float(U[torch.arange(sp.M), torch.arange(sp.M)].abs().max())
+
+    # the reference enumeration must read the SAME controller forward pass: the
+    # float32 head is only reproducible at a fixed batch shape, so re-invoking
+    # it per state would compare GEMM blocking noise (~1e-7) rather than the two
+    # rate algorithms.
+    tz = torch.zeros(sp.M, dtype=torch.float64)
+    b, lw_rem, lw_add, occ, emp = shell_logits(net, tz, sp.S)
+    lam = gam[None, :] * torch.exp(b)
+    worst = 0.0
+    for a in (0, 7, 33, 69):
+        occ_np, emp_np = occ[a].numpy(), emp[a].numpy()
+        ref = np.zeros(sp.M)
+        for si, j in enumerate(shells):
+            wr, wa = lw_rem[a, si][None, :], lw_add[a, si][None, :]
+            Er, Ea = log_esp_prefix(wr, j), log_esp_prefix(wa, j)
+            jr = torch.tensor([j])
+            for Ri in itertools.combinations(range(k), j):
+                selr = torch.zeros(1, k, dtype=torch.bool)
+                selr[0, list(Ri)] = True
+                lqr = log_esp_select(wr, selr, jr, E=Er)
+                for Ai in itertools.combinations(range(n - k), j):
+                    sela = torch.zeros(1, n - k, dtype=torch.bool)
+                    sela[0, list(Ai)] = True
+                    lqa = log_esp_select(wa, sela, jr, E=Ea)
+                    y = st[a].astype(np.int64).copy()
+                    y[occ_np[list(Ri)]] = 0
+                    y[emp_np[list(Ai)]] = 1
+                    ref[imap[tuple(y.tolist())]] += float(
+                        lam[a, si] * torch.exp(lqr + lqa))
+        worst = max(worst, float(np.abs(U[a].numpy() - ref).max() / ref.max()))
+    tot = float((U.sum(dim=1) - lam.sum(dim=1)).abs().max())
+    report("P dense rate rows vs enumeration",
+           worst < 1e-12 and diag == 0.0 and tot < 1e-12,
+           f"max rel dev {worst:.3e}  self-rate {diag:.1e}  "
+           f"max |sum_y u - sum_j lambda_j| {tot:.3e}")
+
+
+def test_Q():
+    """``propagate_exact_radial`` against ``simulate_radial``.
+
+    Two independent implementations of the same one-jump-per-bin chain: the
+    propagator moves a law with dense rate rows, the sampler draws a shell and
+    then an exact fixed-cardinality subset.  Agreement is checked at 5 binomial
+    sigma on every state of the sector.
+    """
+    n, k = 8, 4
+    shells = (1, 2, 3, 4)
+    steps, NS = 8, 400_000
+    sch = PiecewiseShellSchedule(shells, [0.0, 0.5, 1.0],
+                                 [[0.1, 0.2, 0.3, 0.4],
+                                  [0.7, 0.2, 0.1, 0.0]], 2.5)
+    sp = TinySpace(n, k, schedule=sch)
+    st = enumerate_fixed(n, k)
+    sp.S = torch.as_tensor(st.astype(np.int64))
+    sp.M = M = len(st)
+    net = _random_net(n, shells, seed=9, scale=0.3)
+    p0 = torch.full((M,), 1.0 / M, dtype=torch.float64)
+    p = propagate_exact_radial(sp, net, steps, p0=p0, chunk=13).numpy()
+
+    gen = torch.Generator().manual_seed(21)
+    i0 = torch.randint(M, (NS,), generator=gen)
+    x0 = sp.S[i0]
+    stats = {}
+    Z = simulate_radial(sp, net, NS, steps, generator=gen, x0=x0, stats=stats)
+    imap = {tuple(x.tolist()): i for i, x in enumerate(st)}
+    emp = np.zeros(M)
+    for r in Z.numpy():
+        emp[imap[tuple(r.tolist())]] += 1
+    emp /= NS
+    se = np.sqrt(np.maximum(p * (1 - p), 1e-12) / NS)
+    z = float(np.abs(emp - p).max() / se.max())
+    report("Q exact propagation vs sampler",
+           z < 5.0 and abs(p.sum() - 1.0) < 1e-12,
+           f"max |emp - exact| {np.abs(emp - p).max():.2e}  z {z:.2f}  "
+           f"sum p - 1 = {p.sum() - 1.0:.1e}")
+
+
+def test_R():
+    """The non-Dirac corrector identity, by enumeration (playbook 13).
+
+    With a tilted source ``nu_0 ~ w`` the exact ratio is
+    ``fhat_1(z) = sum_{x0} kappa(d(x0,z)) w(x0)`` evaluated at ``g X_1`` over
+    ``X_1``, and the single-sample estimator ``Q`` must reproduce it when ``X_0``
+    is drawn from the endpoint conditional ``p*(x0 | X1) ~ kappa(d) w``.  The
+    expectation is taken by summing over the whole sector, so this is an exact
+    identity check, not a Monte Carlo one.
+    """
+    n, k = 8, 4
+    shells = (1, 2, 3, 4)
+    sch = PiecewiseShellSchedule(shells, [0.0, 1.0],
+                                 [[0.4, 0.3, 0.2, 0.1]], 1.9)
+    sp = TinySpace(n, k, schedule=sch)
+    st = enumerate_fixed(n, k)
+    M = len(st)
+    _, kap = C.radial_orbit_kernel(n, k, sch.integrated(0.0, 1.0))
+    sp.log_kappa_full = torch.as_tensor(np.log(kap), dtype=torch.float64)
+    S = torch.as_tensor(st.astype(np.int64))
+    Dm = (k - S.to(torch.float64) @ S.to(torch.float64).T).round().long()
+    rng = np.random.default_rng(17)
+    w = torch.as_tensor(np.exp(rng.normal(0.0, 0.8, M)))
+    Kap = torch.as_tensor(kap)[Dm]
+    fhat = Kap @ w
+    gen = torch.Generator().manual_seed(31)
+    imap = {tuple(x.tolist()): i for i, x in enumerate(st)}
+    worst = 0.0
+    for i1 in (3, 22, 55):
+        X1 = S[i1][None, :]
+        pw = Kap[:, i1] * w
+        pw = pw / pw.sum()
+        for j in shells:
+            R, A, valid = sample_uniform_shell(
+                X1, torch.tensor([j]), generator=gen)
+            lq, Xg = corrector_label_shell(
+                sp, S, X1.expand(M, -1), R.expand(M, -1), A.expand(M, -1),
+                valid.expand(M, -1))
+            got = float((pw * torch.exp(lq)).sum())
+            want = float(fhat[imap[tuple(Xg[0].tolist())]] / fhat[i1])
+            worst = max(worst, abs(got - want) / want)
+    # zero-initialised head is the exact IPF-1 answer h = 0
+    hnet = ShellCorrector(n, shells, hidden=16)
+    R, A, valid = sample_uniform_shell(S[:4], torch.tensor([1, 2, 3, 4]),
+                                       generator=gen)
+    h0 = float(shell_head_value(hnet, torch.zeros(4, dtype=torch.float64),
+                                S[:4], R, A, valid,
+                                torch.tensor([0, 1, 2, 3])).abs().max())
+    report("R corrector estimator identity", worst < 1e-12 and h0 == 0.0,
+           f"max rel dev {worst:.3e}  |h| at init {h0:.1e}")
+
+
 def main():
     for f in (test_A, test_B, test_C, test_D, test_E, test_F, test_G, test_G2,
-              test_H, test_I, test_J, test_K, test_L, test_M, test_N, test_O):
+              test_H, test_I, test_J, test_K, test_L, test_M, test_N, test_O,
+              test_P, test_Q, test_R):
         try:
             f()
         except Exception as exc:  # noqa: BLE001

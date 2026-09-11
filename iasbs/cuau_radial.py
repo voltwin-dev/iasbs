@@ -44,7 +44,8 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import common as C  # noqa: E402
-from iasbs.cuau import (KB_EV_PER_K, CuAuSpace, TorchCuAuEnergy,  # noqa: E402
+from iasbs.cuau import (KB_EV_PER_K, CuAuExact, CuAuSpace,  # noqa: E402
+                        TorchCuAuEnergy,
                         arg_config, build_ce_tables, check_states,
                         provenance, random_sector_batch, sample_bridge_direct,
                         sampled_observables, symmetry_perms)
@@ -231,6 +232,30 @@ class RadialCuAuSpace(CuAuSpace):
         if not bool(torch.isfinite(lk0).all() and torch.isfinite(lk1).all()):
             raise RuntimeError("non-finite log kappa on the radial bridge grid")
         return lk0, lk1
+
+
+class RadialCuAuExact(RadialCuAuSpace, CuAuExact):
+    """Radial reference on an enumerable sector (``N = 16``: ``C(16,8)=12870``).
+
+    The MRO is ``RadialCuAuExact -> RadialCuAuSpace -> CuAuExact -> CuAuSpace``,
+    so the enumeration tables are built by ``CuAuExact.__init__`` *inside* the
+    ``super().__init__`` call of :class:`RadialCuAuSpace`, i.e. before the radial
+    ``log kappa`` replaces the single-swap one.  Everything ``CuAuExact`` derives
+    from that kernel -- the Doob weights ``f1`` and the distance-weight matrix
+    ``W`` -- is therefore recomputed here; ``pi``, ``E``, ``tgt`` and the order
+    parameters depend only on ``(n, k)`` and the CE, and are left alone.
+    """
+
+    def __init__(self, size=(2, 2, 4), **kw):
+        super().__init__(size=size, **kw)
+        logf1 = -self.E / self.tau - self.log_kappa_full[self.dist0]
+        self.logf1 = logf1 - logf1.max()
+        self.f1 = torch.exp(self.logf1)
+        ov = self.Sf @ self.Sf.T
+        J = min(self.k, self.n - self.k)
+        self.W = torch.stack([((ov == (self.k - jj)).to(self.f1.dtype)
+                               * self.f1).sum(1) for jj in range(J + 1)], 1)
+        del ov
 
 
 # ============================================================================
@@ -477,6 +502,31 @@ def terminal_log_label_shell(space, X1, E1, R, A, valid, check=False):
     return out, Xg
 
 
+@torch.no_grad()
+def corrector_label_shell(space, X0, X1, R, A, valid):
+    """``log Q_g(X_0, X_1)`` for a shell move ``g`` (playbook 13).
+
+        log Q = log kappa_{0,1}(d(X_0, g X_1)) - log kappa_{0,1}(d(X_0, X_1)).
+
+    Unbiased single-sample estimator of ``fhat_1(g X_1) / fhat_1(X_1)`` for the
+    non-Dirac source, and the exact shell analogue of
+    ``iasbs.cuau.corrector_label_edge``: the radial ``log kappa_full`` table is
+    the full-horizon orbit kernel of the *radial* reference, so nothing else in
+    the formula changes.  Valid only when ``(X_0, X_1)`` is an endpoint PAIR of
+    the controlled process -- the conditional law ``p*(X_0 | X_1)`` is what makes
+    ``E[Q | X_1, g]`` equal that ratio -- and only when ``g`` is drawn
+    independently of ``X_0`` given ``X_1``.
+    """
+    Xg = apply_pairs(X1, R, A, valid)
+    check_states(Xg, space.k, "corrector g X1")
+    d1 = space.distance(X0, X1).long()
+    dg = space.distance(X0, Xg).long()
+    out = space.log_kappa_full[dg] - space.log_kappa_full[d1]
+    if not bool(torch.isfinite(out).all()):
+        raise RuntimeError("non-finite radial corrector label")
+    return out, Xg
+
+
 # ============================================================================
 # 6.  normalized shell controller                    (playbook 17, 21, 22)
 # ============================================================================
@@ -544,6 +594,65 @@ def log_q_shell(lw_rem, lw_add, sel_r, sel_a, jrow, si):
         return out[:B] + out[B:]
     return (log_esp_select(wr, sel_r, jrow)
             + log_esp_select(wa, sel_a, jrow))
+
+
+class ShellCorrector(torch.nn.Module):
+    """``h_g(x)`` for a shell move ``g = prod_m (R_m A_m)`` (playbook 13).
+
+    The head emits one scalar per shell and one ``n x n`` pair matrix, and
+
+        h_g(x) = c_j(x) + sum_m P(x)[R_m, A_m].
+
+    At ``j = 1`` this is exactly the ``SwapController`` corrector of the
+    published single-swap driver, so the two branches agree on the shell the
+    paper used.  For ``j > 1`` it keeps the dependence on the PAIRING of the
+    move, which a per-site additive head would average away even though
+    ``g X_1`` -- and hence ``Q_g`` -- depends on which removal is matched to
+    which addition.  Unlike the controller this head is NOT restricted to
+    ``x``-legal moves: the move handed to it comes from ``X_t``, not from
+    ``X_1``, so ``R`` need not be occupied in ``x``.  Zero initialization gives
+    ``h = 0``, which is the exact IPF-1 answer (the base process is
+    distance-regular, so every corrector ratio is 1).
+    """
+
+    def __init__(self, n, shells, hidden=512, n_freq=4):
+        super().__init__()
+        self.n = int(n)
+        self.shells = tuple(int(j) for j in shells)
+        self.S = len(self.shells)
+        self.n_freq = int(n_freq)
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(n + 2 + 2 * n_freq, hidden), torch.nn.SiLU(),
+            torch.nn.Linear(hidden, hidden), torch.nn.SiLU(),
+            torch.nn.Linear(hidden, hidden), torch.nn.SiLU(),
+            torch.nn.Linear(hidden, self.S + n * n),
+        ).to(torch.float32)
+        torch.nn.init.zeros_(self.net[-1].weight)
+        torch.nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, t, x):
+        """``(c, P)`` of shapes ``(B, S)`` and ``(B, n, n)``."""
+        s = 2.0 * x.to(torch.float32) - 1.0
+        t = t.to(torch.float32).reshape(-1, 1)
+        kk = torch.arange(1, self.n_freq + 1, device=t.device,
+                          dtype=t.dtype)[None, :]
+        feats = [s, t, 1.0 - t,
+                 torch.sin(math.pi * kk * t), torch.cos(math.pi * kk * t)]
+        o = self.net(torch.cat(feats, dim=-1))
+        return o[:, :self.S], o[:, self.S:].view(-1, self.n, self.n)
+
+
+def shell_head_value(net_h, t, x, R, A, valid, si, clamp=10.0):
+    """``h_g(x)`` read on one shell move per row.  ``(B,)`` float64."""
+    c, P = net_h(t, x)
+    B = x.shape[0]
+    ar = torch.arange(B, device=x.device)
+    c = c.to(torch.float64).clamp(-clamp, clamp)
+    P = P.to(torch.float64).clamp(-clamp, clamp)
+    z = torch.zeros_like(R)
+    v = P[ar[:, None], torch.where(valid, R, z), torch.where(valid, A, z)]
+    v = torch.where(valid, v, torch.zeros_like(v)).sum(dim=1)
+    return c[ar, si] + v
 
 
 # ============================================================================
@@ -625,20 +734,122 @@ def simulate_radial(space, net, batch, steps, generator=None, x0=None,
     return x
 
 
+@torch.no_grad()
+def radial_rate_rows(space, net, t, idx, shells_t=None):
+    """Controlled rate ``u(y | x, t)`` of every ``y`` in the sector.  ``(B, M)``.
+
+    The dense row is affordable because the four quantities it needs are all
+    linear in the site logits:
+
+        sum_{i in R} w^-_i(x) = sum_i x_i (1 - y_i) w^-_i(x),
+        sum_{i in A} w^+_i(x) = sum_i (1 - x_i) y_i w^+_i(x),
+
+    so both are single ``(B, n) x (n, M)`` products against the enumeration
+    matrix, as is the Johnson distance ``d(x,y) = k - <x, y>``.  The shell of a
+    destination is then read off ``d`` -- the shells partition the sector -- and
+    the rate is ``gamma_j(t) exp(b_j(x)) exp(log q_j(y|x))`` with ``log q_j``
+    the exactly normalized product distribution of playbook 18-20.  No shell is
+    ever enumerated combinatorially; this is an ``N = 16`` evaluation device
+    only, and it consumes exactly the same controller call the sampler does.
+    """
+    n, k, M = space.n, space.k, space.M
+    shells = tuple(net.shells)
+    S_ = len(shells)
+    dev = space.device
+    if shells_t is None:
+        shells_t = torch.as_tensor(shells, device=dev)
+    x = space.S[idx]
+    B = x.shape[0]
+    tt = torch.full((B,), float(t), dtype=torch.float64, device=dev)
+    b, lw_rem, lw_add, occ, emp = shell_logits(net, tt, x)
+    jmax = max(shells)
+
+    # exact normalizers e_j of both product distributions, per (row, shell)
+    sh_flat = shells_t.repeat(B)[:, None]
+    Er = log_esp_prefix(lw_rem.reshape(B * S_, k), jmax)[:, k, :]
+    Ea = log_esp_prefix(lw_add.reshape(B * S_, n - k), jmax)[:, n - k, :]
+    lnorm = (Er.gather(1, sh_flat) + Ea.gather(1, sh_flat)).reshape(B, S_)
+
+    WR = torch.zeros(B, S_, n, dtype=torch.float64, device=dev)
+    WR.scatter_(2, occ[:, None, :].expand(-1, S_, -1), lw_rem)
+    WA = torch.zeros(B, S_, n, dtype=torch.float64, device=dev)
+    WA.scatter_(2, emp[:, None, :].expand(-1, S_, -1), lw_add)
+    Sf = space.S.to(torch.float64)
+    Srem = (WR.reshape(B * S_, n) @ (1.0 - Sf).T).reshape(B, S_, M)
+    Sadd = (WA.reshape(B * S_, n) @ Sf.T).reshape(B, S_, M)
+
+    d = (k - Sf[idx] @ Sf.T).round().long()                     # (B, M)
+    D = min(k, n - k)
+    s_of_d = torch.full((D + 1,), -1, dtype=torch.long, device=dev)
+    for a, j in enumerate(shells):
+        s_of_d[j] = a
+    si = s_of_d[d.clamp(0, D)]
+    ok = si >= 0
+    g = si.clamp_min(0)
+
+    lq = (Srem.gather(1, g[:, None, :]).squeeze(1)
+          + Sadd.gather(1, g[:, None, :]).squeeze(1)
+          - lnorm.gather(1, g))
+    gam = torch.as_tensor(space.schedule.rates(float(t)), dtype=torch.float64,
+                          device=dev)
+    lg = torch.log(gam.clamp_min(1e-300))[g]
+    U = torch.where(ok, torch.exp(b.gather(1, g) + lg + lq),
+                    torch.zeros((), dtype=torch.float64, device=dev))
+    if not bool(torch.isfinite(U).all()):
+        raise RuntimeError("non-finite radial rate row")
+    return U
+
+
+@torch.no_grad()
+def propagate_exact_radial(space, net, steps, p0=None, chunk=1024):
+    """Exact terminal law of the discretised radial controlled chain.
+
+    Same discretisation as :func:`simulate_radial` and as
+    ``fixed_ising.propagate_exact``: within a bin the rates are frozen and at
+    most one jump is taken, ``p_stay = exp(-R dt)`` with ``R = sum_y u(y|x)``.
+    No sampling.  ``p0`` must be the source the control was trained under.
+    """
+    M = space.M
+    dev = space.device
+    if p0 is None:
+        p = torch.zeros(M, dtype=torch.float64, device=dev)
+        p[space.i0] = 1.0
+    else:
+        p = p0.to(dev).to(torch.float64).clone()
+    shells_t = torch.as_tensor(net.shells, device=dev)
+    dt = 1.0 / steps
+    for s in range(steps):
+        t = s * dt
+        p_new = torch.zeros(M, dtype=torch.float64, device=dev)
+        for a0 in range(0, M, chunk):
+            b0 = min(a0 + chunk, M)
+            idx = torch.arange(a0, b0, device=dev)
+            U = radial_rate_rows(space, net, t, idx, shells_t=shells_t)
+            R = U.sum(dim=1)
+            p_stay = torch.exp(-R * dt)
+            pc = p[a0:b0]
+            p_new[a0:b0] += pc * p_stay
+            w = pc * (1.0 - p_stay) / R.clamp_min(1e-300)
+            p_new += (w[:, None] * U).sum(dim=0)
+        p = p_new
+    return p
+
+
 # ============================================================================
 # 8.  CLI
 # ============================================================================
 
 
-def build_space(args, energy=None, tables=None):
+def build_space(args, energy=None, tables=None, exact=False):
     size = tuple(args.size)
     if tables is None:
         tables = build_ce_tables(size, verbose=True)
     if energy is None:
         energy = TorchCuAuEnergy(tables, device=args.device)
     sched = named_schedule(args.schedule, args.gamma_total, args.shells)
-    sp = RadialCuAuSpace(size=size, temp_k=args.temp, schedule=sched,
-                         device=args.device, energy=energy, verbose=True)
+    cls = RadialCuAuExact if exact else RadialCuAuSpace
+    sp = cls(size=size, temp_k=args.temp, schedule=sched,
+             device=args.device, energy=energy, verbose=True)
     sp.dist2 = pbc_dist2(sp.positions, tables["cell"])
     return sp, tables
 
@@ -1062,6 +1273,295 @@ def cmd_train(args):
     return 0 if ok else 1
 
 
+def build_pair_cost(sp, args, gen):
+    """CE pair-cost table from the target ensemble (playbook 12.3)."""
+    cache = f"data/cuau/pair_cost_{sp.n}_{int(sp.temp_k)}K.npz"
+    if args.pool:
+        Xp, _ = load_pool(args.pool, sp.k)
+    else:
+        if not hasattr(sp, "pi"):
+            raise RuntimeError("--pairing ce needs --pool unless the sector "
+                               "is enumerated (then pi supplies the ensemble)")
+        # exact target ensemble: the enumerated sector already carries pi, so
+        # the cost table is drawn from the same law a PT pool would approximate.
+        sel = torch.multinomial(sp.pi, min(args.ce_sub, sp.M),
+                                replacement=True, generator=gen)
+        Xp = sp.S[sel].cpu().numpy()
+    return ce_pair_cost(sp, Xp, n_sub=args.ce_sub, seed=args.seed, cache=cache)
+
+
+def cmd_train_nd(args):
+    """Radial IASBS with a DISTRIBUTION source (playbook 13), exact-TV scored.
+
+    Two changes against :func:`cmd_train`, and nothing else:
+
+    * the source is ``nu_0 = Uniform(Omega)`` instead of ``Dirac(x_0)``, so the
+      closed-form ``log kappa`` ratio in the terminal label is replaced by the
+      learned corrector ``h``, regressed on the unbiased single-sample estimator
+      :func:`corrector_label_shell` with the same Poisson-Bregman loss;
+    * ``--sym-aug`` permutes the endpoint PAIR by a CE symmetry, which is legal
+      only once the source is a symmetric distribution.
+
+    The reference is still the radial Johnson semigroup: the corrector reads the
+    radial ``log kappa_full``, the bridge reads the radial two-sided kernels and
+    the controller is still the normalized shell controller.
+    """
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    sp, tables = build_space(args, exact=True)
+    n, k = sp.n, sp.k
+    shells = tuple(int(j) for j in args.shells)
+    steps = args.steps
+    gen = torch.Generator(device=sp.device).manual_seed(args.seed + 1234)
+
+    if args.pairing == "ce":
+        sp.ce_cost = build_pair_cost(sp, args, gen)
+
+    net = RadialController(n, shells, hidden=args.hidden).to(sp.device)
+    net_h = ShellCorrector(n, shells, hidden=args.hidden).to(sp.device)
+    n_par = sum(p.numel() for p in net.parameters())
+    n_par_h = sum(p.numel() for p in net_h.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    opt_h = torch.optim.Adam(net_h.parameters(), lr=args.lr_h)
+    sch = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=args.iters * args.inner, eta_min=args.lr * 0.05)
+    sch_h = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt_h, T_max=args.iters * args.inner_h, eta_min=args.lr_h * 0.05)
+    log_kap0, log_kap1 = sp.bridge_kernels(steps)
+
+    dt = 1.0 / steps
+    gam_grid = torch.as_tensor(
+        np.array([sp.schedule.rates(s * dt) for s in range(steps)]),
+        dtype=torch.float64, device=sp.device)                 # (steps, S)
+    gam_1 = torch.as_tensor(sp.schedule.rates(1.0 - dt), dtype=torch.float64,
+                            device=sp.device)
+    logv = torch.as_tensor([math.log(C.shell_size(n, k, j)) for j in shells],
+                           dtype=torch.float64, device=sp.device)
+    sh_t = torch.as_tensor(shells, device=sp.device)
+    p0_unif = torch.full((sp.M,), 1.0 / sp.M, device=sp.device,
+                         dtype=torch.float64)
+
+    Gt = None
+    if args.sym_aug:
+        Gt = torch.as_tensor(symmetry_perms(tables), dtype=torch.int64,
+                             device=sp.device)
+        print(f"  symmetry augmentation: group order {Gt.shape[0]} "
+              f"(energy-verified)")
+
+    def augment(X0, X1):
+        if Gt is None:
+            return X0, X1
+        pg = Gt[torch.randint(Gt.shape[0], (X0.shape[0],), device=sp.device,
+                              generator=gen)]
+        return torch.gather(X0, 1, pg), torch.gather(X1, 1, pg)
+
+    def paired(R, A, valid):
+        if args.pairing == "geometry":
+            return pair_geometry(R, A, valid, sp.dist2)
+        if args.pairing == "ce":
+            return pair_geometry(R, A, valid, sp.ce_cost)
+        return A
+
+    print(f"CuAu radial train-nd  N={n} k={k} |Omega|={sp.M} T={sp.temp_k}K  "
+          f"schedule {args.schedule} gamma_tot={args.gamma_total} "
+          f"shells {shells}  steps={steps}  params={n_par}+{n_par_h}  "
+          f"source=Uniform(Omega)  pairing={args.pairing}  "
+          f"sym_aug={bool(args.sym_aug)}")
+
+    buf, hist, it1 = [], [], {}
+    best = {"TV": float("inf")}
+    t_start = time.time()
+    loss = loss_h = torch.zeros(())
+    n_skip = 0
+    for it in range(1, args.iters + 1):
+        sp.energy.tag = "train"
+        st = {}
+        with torch.no_grad():
+            X0n = random_sector_batch(n, k, args.batch, sp.device, gen)
+            X1n = simulate_radial(sp, net, args.batch, steps, generator=gen,
+                                  x0=X0n, stats=st)
+            E1n = sp.energy.energy_torch(X1n).to(torch.float64)
+        buf.append((X0n.detach(), X1n.detach(), E1n.detach()))
+        if len(buf) > args.buffer:
+            buf.pop(0)
+        pool0 = torch.cat([b[0] for b in buf], 0)
+        pool1 = torch.cat([b[1] for b in buf], 0)
+        poole = torch.cat([b[2] for b in buf], 0)
+
+        # --- corrector: exp(h) -> E[Q | X1, g] ------------------------------
+        # the move is drawn from X1 itself, hence independently of X0 given X1,
+        # which is exactly the condition that makes the regression target the
+        # ratio fhat_1(g X1)/fhat_1(X1) rather than a bridge-biased average.
+        for _ in range(args.inner_h):
+            sel = torch.randint(len(pool1), (args.mb,), device=sp.device,
+                                generator=gen)
+            X0, X1 = augment(pool0[sel], pool1[sel])
+            with torch.no_grad():
+                si = torch.multinomial(gam_1.expand(args.mb, -1), 1,
+                                       generator=gen).squeeze(1)
+                R, A, valid = sample_uniform_shell(X1, sh_t[si], generator=gen)
+                Ag = paired(R, A, valid)
+                q = torch.exp(corrector_label_shell(
+                    sp, X0, X1, R, Ag, valid)[0].clamp(-args.clamp,
+                                                       args.clamp))
+            tt1 = torch.ones(args.mb, device=sp.device, dtype=torch.float64)
+            hv = shell_head_value(net_h, tt1, X1, R, Ag, valid,
+                                  si).clamp(-args.clamp, args.clamp)
+            loss_h = (torch.exp(hv) - hv * q).mean()
+            opt_h.zero_grad(set_to_none=True)
+            loss_h.backward()
+            torch.nn.utils.clip_grad_norm_(net_h.parameters(), 10.0)
+            opt_h.step()
+            sch_h.step()
+
+        # --- controller: sampled Poisson-Bregman, corrected label -----------
+        for _ in range(args.inner):
+            sel = torch.randint(len(pool1), (args.mb,), device=sp.device,
+                                generator=gen)
+            X0, X1 = augment(pool0[sel], pool1[sel])
+            E1 = poole[sel]
+            ti = torch.randint(steps, (args.mb,), device=sp.device,
+                               generator=gen)
+            tt = ti.to(torch.float64) * dt
+            gam = gam_grid[ti]
+            gtot = gam.sum(dim=1)
+            with torch.no_grad():
+                Xt = sample_bridge_direct(sp, X1, ti, log_kap0, log_kap1,
+                                          generator=gen, X0=X0)
+                si = torch.multinomial(gam, 1, generator=gen).squeeze(1)
+                jrow = sh_t[si]
+                R, A, valid = sample_uniform_shell(Xt, jrow, generator=gen)
+                Ag = paired(R, A, valid)
+                Xg = apply_pairs(X1, R, Ag, valid)
+                check_states(Xg, k, "nd terminal g X1")
+                Eg = sp.energy.energy_torch(Xg).to(torch.float64)
+                tt1 = torch.ones(args.mb, device=sp.device, dtype=torch.float64)
+                hg = shell_head_value(net_h, tt1, X1, R, Ag, valid,
+                                      si).clamp(-args.clamp, args.clamp)
+                lab = -(Eg - E1) / sp.tau - hg
+                Lam = torch.exp(lab.clamp(-args.clamp, args.clamp))
+
+            b, lw_rem, lw_add, occ, emp = shell_logits(net, tt, Xt)
+            lam = gam * torch.exp(b)
+            sel_r = sel_mask(R, valid, occ, n)
+            sel_a = sel_mask(A, valid, emp, n)
+            if not bool((sel_r.sum(1) == jrow).all()
+                        and (sel_a.sum(1) == jrow).all()):
+                raise RuntimeError("shell selection mask lost cardinality")
+            ar = torch.arange(args.mb, device=sp.device)
+            log_m = (b[ar, si] + logv[si]
+                     + log_q_shell(lw_rem, lw_add, sel_r, sel_a, jrow, si))
+            loss = (lam.sum(dim=1) - gtot * Lam * log_m).mean()
+            opt.zero_grad(set_to_none=True)
+            if not bool(torch.isfinite(loss)):
+                n_skip += 1
+                continue
+            loss.backward()
+            gn = torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+            if not bool(torch.isfinite(gn)):
+                opt.zero_grad(set_to_none=True)
+                n_skip += 1
+                continue
+            opt.step()
+            sch.step()
+
+        if it == 1:
+            # IPF iteration 1 has f_0 = 1 (zero-initialised controller), so the
+            # endpoints are a BASE-process pair.  Every K_j is doubly stochastic
+            # on the Johnson scheme, hence fhat_1 is constant and every exact
+            # corrector ratio is 1.  A learned h far from 0 here is an estimator
+            # bug, not a hard problem.
+            with torch.no_grad():
+                nchk = min(2048, len(pool1))
+                Xs, X0s = pool1[:nchk], pool0[:nchk]
+                sic = torch.multinomial(gam_1.expand(nchk, -1), 1,
+                                        generator=gen).squeeze(1)
+                Rc, Ac, vc = sample_uniform_shell(Xs, sh_t[sic], generator=gen)
+                Ac = paired(Rc, Ac, vc)
+                t1 = torch.ones(nchk, device=sp.device, dtype=torch.float64)
+                hv = shell_head_value(net_h, t1, Xs, Rc, Ac, vc, sic)
+                qq = corrector_label_shell(sp, X0s, Xs, Rc, Ac, vc)[0]
+                it1 = {"mean_exp_h": float(torch.exp(hv).mean()),
+                       "max_abs_h": float(hv.abs().max()),
+                       "mean_Q": float(torch.exp(qq).mean())}
+            print(f"  IPF-1 corrector vs exact 1: mean exp(h) "
+                  f"{it1['mean_exp_h']:.5f}  max|h| {it1['max_abs_h']:.5f}  "
+                  f"mean Q {it1['mean_Q']:.5f}", flush=True)
+
+        if it % args.eval_every == 0 or it == args.iters:
+            sp.energy.tag = "eval"
+            with torch.no_grad():
+                p = propagate_exact_radial(sp, net, steps, p0=p0_unif,
+                                           chunk=args.chunk)
+            rep = sp.exact_report(p, "train")
+            row = {"iter": it, "loss": float(loss), "loss_h": float(loss_h),
+                   "TV": rep["TV"], "energy_hist_TV": rep["energy_hist_TV"],
+                   "secs": round(time.time() - t_start, 1),
+                   "train_events_per_path": st["events"] / args.batch,
+                   "skipped_steps": n_skip}
+            hist.append(row)
+            if rep["TV"] < best["TV"]:
+                best = {"TV": rep["TV"], "iter": it}
+            print(f"  it {it:5d}  loss {float(loss):11.4f}  "
+                  f"loss_h {float(loss_h):8.4f}  TV {rep['TV']:.5f}  "
+                  f"E-hist {rep['energy_hist_TV']:.5f}  "
+                  f"ev/path {row['train_events_per_path']:.1f}  "
+                  f"{row['secs']:.0f}s", flush=True)
+            sp.energy.tag = "train"
+
+    sp.energy.tag = "final"
+    sf = {}
+    with torch.no_grad():
+        X0s = random_sector_batch(n, k, args.n_samples, sp.device, gen)
+        Xs = simulate_radial(sp, net, args.n_samples, steps, generator=gen,
+                             x0=X0s, stats=sf)
+        p = propagate_exact_radial(sp, net, steps, p0=p0_unif,
+                                   chunk=args.chunk)
+    fin = sp.exact_report(p, "final")
+    obs = sampled_observables(sp, Xs, sp.temp_k)
+    viol = int((Xs.sum(1) != k).sum())
+    emp = sp.empirical_law(Xs)
+    floor, floor_sd = sp.iid_tv_floor(args.n_samples)
+    res = {"provenance": provenance(), "config": arg_config(args),
+           "params": n_par, "params_h": n_par_h, "history": hist,
+           "final": fin, "best": best, "ipf1": it1, "violations": viol,
+           "sampled": obs,
+           "empirical_TV": 0.5 * float((emp - sp.pi).abs().sum()),
+           "iid_TV_floor": floor, "iid_TV_floor_sd": floor_sd,
+           "schedule_describe": sp.schedule.describe(),
+           "schedule": sp.schedule.as_dict(),
+           "events_per_path": sf["events"] / args.n_samples,
+           "max_two_event_prob": sf["max_two_event_prob"],
+           "skipped_steps": n_skip,
+           "total_steps": args.iters * args.inner,
+           "energy_calls": sp.energy.report()}
+    os.makedirs("json", exist_ok=True)
+    tagsym = "sym" if args.sym_aug else "nosym"
+    out = args.out or (f"json/results_cuau_radialnd_{n}_{int(sp.temp_k)}K_"
+                       f"{args.schedule}_g{int(args.gamma_total)}_{tagsym}_"
+                       f"s{args.seed}.json")
+    with open(out, "w") as f:
+        json.dump(res, f, indent=2, default=str)
+    print(f"\n  final exact-law TV {fin['TV']:.5f}  (best {best['TV']:.5f})"
+          f"  empirical TV {res['empirical_TV']:.5f}  iid floor {floor:.5f}")
+    print(f"  wrote {out}")
+    if args.ckpt_dir:
+        pth = C.save_ckpt(args.ckpt_dir,
+                          args.tag or f"cuauradnd{n}_{args.schedule}_"
+                                      f"{tagsym}_s{args.seed}",
+                          nets={"net": net, "net_h": net_h},
+                          samples=Xs[:65536].to(torch.int8),
+                          extra={"config": arg_config(args)})
+        print(f"  ckpt -> {pth}")
+    print("\n=== GATES ===")
+    print(f"N1  constraint violations 0 : {'PASS' if viol == 0 else 'FAIL'} "
+          f"({viol})")
+    ok = fin["TV"] <= args.tv_gate
+    print(f"N2  exact-law TV <= {args.tv_gate} : {'PASS' if ok else 'FAIL'} "
+          f"({fin['TV']:.5f})")
+    return 0 if (ok and viol == 0) else 1
+
+
 def main(argv=None):
     p = argparse.ArgumentParser("iasbs.cuau_radial")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1125,6 +1625,35 @@ def main(argv=None):
     t.add_argument("--ckpt-dir", type=str, default="ckpt")
     t.add_argument("--tag", type=str, default="")
     t.set_defaults(func=cmd_train)
+
+    q = sub.add_parser("train-nd",
+                       help="playbook 13 radial IASBS, distribution source")
+    common_args(q)
+    q.add_argument("--steps", type=int, default=512)
+    q.add_argument("--iters", type=int, default=3000)
+    q.add_argument("--batch", type=int, default=256)
+    q.add_argument("--mb", type=int, default=512)
+    q.add_argument("--inner", type=int, default=5)
+    q.add_argument("--inner-h", type=int, default=5)
+    q.add_argument("--buffer", type=int, default=20)
+    q.add_argument("--hidden", type=int, default=512)
+    q.add_argument("--lr", type=float, default=1e-3)
+    q.add_argument("--lr-h", type=float, default=1e-3)
+    q.add_argument("--clamp", type=float, default=20.0)
+    q.add_argument("--sym-aug", action="store_true")
+    q.add_argument("--pairing", choices=["random", "index", "geometry", "ce"],
+                   default="ce")
+    q.add_argument("--pool", type=str, default="",
+                   help="npz pool for the CE pair-cost table; default is pi")
+    q.add_argument("--ce-sub", type=int, default=4096)
+    q.add_argument("--eval-every", type=int, default=100)
+    q.add_argument("--n-samples", type=int, default=200000)
+    q.add_argument("--chunk", type=int, default=1024,
+                   help="rows per block of the exact propagation")
+    q.add_argument("--tv-gate", type=float, default=0.05)
+    q.add_argument("--ckpt-dir", type=str, default="ckpt")
+    q.add_argument("--tag", type=str, default="")
+    q.set_defaults(func=cmd_train_nd)
 
     a = p.parse_args(argv)
     return a.func(a)
