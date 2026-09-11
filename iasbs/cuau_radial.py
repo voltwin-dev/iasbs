@@ -336,12 +336,46 @@ def pbc_dist2(positions, cell):
     return (d * d).sum(-1)
 
 
+@torch.no_grad()
+def ce_pair_cost(space, X, n_sub=4096, cache="", seed=0):
+    """``(n, n)`` mean transposition penalty ``E[(E(g_ra X1) - E(X1))/tau]``.
+
+    This is a *fixed* table: it is precomputed once from the target ensemble and
+    is thereafter a constant function of the site pair, exactly like the lattice
+    geometry.  It never inspects the ``X_1`` of the draw being labelled, so by
+    playbook 12 every pairing built from it still has the exact conditional mean
+    ``phi(y)/phi(x)`` and the choice remains a pure variance lever.
+    """
+    if cache and os.path.exists(cache):
+        return np.load(cache)["cost"]
+    n = space.n
+    rng = np.random.default_rng(seed)
+    sel = rng.choice(len(X), size=min(n_sub, len(X)), replace=False)
+    Xs = torch.as_tensor(X[sel].astype(np.int64), device=space.device)
+    E0 = space.energy.energy_torch(Xs).to(torch.float64)
+    cost = np.zeros((n, n), dtype=np.float64)
+    t0 = time.time()
+    for r in range(n):
+        for a in range(r + 1, n):
+            Y = Xs.clone()
+            Y[:, [r, a]] = Y[:, [a, r]]
+            dE = (space.energy.energy_torch(Y).to(torch.float64) - E0) / space.tau
+            cost[r, a] = cost[a, r] = float(dE.mean())
+    print(f"  CE pair-cost table {n}x{n} from {len(sel)} samples "
+          f"({time.time() - t0:.0f}s)  range [{cost.min():.2f}, {cost.max():.2f}]")
+    if cache:
+        os.makedirs(os.path.dirname(cache) or ".", exist_ok=True)
+        np.savez_compressed(cache, cost=cost, n_sub=len(sel))
+    return cost
+
+
 def pair_geometry(R, A, valid, dist2):
     """Reorder ``A`` so that ``sum_m d_PBC(R_m, A_m)^2`` is minimal (playbook 12.2).
 
     The assignment reads only the edge ``(R, A)`` and the fixed lattice, never
     ``X_1``, so every pairing has the same exact conditional mean label and the
-    choice is a pure variance lever.
+    choice is a pure variance lever.  ``dist2`` may be any edge-measurable cost
+    matrix -- PBC squared distance (playbook 12.2) or the CE pair-cost table.
     """
     from scipy.optimize import linear_sum_assignment
     Rc, Ac, vc = R.cpu().numpy(), A.cpu().numpy(), valid.cpu().numpy()
@@ -703,6 +737,10 @@ def cmd_label_diag(args):
     """Terminal-label distribution by shell and time (playbook 31)."""
     sp, _ = build_space(args)
     X, Epool = load_pool(args.pool, sp.k)
+    if args.pairing == "ce":
+        sp.ce_cost = ce_pair_cost(
+            sp, X, n_sub=args.ce_sub, seed=args.seed,
+            cache=f"data/cuau/pair_cost_{sp.n}_{int(sp.temp_k)}K.npz")
     Xt = torch.as_tensor(X, device=sp.device)
     Et = torch.as_tensor(Epool, device=sp.device)
     gen = torch.Generator(device=sp.device).manual_seed(args.seed)
@@ -733,6 +771,8 @@ def cmd_label_diag(args):
             R, A, valid = sample_uniform_shell(Xb, jrow, generator=gen)
             if args.pairing == "geometry":
                 A = pair_geometry(R, A, valid, sp.dist2)
+            elif args.pairing == "ce":
+                A = pair_geometry(R, A, valid, sp.ce_cost)
             elif args.pairing == "index":
                 R = torch.where(valid, R, torch.full_like(R, sp.n)).sort(1).values
                 A = torch.where(valid, A, torch.full_like(A, sp.n)).sort(1).values
@@ -749,6 +789,11 @@ def cmd_label_diag(args):
                    "p01": float(qs[0]), "p50": float(qs[1]), "p99": float(qs[2]),
                    "min": float(a.min()), "max": float(a.max()),
                    "frac_clamped": float((np.abs(a) > args.clamp).mean()),
+                   "frac_clamped_hi": float((a > args.clamp).mean()),
+                   "frac_clamped_lo": float((a < -args.clamp).mean()),
+                   "clamp_mass_bias": float(
+                       np.exp(a[a > args.clamp] - a.max()).sum()
+                       / max(np.exp(a - a.max()).sum(), 1e-300)),
                    "sd_energy_term": float(e_term.cpu().numpy().std(ddof=1)),
                    "sd_kernel_term": float(k_term.cpu().numpy().std(ddof=1)),
                    "ess_frac": float(np.exp(
@@ -801,8 +846,10 @@ def main(argv=None):
     d.add_argument("--clamp", type=float, default=20.0)
     d.add_argument("--times", type=float, nargs="+",
                    default=[0.1, 0.3, 0.5, 0.7, 0.9])
-    d.add_argument("--pairing", choices=["random", "index", "geometry"],
+    d.add_argument("--pairing", choices=["random", "index", "geometry", "ce"],
                    default="random")
+    d.add_argument("--ce-sub", type=int, default=4096,
+                   help="pool subsample for the CE pair-cost table")
     d.set_defaults(func=cmd_label_diag)
 
     a = p.parse_args(argv)
