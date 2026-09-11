@@ -769,97 +769,12 @@ def _finish(args, ad, net, sp, p, samples, tv, viol, hist, store, n_par, wall,
     return 0 if ok else 1
 
 
-def run_cuau(args):
-    """DAM on the CuAu-S cluster-expansion sector.
-
-    The adapter contract is unchanged: CuAuExact mirrors FixedIsingSpace
-    attribute for attribute, so IsingAdapter applies verbatim and the only
-    CuAu-specific pieces are how the space is built and where the bridge
-    kernels come from.  Running the same loop against a real CE energy is
-    what makes this a like-for-like baseline for the IASBS numbers.
-    """
-    from iasbs import cuau as CU
-    import iasbs.fixed_ising as FI
-
-    size = tuple(args.size)
-    tables = CU.build_ce_tables(size, verbose=False)
-    energy = CU.TorchCuAuEnergy(tables, device=args.device)
-    sp = CU.CuAuExact(size=size, temp_k=args.temp, gamma=args.gamma,
-                      device=args.device, energy=energy, verbose=False)
-    torch.manual_seed(args.seed)
-    net = FI.SwapController(sp.n, hidden=args.hidden).to(sp.device)
-    ad = IsingAdapter(sp, **_ac(args))
-    n_par = sum(p.numel() for p in net.parameters())
-    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
-    steps = args.steps
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-        opt, T_max=max(1, args.iters * args.inner), eta_min=args.lr * 0.05)
-    print(f"[DAM cuau] size={size} |Omega|={sp.M}  T={sp.temp_k} K  "
-          f"params={n_par}  steps={steps}  K={args.K}  device={sp.device}",
-          flush=True)
-
-    # Same grid convention as cuau.train: log_kap0 is the elapsed-time kernel
-    # and log_kap1 the remaining-time one.
-    lk0, lk1 = sp.bridge_kernels(steps)
-
-    buf, hist, store = [], [], _new_store()
-    t0 = time.time()
-    for it in range(1, args.iters + 1):
-        x0 = ad.source_state(args.batch)
-        X1, _, jj = rollout_ctmc(ad, net, x0,
-                                 torch.zeros(args.batch, device=sp.device),
-                                 steps)
-        store["jumps"] += int(jj.sum())
-        buf.append(X1)
-        if len(buf) > args.buffer:
-            buf.pop(0)
-        pool = torch.cat(buf)
-
-        for _ in range(args.inner):
-            sel = torch.randint(len(pool), (args.mb,), device=sp.device)
-            ti = torch.randint(steps, (args.mb,), device=sp.device)
-            with torch.no_grad():
-                Xt = FI.sample_bridge(sp, pool[sel], ti, lk0, lk1)
-            loss, st = dam_step(ad, net, opt, sched, Xt, ti, steps, args.K,
-                                args.K_num, m_clip=args.m_clip,
-                                ess_min=args.ess_min, coef_cap=args.coef_cap)
-            _acc(store, st)
-
-        if it % args.eval_every == 0 or it == args.iters:
-            with torch.no_grad():
-                p = FI.propagate_exact(
-                    sp, lambda t: FI.net_mult_all_states(sp, net, t), steps)
-            rep = sp.exact_report(p, "dam")
-            hist.append({"iter": it, "TV": rep["TV"],
-                         "energy_hist_TV": rep["energy_hist_TV"],
-                         "loss": loss, "ess": store["ess"][-1]})
-            print(f"  it {it:4d}  loss {loss:11.4f}  TV {rep['TV']:.5f}  "
-                  f"E-hist TV {rep['energy_hist_TV']:.5f}  "
-                  f"ESS {store['ess'][-1]:.2f}/{args.K}  "
-                  f"({time.time()-t0:.0f}s)", flush=True)
-
-    with torch.no_grad():
-        p = FI.propagate_exact(
-            sp, lambda t: FI.net_mult_all_states(sp, net, t), steps)
-        idx, _, _ = rollout_ctmc(ad, net, ad.source_state(args.n_samples),
-                                 torch.zeros(args.n_samples, device=sp.device),
-                                 steps)
-    fin = sp.exact_report(p, "final")
-    viol = ad.violations(idx)
-    rmse = _mult_rmse_ising(sp, net, steps)
-    return _finish(args, ad, net, sp, p=p, samples=idx, tv=fin["TV"],
-                   viol=viol, hist=hist, store=store, n_par=n_par,
-                   wall=time.time() - t0, headline=fin,
-                   extra_diag={"log_multiplier_RMSE": rmse,
-                               "energy_calls": sp.energy.report()})
-
-
 # ============================================================================
 def main():
     C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["ising", "occupation", "occupation-scale",
-                                    "fixed-support", "cuau"])
+                                    "fixed-support"])
     ap.add_argument("--target", type=str, default="toy",
                     choices=["toy", "gb1", "gb1-product2"])
     ap.add_argument("--gb1-measured", dest="gb1_measured", type=str,
@@ -867,8 +782,6 @@ def main():
     ap.add_argument("--gb1-imputed", dest="gb1_imputed", type=str,
                     default="data/gb1/elife-16965-supp2-v4.xlsx")
     ap.add_argument("--L", type=int, default=4)
-    ap.add_argument("--size", type=int, nargs=3, default=[2, 2, 4])
-    ap.add_argument("--temp", type=float, default=500.0)
     ap.add_argument("--device", type=str, default="cuda")
     ap.add_argument("--J", type=float, default=1.0)
     ap.add_argument("--m", type=int, default=4)
@@ -908,12 +821,7 @@ def main():
     if args.N <= 0:
         args.N = args.m
     stem = args.cmd.replace("-", "_")
-    if args.cmd == "cuau":
-        args.gamma = 10.0 if args.gamma is None else args.gamma
-        args.hidden = args.hidden or 512
-        key = (f"dam_cuau_{args.size[0]}x{args.size[1]}x{args.size[2]}_"
-               f"{int(args.temp)}K_K{args.K}")
-    elif args.cmd == "ising":
+    if args.cmd == "ising":
         args.tau = 2.0 if args.tau is None else args.tau
         args.gamma = 10.0 if args.gamma is None else args.gamma
         args.hidden = args.hidden or 512
@@ -931,7 +839,7 @@ def main():
     args.out = args.out or f"json/results_{key}.json"
     args.tag = args.tag or key
 
-    return {"ising": run_ising, "cuau": run_cuau,
+    return {"ising": run_ising,
             "occupation": run_occupation,
             "occupation-scale": run_scale,
             "fixed-support": run_fixed_support}[args.cmd](args)

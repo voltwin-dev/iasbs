@@ -19,8 +19,7 @@ __pycache__/
 # Download instructions are in data/gb1/README.md.
 data/gb1/*.xlsx
 
-# Pinned upstream MetaDNS clone (CuAu cluster-expansion energy oracle).
-# Commit + file hashes are recorded in data/cuau/PROVENANCE.md.
+# Third-party clones and scratch probes.
 external/
 
 # multiseed worker pool scratch state.
@@ -29,8 +28,3 @@ external/
 # Generated sample archives (large .npz).
 samples/
 reference/
-
-# generated CuAu CE caches (rebuilt deterministically by `python -m iasbs.cuau validate`)
-data/cuau/ce_tables_*.npz
-data/cuau/cubic_perm_*.npy
-data/cuau/symperms_*.npy
