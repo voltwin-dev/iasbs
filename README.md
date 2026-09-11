@@ -1547,7 +1547,147 @@ Artifacts: `json/seed_summary_main.json`, `json/seed_summary_gb1.json`, and
 
 ---
 
-# 9. Reproduction index
+# 9. Analytic corrector, non-Dirac occupation
+
+The uniform source over the `m` corner states `N e_c` makes the static bridge
+`S_m`-invariant, so `f_0` is constant on the source support and
+`f_1(xi) ∝ (1/m) Σ_c p_base(xi | N e_c)`.  That mixture has a closed form,
+giving an exact terminal ratio with no corrector network.  `--corrector
+analytic` in `iasbs/occupation.py` uses it (`labels_analytic`), which drops the
+corrector head entirely (`--inner-h 0`, half the parameters).
+
+## 9.1 Symmetry check, m = N = 4, exact Sinkhorn
+
+| quantity | value |
+|---|---|
+| Sinkhorn marginal residual | 2.776e-17 |
+| `f_0` relative spread over the 4 source atoms | 1.332e-15 |
+| spread of `log f_1 - log pbar` | 8.882e-16 |
+| closed-form `log pbar` vs enumerated | 2.665e-15 |
+| `q_atoms` vs `occupation_single_particle_probs` | 0.0 |
+| `log` conditional-mean training target vs `h` | 4.441e-16 |
+| exact `log R` vs analytic `log R` | 2.442e-15 |
+| O(m) `labels_analytic` vs enumerated full sum | 8.882e-15 |
+
+`json/results_weakness3_corrector.json`
+
+## 9.2 Comparison table
+
+10000 samples at m = 32, 128; 4000 at m = 1000.  128 tau-leap steps
+(256 at m = 1000).  All four rows scored against one common exact-target draw.
+`exact_floor` is a second independent exact draw (finite-sample floor).
+
+| m | row | KS_occ | KS_max | W1(max) | W1(max)/N | E | E[max_i eta_i] | viol |
+|---|---|---|---|---|---|---|---|---|
+| 32 | reference | 0.2052 | 0.8119 | 3.2092 | 0.1003 | 17.1085 | 3.5512 | 0 |
+| 32 | exact_floor | 0.0002 | 0.0077 | 0.0403 | 0.0013 | 13.2299 | 6.7519 | 0 |
+| 32 | learned | 0.0167 | 0.0988 | 0.4662 | 0.0146 | 13.5924 | 6.2942 | 0 |
+| 32 | analytic | 0.0205 | 0.1177 | 0.5572 | 0.0174 | 13.6734 | 6.2034 | 0 |
+| 128 | reference | 0.2052 | 0.9095 | 5.1256 | 0.0400 | 67.8589 | 4.6536 | 0 |
+| 128 | exact_floor | 0.0005 | 0.0081 | 0.0318 | 0.0002 | 52.1571 | 9.7656 | 0 |
+| 128 | learned | 0.0129 | 0.0316 | 0.2755 | 0.0022 | 53.2908 | 9.5037 | 0 |
+| 128 | analytic | 0.0112 | 0.0976 | 0.6102 | 0.0048 | 53.1775 | 9.1692 | 0 |
+| 1000 | reference | 0.2031 | 0.4902 | 4.2055 | 0.0042 | 526.1046 | 18.6128 | 0 |
+| 1000 | exact_floor | 0.0002 | 0.0082 | 0.0630 | 0.0001 | 405.6946 | 14.4563 | 0 |
+| 1000 | learned | 0.0113 | 0.3473 | 1.7858 | 0.0018 | 412.8590 | 16.0715 | 0 |
+| 1000 | analytic | 0.0135 | 0.2917 | 1.8098 | 0.0018 | 415.2987 | 12.6245 | 0 |
+
+Exact-target `E[max_i eta_i]`: 6.7480 (m = 32), 9.7659 (m = 128), 14.4692
+(m = 1000).  `json/results_weakness3_table.json`
+
+## 9.3 Learned corrector vs analytic, held-out target states
+
+`h = log R` on ~3900 held-out exact draws.  `sd(h)` is the spread of the exact
+value, for scale.
+
+| ckpt | m | RMSE | max abs | bias | sd(h) |
+|---|---|---|---|---|---|
+| `occ_nd_s32_seed0` | 32 | 0.0170 | 0.1046 | +0.0087 | 0.8991 |
+| `occ_nd_s32_seed1` | 32 | 0.0204 | 0.1610 | +0.0127 | 0.9056 |
+| `occ_nd_s32_s2` | 32 | 0.0178 | 0.1353 | +0.0074 | 0.9061 |
+| `occ_nd_s128` | 128 | 0.0852 | 0.8187 | -0.0266 | 0.8746 |
+| `occ_nd_s128_s1` | 128 | 0.0414 | 0.5765 | -0.0021 | 0.8671 |
+| `occ_nd_s128_s2` | 128 | 0.0453 | 0.6311 | -0.0023 | 0.8740 |
+| `occ_nd_s1000` | 1000 | 0.1927 | 2.9071 | +0.0105 | 0.9543 |
+| `occ_nd_s1000_s1` | 1000 | 0.4852 | 4.0304 | -0.0894 | 0.9309 |
+| `occ_nd_s1000_s2` | 1000 | 0.2922 | 3.0093 | -0.0235 | 0.9411 |
+
+Propagated into the Bregman regression target `log y`, at bridge time t = 0.75
+(4000 states, `ctrl_sd` = sd of the control the net must fit):
+
+| ckpt | d log y RMSE | p99 | sign flips | ctrl_sd | RMSE / ctrl_sd |
+|---|---|---|---|---|---|
+| `occ_nd_s32_seed0` | 0.0936 | 0.1994 | 0.0025 | 0.8505 | 0.110 |
+| `occ_nd_s32_seed1` | 0.1046 | 0.2606 | 0.0023 | 0.8089 | 0.129 |
+| `occ_nd_s32_s2` | 0.0665 | 0.1519 | 0.0023 | 0.7970 | 0.083 |
+| `occ_nd_s128` | 0.1477 | 0.6535 | 0.0060 | 0.7759 | 0.190 |
+| `occ_nd_s128_s1` | 0.1110 | 0.2416 | 0.0018 | 0.8045 | 0.138 |
+| `occ_nd_s128_s2` | 0.0791 | 0.2841 | 0.0033 | 0.7939 | 0.100 |
+| `occ_nd_s1000` | 0.2411 | 0.9098 | 0.0128 | 0.7615 | 0.317 |
+| `occ_nd_s1000_s1` | 0.3804 | 1.7113 | 0.0222 | 0.7750 | 0.491 |
+| `occ_nd_s1000_s2` | 0.2118 | 0.8833 | 0.0103 | 0.7900 | 0.268 |
+
+At t = 0 the same error is ~0.001 nats.
+`json/results_weakness3_labelerr.json`
+
+## 9.4 Step refinement, no retraining
+
+Same controller re-evaluated at finer tau-leap grids.
+
+| run | 128 | 256 | 512 | 1024 |
+|---|---|---|---|---|
+| `m32` learned KS_max | 0.0942 | 0.0822 | 0.0805 | 0.0713 |
+| `m32` analytic KS_max | 0.1131 | 0.1101 | 0.0979 | 0.0953 |
+| `m32` analytic s1 KS_max | 0.1063 | — | 0.0814 | 0.0883 |
+| `m128` learned KS_max | 0.0347 | 0.0198 | 0.0108 | 0.0142 |
+| `m128` analytic KS_max | 0.0979 | 0.0821 | 0.0746 | 0.0627 |
+| `m128` analytic s1 KS_max | 0.1085 | — | 0.0901 | 0.0886 |
+| `m1000` learned KS_max | — | 0.3330 | 0.3463 | 0.3472 |
+| `m32` learned KS_occ | 0.0163 | 0.0126 | 0.0110 | 0.0105 |
+| `m128` learned KS_occ | 0.0123 | 0.0092 | 0.0078 | 0.0064 |
+| `m128` analytic KS_occ | 0.0109 | 0.0081 | 0.0065 | 0.0053 |
+| `m1000` learned KS_occ | — | 0.0110 | 0.0096 | 0.0093 |
+
+`json/results_weakness3_tauleap.json`
+
+## 9.5 Non-rank-1 residual of the Bregman optimum
+
+Two-way ANOVA on `a*_ji = log(xi_i + Lambda_ji) - log xi_i` over a 96 x 96
+(i, j) grid, 48 held-out states, t = 0.95.  Fraction of variance left after
+removing `mu + row_i + col_j`.
+
+| ckpt | learned R | analytic R |
+|---|---|---|
+| `occ_nd_s32_seed0` | 0.1852 | 0.1831 |
+| `occ_nd_s128` | 0.4224 | 0.4224 |
+| `occ_nd_s128_s1` | 0.4652 | 0.4646 |
+| `occ_nd_s1000` | 0.3997 | 0.3999 |
+
+`json/results_weakness3_rank1.json`
+
+## 9.6 Reproduction
+
+```bash
+P=/root/miniconda3/envs/cuau_env/bin/python
+export PYTHONPATH=/home/RESEARCH/iasbs:/home/RESEARCH/iasbs/iasbs
+
+# analytic-corrector training (m = 32, 128; --steps 256 --iters 1500 at m = 1000)
+$P -m iasbs.occupation scale-nondirac --m 32 --N 32 --d 0.5 --tau 1.0 \
+  --gamma 4.0 --steps 128 --iters 3000 --inner 4 --batch 512 --hidden 256 \
+  --lr 1e-3 --estimator full --corrector analytic --nu-skew 1.0 --seed 0 \
+  --tag occ_nd_s32_analytic --out json/results_occ_nd_s32_analytic.json
+
+# the five diagnostics
+$P iasbs/_weakness3_corrector.py   # symmetry proof + corrector error
+$P iasbs/_weakness3_table.py       # comparison table
+$P iasbs/_weakness3_labelerr.py    # label-error propagation
+$P iasbs/_weakness3_tauleap.py     # step refinement
+$P iasbs/_weakness3_rank1.py       # non-rank-1 ANOVA residual
+```
+
+---
+
+# 10. Reproduction index
 
 | script | produces | checkpoints |
 |---|---|---|

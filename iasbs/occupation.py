@@ -1078,6 +1078,80 @@ class ScaleOccupation:
         r = math.exp(-self.m * Gamma / (self.m - 1.0))
         return (1.0 - r) / self.m, r
 
+    # -- analytic (symmetry-derived) corrector for the uniform source -------
+    # nu_0 uniform over {N e_c}, the complete-graph reference and the
+    # inclusion target are all S_m-invariant, so the static potential f_0 is
+    # constant on the source orbit and the corrector is known in closed form:
+    #
+    #   fhat_1(xi) prop pbar(xi) = (N!/prod xi_j!) o^N S(xi),
+    #   S(xi) = (1/m) sum_c rho^{xi_c},  rho = (o+r)/o,
+    #   log R_{b<-a}(xi) = -log(xi_a-1+d) + log(xi_b+d)
+    #                      + log S(xi) - log S(xi - e_a + e_b).
+    #
+    # This R is NOT of the rank-1 form u_a + v_b -- the shifted S couples a
+    # and b -- so it cannot be fed through uv_nondirac and needs its own
+    # label routine.  m S(xi') = m S(xi) + (rho-1)(s_b - s_a/rho) with
+    # s_a = rho^{xi_a} keeps every evaluation O(1) given the row sum.
+
+    def rho_of(self, Gamma=None):
+        o, r = self.q_atoms(self.gamma if Gamma is None else Gamma)
+        return (o + r) / o
+
+    def _S_parts(self, xi):
+        """(e, tot, mx) with e = rho^{xi} / e^{mx}, tot = sum_c e_c."""
+        z = math.log(self.rho_of()) * xi
+        mx = z.max(dim=1, keepdim=True).values
+        e = torch.exp(z - mx)
+        return e, e.sum(dim=1), mx[:, 0]
+
+    def _tot_shift(self, e, tot, a_col, b_col):
+        """sum_c rho^{xi'_c} / e^{mx} for xi' = xi - e_a + e_b, broadcastable.
+
+        a_col and b_col are e[..., a] and e[..., b] already gathered; the
+        caller decides the broadcast shape so that the O(m) sum over a can be
+        done for a fixed b without materialising an (B, m, m) tensor.
+        """
+        rho = self.rho_of()
+        return tot - a_col * (1.0 - 1.0 / rho) + b_col * (rho - 1.0)
+
+    def R_analytic(self, xi, a_idx, b_idx):
+        """R_{b<-a}(xi) for the queried (a, b) pairs.  R_{a<-a} = 1."""
+        e, tot, _ = self._S_parts(xi)
+        ar = torch.arange(len(xi), device=xi.device)
+        ea, eb = e[ar, a_idx], e[ar, b_idx]
+        tp = self._tot_shift(ea, tot, ea, eb)
+        xa, xb = xi[ar, a_idx], xi[ar, b_idx]
+        lr = (-torch.log((xa - 1.0 + self.d).clamp_min(1e-12))
+              + torch.log(xb + self.d)
+              + torch.log(tot) - torch.log(tp.clamp_min(1e-300)))
+        R = torch.exp(lr.clamp(-60.0, 60.0))
+        R = torch.where(a_idx == b_idx, torch.ones_like(R), R)
+        return torch.where(xa > 0, R, torch.zeros_like(R))
+
+    def _T_analytic(self, xi, e, tot, b_idx):
+        """T_b = sum_a xi_a R_{b<-a}, with R_{a<-a} = 1.  O(m) per row."""
+        ar = torch.arange(len(xi), device=xi.device)
+        eb = e[ar, b_idx][:, None]                                 # (B,1)
+        xb = xi[ar, b_idx][:, None]
+        tp = self._tot_shift(e, tot[:, None], e, eb)               # (B,m) over a
+        R = (xb + self.d) / (xi - 1.0 + self.d).clamp_min(1e-12) \
+            * tot[:, None] / tp.clamp_min(1e-300)                  # R_{b<-a}
+        contrib = torch.where(xi > 0, xi * R, torch.zeros_like(R))
+        # a == b contributes xi_b * 1, not xi_b * R_{b<-b}
+        contrib = contrib.scatter(1, b_idx[:, None], xb)
+        return contrib.sum(dim=1)
+
+    def labels_analytic(self, xi, c_t, i_idx, j_idx):
+        """Lambda_ji(xi) with the exact symmetry-derived terminal ratio."""
+        e, tot, _ = self._S_parts(xi)
+        ar = torch.arange(len(xi), device=xi.device)
+        Rji = self.R_analytic(xi, i_idx, j_idx)
+        first = xi[ar, i_idx] * (Rji - 1.0)
+        first = torch.where(xi[ar, i_idx] > 0, first, torch.zeros_like(first))
+        Tj = self._T_analytic(xi, e, tot, j_idx)
+        Ti = self._T_analytic(xi, e, tot, i_idx)
+        return first - c_t * (Tj - Ti)
+
     def labels_full(self, xi, q, c_t, i_idx, j_idx, uv=None):
         """Exact full-sum Lambda_ji(xi) for the queried edges.  O(m)."""
         u, v = self.uv(xi, q) if uv is None else uv
@@ -1437,10 +1511,23 @@ def run_scale_nondirac(args):
     opt_h = torch.optim.Adam(net_h.parameters(), lr=args.lr_h)
     steps = args.steps
     o, r = sp.q_atoms(sp.gamma)
+    # With nu_skew = 1 the source is uniform over the m pure modes and the
+    # whole problem is S_m-invariant, so the corrector is known exactly (see
+    # ScaleOccupation.labels_analytic).  --corrector analytic uses it and
+    # trains no corrector network at all; the ablation against "learned" then
+    # isolates corrector approximation error from controller error.
+    analytic = getattr(args, "corrector", "learned") == "analytic"
+    if analytic and args.nu_skew != 1.0:
+        raise SystemExit("--corrector analytic requires --nu-skew 1.0: the "
+                         "closed form is a consequence of mode symmetry, "
+                         "which a skewed source breaks")
+    if analytic:
+        args.inner_h = 0
     print(f"[scale-nd] m={sp.m} N={sp.N} d={sp.d} gamma={sp.gamma}  "
-          f"params={n_par}x2  steps={steps}  est={args.estimator}  "
-          f"source=Uniform over {sp.m} modes  q=(o {o:.3e}, o+r {o+r:.3e})  "
-          f"device={sp.device}")
+          f"params={n_par}x{1 if analytic else 2}  steps={steps}  "
+          f"est={args.estimator}  corrector={'analytic' if analytic else 'learned'}"
+          f"  source=Uniform over {sp.m} modes  q=(o {o:.3e}, o+r {o+r:.3e})  "
+          f"device={sp.device}  rho={sp.rho_of():.6f}")
 
     exact = C.sample_inclusion_exact(args.n_samples, sp.m, sp.N, sp.d,
                                      device=sp.device).to(torch.float64)
@@ -1463,6 +1550,7 @@ def run_scale_nondirac(args):
     ar = torch.arange(args.mb, device=sp.device)
     buf_c, buf_1, hist = [], [], []
     n_bad, n_skip = 0, 0
+    loss_h = torch.tensor(float("nan"))       # stays NaN in the analytic branch
     t0 = time.time()
     for it in range(1, args.iters + 1):
         with torch.no_grad():
@@ -1516,15 +1604,21 @@ def run_scale_nondirac(args):
                      for z in tv.cpu()], device=sp.device)
                 i_idx = torch.multinomial(xt / sp.N, 1)[:, 0]
                 j_idx = torch.randint(sp.m, (args.mb,), device=sp.device)
-                ah, bh = net_h(ones, x1, None)
-                uv = sp.uv_nondirac(x1, ah.to(torch.float64),
-                                    bh.to(torch.float64))
-                if args.estimator == "full":
-                    lam = sp.labels_full(x1, None, ct, i_idx, j_idx, uv=uv)
+                if analytic:
+                    # the exact R is not rank-1, so it cannot go through
+                    # uv_nondirac; labels_analytic does the same O(m) sum
+                    # with the closed-form ratio instead.
+                    lam = sp.labels_analytic(x1, ct, i_idx, j_idx)
                 else:
-                    lam = sp.labels_sampled(x1, None, ct, i_idx, j_idx,
-                                            mode=args.estimator, n_a=args.n_a,
-                                            uv=uv)
+                    ah, bh = net_h(ones, x1, None)
+                    uv = sp.uv_nondirac(x1, ah.to(torch.float64),
+                                        bh.to(torch.float64))
+                    if args.estimator == "full":
+                        lam = sp.labels_full(x1, None, ct, i_idx, j_idx, uv=uv)
+                    else:
+                        lam = sp.labels_sampled(x1, None, ct, i_idx, j_idx,
+                                                mode=args.estimator,
+                                                n_a=args.n_a, uv=uv)
                 occ = xt[ar, i_idx]
                 y = occ + lam
                 # A single non-finite label would silently NaN every weight
@@ -1579,11 +1673,14 @@ def run_scale_nondirac(args):
     print(f"B2c constraint violations = 0: {'PASS' if okV else 'FAIL'}  "
           f"({mm['violations']}/{args.n_samples})")
     if args.ckpt_dir:
-        pth = C.save_ckpt(args.ckpt_dir, args.tag, net=net,
-                          nets={"control": net, "corrector": net_h},
+        nets = {"control": net} if analytic else {"control": net,
+                                                  "corrector": net_h}
+        pth = C.save_ckpt(args.ckpt_dir, args.tag, net=net, nets=nets,
                           samples=ours.to(torch.int32),
                           extra={"config": vars(args), "metrics": mm,
                                  "reference": mref, "source": "nondirac",
+                                 "corrector": "analytic" if analytic
+                                 else "learned",
                                  "exact_samples": exact.to(torch.int32).cpu()})
         print(f"  ckpt -> {pth}")
     with open(args.out, "w") as f:
@@ -1773,6 +1870,10 @@ def main():
     ap.add_argument("--nu-skew", dest="nu_skew", type=float, default=1.0)
     ap.add_argument("--inner-h", dest="inner_h", type=int, default=4)
     ap.add_argument("--lr-h", dest="lr_h", type=float, default=1e-2)
+    # scale-nondirac only: "analytic" replaces the learned rank-1 corrector by
+    # the exact S_m-symmetric one (uniform source only).
+    ap.add_argument("--corrector", choices=["learned", "analytic"],
+                    default="learned")
     args = ap.parse_args()
     if args.N <= 0:
         args.N = args.m
