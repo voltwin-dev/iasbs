@@ -542,58 +542,81 @@ class RadialController(torch.nn.Module):
     subset logits, hence ``q_j = 1/v_j`` and ``u = r`` exactly at the reference.
     """
 
-    def __init__(self, n, shells, hidden=512, n_freq=4):
+    def __init__(self, n, shells, hidden=512, n_freq=4, comps=1):
         super().__init__()
         self.n = int(n)
         self.shells = tuple(int(j) for j in shells)
         self.S = len(self.shells)
         self.n_freq = int(n_freq)
-        out = self.S * (1 + 2 * self.n)
+        self.comps = int(comps)
+        if self.comps < 1:
+            raise ValueError(f"comps={comps} must be >= 1")
+        self.per = 1 + self.comps * (1 + 2 * self.n)
         self.net = torch.nn.Sequential(
             torch.nn.Linear(n + 2 + 2 * n_freq, hidden), torch.nn.SiLU(),
             torch.nn.Linear(hidden, hidden), torch.nn.SiLU(),
             torch.nn.Linear(hidden, hidden), torch.nn.SiLU(),
-            torch.nn.Linear(hidden, out),
+            torch.nn.Linear(hidden, self.S * self.per),
         ).to(torch.float32)
         torch.nn.init.zeros_(self.net[-1].weight)
         torch.nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, t, x):
-        """``(b, s_minus, s_plus)`` of shapes ``(B,S)``, ``(B,S,n)``, ``(B,S,n)``."""
+        """``(b, a, s_minus, s_plus)``: ``(B,S)``, ``(B,S,C)``, two ``(B,S,C,n)``."""
         s = 2.0 * x.to(torch.float32) - 1.0
         t = t.to(torch.float32).reshape(-1, 1)
         kk = torch.arange(1, self.n_freq + 1, device=t.device,
                           dtype=t.dtype)[None, :]
         feats = [s, t, 1.0 - t,
                  torch.sin(math.pi * kk * t), torch.cos(math.pi * kk * t)]
-        o = self.net(torch.cat(feats, dim=-1)).view(-1, self.S, 1 + 2 * self.n)
-        return o[:, :, 0], o[:, :, 1:1 + self.n], o[:, :, 1 + self.n:]
+        o = self.net(torch.cat(feats, dim=-1)).view(-1, self.S, self.per)
+        r = o[:, :, 1:].reshape(-1, self.S, self.comps, 1 + 2 * self.n)
+        return (o[:, :, 0], r[:, :, :, 0], r[:, :, :, 1:1 + self.n],
+                r[:, :, :, 1 + self.n:])
 
 
 def shell_logits(net, t, x, clamp=10.0):
-    """Controller outputs gathered onto occupied/empty sites."""
-    b, sm, sp = net(t, x)
+    """Controller outputs gathered onto occupied/empty sites.
+
+    ``(b, log_alpha, lw_rem, lw_add, occ, emp)`` with ``b`` of shape ``(B,S)``,
+    ``log_alpha`` of shape ``(B,S,C)`` already normalized over the mixture
+    components of playbook 24 Option A, and the two site-logit blocks of shape
+    ``(B,S,C,k)`` and ``(B,S,C,n-k)``.  ``C = 1`` is the plain product
+    controller of playbook 18-20 and reproduces it exactly, since a one-term
+    ``logsumexp`` with ``log alpha = 0`` is the identity.
+    """
+    b, a, sm, sp = net(t, x)
     occ, emp = occupied_empty(x)
+    S_, Cc = len(net.shells), net.comps
     b = b.to(torch.float64).clamp(-clamp, clamp)
+    la = torch.log_softmax(a.to(torch.float64).clamp(-clamp, clamp), dim=-1)
     lw_rem = sm.to(torch.float64).clamp(-clamp, clamp).gather(
-        2, occ[:, None, :].expand(-1, len(net.shells), -1))
+        3, occ[:, None, None, :].expand(-1, S_, Cc, -1))
     lw_add = sp.to(torch.float64).clamp(-clamp, clamp).gather(
-        2, emp[:, None, :].expand(-1, len(net.shells), -1))
-    return b, lw_rem, lw_add, occ, emp
+        3, emp[:, None, None, :].expand(-1, S_, Cc, -1))
+    return b, la, lw_rem, lw_add, occ, emp
 
 
-def log_q_shell(lw_rem, lw_add, sel_r, sel_a, jrow, si):
-    """``log q_j(y|x,t) = log q^-(R) + log q^+(A)`` for the selected shell row."""
-    B = lw_rem.shape[0]
+def log_q_shell(la, lw_rem, lw_add, sel_r, sel_a, jrow, si):
+    """``log q_j(y|x,t)`` for the selected shell row (playbook 20, 24).
+
+        log q_j = logsumexp_c [ log alpha_c + log q^-_c(R) + log q^+_c(A) ].
+    """
+    B, Cc = lw_rem.shape[0], lw_rem.shape[2]
     ar = torch.arange(B, device=lw_rem.device)
-    wr, wa = lw_rem[ar, si], lw_add[ar, si]
-    if wr.shape[1] == wa.shape[1] and sel_r.shape[1] == sel_a.shape[1]:
+    wr = lw_rem[ar, si].reshape(B * Cc, -1)
+    wa = lw_add[ar, si].reshape(B * Cc, -1)
+    sr = sel_r[:, None, :].expand(B, Cc, -1).reshape(B * Cc, -1)
+    sa = sel_a[:, None, :].expand(B, Cc, -1).reshape(B * Cc, -1)
+    jj = jrow[:, None].expand(B, Cc).reshape(B * Cc)
+    if wr.shape[1] == wa.shape[1] and sr.shape[1] == sa.shape[1]:
         out = log_esp_select(torch.cat([wr, wa], dim=0),
-                             torch.cat([sel_r, sel_a], dim=0),
-                             torch.cat([jrow, jrow], dim=0))
-        return out[:B] + out[B:]
-    return (log_esp_select(wr, sel_r, jrow)
-            + log_esp_select(wa, sel_a, jrow))
+                             torch.cat([sr, sa], dim=0),
+                             torch.cat([jj, jj], dim=0))
+        lq = out[:B * Cc] + out[B * Cc:]
+    else:
+        lq = log_esp_select(wr, sr, jj) + log_esp_select(wa, sa, jj)
+    return torch.logsumexp(la[ar, si] + lq.reshape(B, Cc), dim=1)
 
 
 class ShellCorrector(torch.nn.Module):
@@ -688,7 +711,7 @@ def simulate_radial(space, net, batch, steps, generator=None, x0=None,
         gam = torch.as_tensor(space.schedule.rates(t), dtype=torch.float64,
                               device=space.device)
         tt = torch.full((batch,), t, device=space.device, dtype=torch.float64)
-        b, lw_rem, lw_add, occ, emp = shell_logits(net, tt, x)
+        b, la, lw_rem, lw_add, occ, emp = shell_logits(net, tt, x)
         lam = gam[None, :] * torch.exp(b)                       # (B, S)
         R = lam.sum(dim=1)
         if not bool(torch.isfinite(R).all()) or bool((R < 0).any()):
@@ -705,8 +728,14 @@ def simulate_radial(space, net, batch, steps, generator=None, x0=None,
         si = torch.multinomial(lam[rows], 1, generator=generator).squeeze(1)
         jrow = shells[si]
         jmax = int(jrow.max())
-        wr = lw_rem[rows, si][:, :space.k]
-        wa = lw_add[rows, si][:, :space.n - space.k]
+        # playbook 24 Option A: the shell law is a mixture over C product
+        # distributions, so sampling draws the component first.  ``C = 1``
+        # makes this a deterministic ``ci = 0`` and leaves the path law
+        # identical to the plain product controller of playbook 18-20.
+        ci = torch.multinomial(torch.exp(la[rows, si]), 1,
+                               generator=generator).squeeze(1)
+        wr = lw_rem[rows, si, ci][:, :space.k]
+        wa = lw_add[rows, si, ci][:, :space.n - space.k]
         if wr.shape[1] == wa.shape[1]:
             # half filling: one DP over the stacked removal/addition logits
             # halves the python-loop kernel launches, which dominate wall clock.
@@ -761,22 +790,9 @@ def radial_rate_rows(space, net, t, idx, shells_t=None):
     x = space.S[idx]
     B = x.shape[0]
     tt = torch.full((B,), float(t), dtype=torch.float64, device=dev)
-    b, lw_rem, lw_add, occ, emp = shell_logits(net, tt, x)
+    b, la, lw_rem, lw_add, occ, emp = shell_logits(net, tt, x)
     jmax = max(shells)
-
-    # exact normalizers e_j of both product distributions, per (row, shell)
-    sh_flat = shells_t.repeat(B)[:, None]
-    Er = log_esp_prefix(lw_rem.reshape(B * S_, k), jmax)[:, k, :]
-    Ea = log_esp_prefix(lw_add.reshape(B * S_, n - k), jmax)[:, n - k, :]
-    lnorm = (Er.gather(1, sh_flat) + Ea.gather(1, sh_flat)).reshape(B, S_)
-
-    WR = torch.zeros(B, S_, n, dtype=torch.float64, device=dev)
-    WR.scatter_(2, occ[:, None, :].expand(-1, S_, -1), lw_rem)
-    WA = torch.zeros(B, S_, n, dtype=torch.float64, device=dev)
-    WA.scatter_(2, emp[:, None, :].expand(-1, S_, -1), lw_add)
     Sf = space.S.to(torch.float64)
-    Srem = (WR.reshape(B * S_, n) @ (1.0 - Sf).T).reshape(B, S_, M)
-    Sadd = (WA.reshape(B * S_, n) @ Sf.T).reshape(B, S_, M)
 
     d = (k - Sf[idx] @ Sf.T).round().long()                     # (B, M)
     D = min(k, n - k)
@@ -787,14 +803,35 @@ def radial_rate_rows(space, net, t, idx, shells_t=None):
     ok = si >= 0
     g = si.clamp_min(0)
 
-    lq = (Srem.gather(1, g[:, None, :]).squeeze(1)
-          + Sadd.gather(1, g[:, None, :]).squeeze(1)
-          - lnorm.gather(1, g))
     gam = torch.as_tensor(space.schedule.rates(float(t)), dtype=torch.float64,
                           device=dev)
     lg = torch.log(gam.clamp_min(1e-300))[g]
-    U = torch.where(ok, torch.exp(b.gather(1, g) + lg + lq),
-                    torch.zeros((), dtype=torch.float64, device=dev))
+    lb = b.gather(1, g)
+    sh_flat = shells_t.repeat(B)[:, None]
+    zero = torch.zeros((), dtype=torch.float64, device=dev)
+    U = torch.zeros(B, M, dtype=torch.float64, device=dev)
+    # playbook 24 Option A: u_j(y|x) = sum_c alpha_c q^-_c(R) q^+_c(A), so the
+    # rate row is the mixture sum of the per-component product rows.  Each
+    # component still uses the exact e_j normalizer.
+    for c in range(int(net.comps)):
+        wrc, wac = lw_rem[:, :, c], lw_add[:, :, c]
+        # exact normalizers e_j of both product distributions, per (row, shell)
+        Er = log_esp_prefix(wrc.reshape(B * S_, k), jmax)[:, k, :]
+        Ea = log_esp_prefix(wac.reshape(B * S_, n - k), jmax)[:, n - k, :]
+        lnorm = (Er.gather(1, sh_flat) + Ea.gather(1, sh_flat)).reshape(B, S_)
+
+        WR = torch.zeros(B, S_, n, dtype=torch.float64, device=dev)
+        WR.scatter_(2, occ[:, None, :].expand(-1, S_, -1), wrc)
+        WA = torch.zeros(B, S_, n, dtype=torch.float64, device=dev)
+        WA.scatter_(2, emp[:, None, :].expand(-1, S_, -1), wac)
+        Srem = (WR.reshape(B * S_, n) @ (1.0 - Sf).T).reshape(B, S_, M)
+        Sadd = (WA.reshape(B * S_, n) @ Sf.T).reshape(B, S_, M)
+
+        lq = (Srem.gather(1, g[:, None, :]).squeeze(1)
+              + Sadd.gather(1, g[:, None, :]).squeeze(1)
+              - lnorm.gather(1, g))
+        lac = la[:, :, c].gather(1, g)
+        U = U + torch.where(ok, torch.exp(lac + lb + lg + lq), zero)
     if not bool(torch.isfinite(U).all()):
         raise RuntimeError("non-finite radial rate row")
     return U
@@ -1103,7 +1140,8 @@ def cmd_train(args):
             sp, Xp, n_sub=args.ce_sub, seed=args.seed,
             cache=f"data/cuau/pair_cost_{n}_{int(sp.temp_k)}K.npz")
 
-    net = RadialController(n, shells, hidden=args.hidden).to(sp.device)
+    net = RadialController(n, shells, hidden=args.hidden,
+                           comps=args.components).to(sp.device)
     n_par = sum(p.numel() for p in net.parameters())
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     sch = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -1165,7 +1203,7 @@ def cmd_train(args):
                 lab, _ = terminal_log_label_shell(sp, X1, E1, R, Ag, valid)
                 Lam = torch.exp(lab.clamp(-args.clamp, args.clamp))
 
-            b, lw_rem, lw_add, occ, emp = shell_logits(net, tt, Xt)
+            b, la, lw_rem, lw_add, occ, emp = shell_logits(net, tt, Xt)
             lam = gam * torch.exp(b)                            # (B, S)
             sel_r = sel_mask(R, valid, occ, n)
             sel_a = sel_mask(A, valid, emp, n)
@@ -1174,7 +1212,7 @@ def cmd_train(args):
                 raise RuntimeError("shell selection mask lost cardinality")
             ar = torch.arange(args.mb, device=sp.device)
             log_m = (b[ar, si] + logv[si]
-                     + log_q_shell(lw_rem, lw_add, sel_r, sel_a, jrow, si))
+                     + log_q_shell(la, lw_rem, lw_add, sel_r, sel_a, jrow, si))
             loss = (lam.sum(dim=1) - gtot * Lam * log_m).mean()
             opt.zero_grad(set_to_none=True)
             if not bool(torch.isfinite(loss)):
@@ -1317,7 +1355,8 @@ def cmd_train_nd(args):
     if args.pairing == "ce":
         sp.ce_cost = build_pair_cost(sp, args, gen)
 
-    net = RadialController(n, shells, hidden=args.hidden).to(sp.device)
+    net = RadialController(n, shells, hidden=args.hidden,
+                           comps=args.components).to(sp.device)
     net_h = ShellCorrector(n, shells, hidden=args.hidden).to(sp.device)
     n_par = sum(p.numel() for p in net.parameters())
     n_par_h = sum(p.numel() for p in net_h.parameters())
@@ -1441,7 +1480,7 @@ def cmd_train_nd(args):
                 lab = -(Eg - E1) / sp.tau - hg
                 Lam = torch.exp(lab.clamp(-args.clamp, args.clamp))
 
-            b, lw_rem, lw_add, occ, emp = shell_logits(net, tt, Xt)
+            b, la, lw_rem, lw_add, occ, emp = shell_logits(net, tt, Xt)
             lam = gam * torch.exp(b)
             sel_r = sel_mask(R, valid, occ, n)
             sel_a = sel_mask(A, valid, emp, n)
@@ -1450,7 +1489,7 @@ def cmd_train_nd(args):
                 raise RuntimeError("shell selection mask lost cardinality")
             ar = torch.arange(args.mb, device=sp.device)
             log_m = (b[ar, si] + logv[si]
-                     + log_q_shell(lw_rem, lw_add, sel_r, sel_a, jrow, si))
+                     + log_q_shell(la, lw_rem, lw_add, sel_r, sel_a, jrow, si))
             loss = (lam.sum(dim=1) - gtot * Lam * log_m).mean()
             opt.zero_grad(set_to_none=True)
             if not bool(torch.isfinite(loss)):
@@ -1609,6 +1648,7 @@ def main(argv=None):
     t.add_argument("--inner", type=int, default=5)
     t.add_argument("--buffer", type=int, default=20)
     t.add_argument("--hidden", type=int, default=512)
+    t.add_argument("--components", type=int, default=1)
     t.add_argument("--lr", type=float, default=1e-3)
     t.add_argument("--clamp", type=float, default=20.0)
     t.add_argument("--pairing", choices=["random", "index", "geometry", "ce"],
@@ -1637,6 +1677,7 @@ def main(argv=None):
     q.add_argument("--inner-h", type=int, default=5)
     q.add_argument("--buffer", type=int, default=20)
     q.add_argument("--hidden", type=int, default=512)
+    q.add_argument("--components", type=int, default=1)
     q.add_argument("--lr", type=float, default=1e-3)
     q.add_argument("--lr-h", type=float, default=1e-3)
     q.add_argument("--clamp", type=float, default=20.0)

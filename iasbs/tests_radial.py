@@ -462,34 +462,39 @@ def _controlled_rates(sp, net, x_np, shells, gam, clamp=10.0):
     n, k = sp.n, sp.k
     x = torch.as_tensor(x_np.astype(np.int64))[None, :]
     t = torch.zeros(1, dtype=torch.float64)
-    b, lw_rem, lw_add, occ, emp = shell_logits(net, t, x, clamp=clamp)
+    b, la, lw_rem, lw_add, occ, emp = shell_logits(net, t, x, clamp=clamp)
     lam = (torch.as_tensor(gam, dtype=torch.float64)[None, :] * torch.exp(b))[0]
     occ_np, emp_np = occ[0].numpy(), emp[0].numpy()
     out = {}
     for si, j in enumerate(shells):
-        wr, wa = lw_rem[0, si], lw_add[0, si]
-        Er = log_esp_prefix(wr[None, :], j)
-        Ea = log_esp_prefix(wa[None, :], j)
-        jr = torch.tensor([j])
-        for Ri in itertools.combinations(range(k), j):
-            selr = torch.zeros(1, k, dtype=torch.bool)
-            selr[0, list(Ri)] = True
-            lqr = log_esp_select(wr[None, :], selr, jr, E=Er)
-            for Ai in itertools.combinations(range(n - k), j):
-                sela = torch.zeros(1, n - k, dtype=torch.bool)
-                sela[0, list(Ai)] = True
-                lqa = log_esp_select(wa[None, :], sela, jr, E=Ea)
-                y = x_np.copy()
-                y[occ_np[list(Ri)]] = 0
-                y[emp_np[list(Ai)]] = 1
-                out[(j, tuple(y.tolist()))] = float(
-                    lam[si] * torch.exp(lqr + lqa))
+        for c in range(int(net.comps)):
+            # playbook 24 Option A: the enumeration sums the mixture explicitly
+            wr, wa = lw_rem[0, si, c], lw_add[0, si, c]
+            al = float(torch.exp(la[0, si, c]))
+            Er = log_esp_prefix(wr[None, :], j)
+            Ea = log_esp_prefix(wa[None, :], j)
+            jr = torch.tensor([j])
+            for Ri in itertools.combinations(range(k), j):
+                selr = torch.zeros(1, k, dtype=torch.bool)
+                selr[0, list(Ri)] = True
+                lqr = log_esp_select(wr[None, :], selr, jr, E=Er)
+                for Ai in itertools.combinations(range(n - k), j):
+                    sela = torch.zeros(1, n - k, dtype=torch.bool)
+                    sela[0, list(Ai)] = True
+                    lqa = log_esp_select(wa[None, :], sela, jr, E=Ea)
+                    y = x_np.copy()
+                    y[occ_np[list(Ri)]] = 0
+                    y[emp_np[list(Ai)]] = 1
+                    key = (j, tuple(y.tolist()))
+                    out[key] = out.get(key, 0.0) + al * float(
+                        lam[si] * torch.exp(lqr + lqa))
     return out, lam.numpy()
 
 
-def _random_net(n, shells, seed=0, scale=0.35):
+def _random_net(n, shells, seed=0, scale=0.35, comps=1):
     torch.manual_seed(seed)
-    net = RadialController(n, shells, hidden=64, n_freq=2).to(torch.float32)
+    net = RadialController(n, shells, hidden=64, n_freq=2,
+                           comps=comps).to(torch.float32)
     with torch.no_grad():
         net.net[-1].weight.normal_(0.0, scale)
         net.net[-1].bias.normal_(0.0, scale)
@@ -647,7 +652,7 @@ def test_O():
                                  [[0.4, 0.3, 0.2, 0.1]], gtot)
     dev = "cpu"
     torch.manual_seed(11)
-    net = RadialController(n, shells, hidden=32).to(dev)
+    net = RadialController(n, shells, hidden=32, comps=2).to(dev)
     with torch.no_grad():
         for p in net.net[-1].parameters():
             p.copy_(torch.randn_like(p) * 0.3)
@@ -656,7 +661,7 @@ def test_O():
     x = torch.as_tensor(st[9].astype(np.int64), device=dev)[None, :]
     tt = torch.full((1,), t, dtype=torch.float64, device=dev)
     gam = torch.as_tensor(sch.rates(t), dtype=torch.float64, device=dev)[None, :]
-    b, lw_rem, lw_add, occ, emp = shell_logits(net, tt, x)
+    b, la, lw_rem, lw_add, occ, emp = shell_logits(net, tt, x)
     lam = (gam * torch.exp(b)).squeeze(0)
     logv = torch.as_tensor([math.log(C.shell_size(n, k, j)) for j in shells],
                            dtype=torch.float64, device=dev)
@@ -680,7 +685,7 @@ def test_O():
             jr = torch.full((1,), j, dtype=torch.long, device=dev)
             sr = sel_mask(R, v, occ, n)
             sa = sel_mask(A, v, emp, n)
-            lq = float(log_q_shell(lw_rem, lw_add, sr, sa, jr,
+            lq = float(log_q_shell(la, lw_rem, lw_add, sr, sa, jr,
                                    torch.full((1,), si, dtype=torch.long)))
             tot += math.exp(lq)
             key = (j, tuple(y.tolist()))
@@ -707,7 +712,7 @@ def test_O():
         A = torch.nonzero((x == 0) & (yt == 1))[:, 1][None, :]
         v = torch.ones_like(R, dtype=torch.bool)
         jr = torch.full((1,), j, dtype=torch.long, device=dev)
-        lq = float(log_q_shell(lw_rem, lw_add, sel_mask(R, v, occ, n),
+        lq = float(log_q_shell(la, lw_rem, lw_add, sel_mask(R, v, occ, n),
                                sel_mask(A, v, emp, n), jr,
                                torch.full((1,), si, dtype=torch.long)))
         log_m = float(b[0, si]) + float(logv[si]) + lq
@@ -738,7 +743,7 @@ def test_P():
     st = enumerate_fixed(n, k)
     sp.S = torch.as_tensor(st.astype(np.int64))
     sp.M = len(st)
-    net = _random_net(n, shells, seed=5)
+    net = _random_net(n, shells, seed=5, comps=3)
     gam = torch.as_tensor(np.array(sch.rates(0.0)))
     imap = {tuple(x.tolist()): i for i, x in enumerate(st)}
     U = radial_rate_rows(sp, net, 0.0, torch.arange(sp.M))
@@ -749,29 +754,32 @@ def test_P():
     # it per state would compare GEMM blocking noise (~1e-7) rather than the two
     # rate algorithms.
     tz = torch.zeros(sp.M, dtype=torch.float64)
-    b, lw_rem, lw_add, occ, emp = shell_logits(net, tz, sp.S)
+    b, la, lw_rem, lw_add, occ, emp = shell_logits(net, tz, sp.S)
     lam = gam[None, :] * torch.exp(b)
     worst = 0.0
     for a in (0, 7, 33, 69):
         occ_np, emp_np = occ[a].numpy(), emp[a].numpy()
         ref = np.zeros(sp.M)
         for si, j in enumerate(shells):
-            wr, wa = lw_rem[a, si][None, :], lw_add[a, si][None, :]
-            Er, Ea = log_esp_prefix(wr, j), log_esp_prefix(wa, j)
-            jr = torch.tensor([j])
-            for Ri in itertools.combinations(range(k), j):
-                selr = torch.zeros(1, k, dtype=torch.bool)
-                selr[0, list(Ri)] = True
-                lqr = log_esp_select(wr, selr, jr, E=Er)
-                for Ai in itertools.combinations(range(n - k), j):
-                    sela = torch.zeros(1, n - k, dtype=torch.bool)
-                    sela[0, list(Ai)] = True
-                    lqa = log_esp_select(wa, sela, jr, E=Ea)
-                    y = st[a].astype(np.int64).copy()
-                    y[occ_np[list(Ri)]] = 0
-                    y[emp_np[list(Ai)]] = 1
-                    ref[imap[tuple(y.tolist())]] += float(
-                        lam[a, si] * torch.exp(lqr + lqa))
+            for c in range(int(net.comps)):
+                wr = lw_rem[a, si, c][None, :]
+                wa = lw_add[a, si, c][None, :]
+                al = float(torch.exp(la[a, si, c]))
+                Er, Ea = log_esp_prefix(wr, j), log_esp_prefix(wa, j)
+                jr = torch.tensor([j])
+                for Ri in itertools.combinations(range(k), j):
+                    selr = torch.zeros(1, k, dtype=torch.bool)
+                    selr[0, list(Ri)] = True
+                    lqr = log_esp_select(wr, selr, jr, E=Er)
+                    for Ai in itertools.combinations(range(n - k), j):
+                        sela = torch.zeros(1, n - k, dtype=torch.bool)
+                        sela[0, list(Ai)] = True
+                        lqa = log_esp_select(wa, sela, jr, E=Ea)
+                        y = st[a].astype(np.int64).copy()
+                        y[occ_np[list(Ri)]] = 0
+                        y[emp_np[list(Ai)]] = 1
+                        ref[imap[tuple(y.tolist())]] += al * float(
+                            lam[a, si] * torch.exp(lqr + lqa))
         worst = max(worst, float(np.abs(U[a].numpy() - ref).max() / ref.max()))
     tot = float((U.sum(dim=1) - lam.sum(dim=1)).abs().max())
     report("P dense rate rows vs enumeration",
