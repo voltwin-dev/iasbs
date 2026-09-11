@@ -1,0 +1,43 @@
+{
+  "run": "cuau_metadns_scored",
+  "method": "metadns",
+  "size": [
+    4,
+    4,
+    4
+  ],
+  "N": 64,
+  "k": 32,
+  "temp_K": 500.0,
+  "source": "external/metadns/checkpoints/cuau/metadns/4x4x4_low/samples.pkl",
+  "their_ness": 0.026174384376229504,
+  "their_free_energy": -2.40441632270813,
+  "their_field_h": 0.0,
+  "their_cv_type": "composition",
+  "their_n_steps": 20000,
+  "n_samples": 10000,
+  "energy_affine_fit_slope": 1.0000000153855244,
+  "energy_affine_fit_h_eff_eV": -0.005327746700253454,
+  "energy_affine_fit_const_eV": -0.16767348483677108,
+  "energy_affine_residual_rel": 8.015929355653117e-08,
+  "energy_crosscheck_pass": true,
+  "violation_rate": 0.8117,
+  "violation_rate_weighted": 0.21358688545554783,
+  "target_sector_mass": 0.7864131145444522,
+  "rejection_overhead": 1.271596291446987,
+  "n_in_sector": 1883,
+  "ess_all_weighted": 2603.1219121176614,
+  "ess_in_sector_weighted": 1843.0849672478264,
+  "cond_E_per_N_meV": -36.15585615123464,
+  "cond_Qmax": 0.9994042986861662,
+  "cond_E_per_N_meV_unweighted": -35.909292176121646,
+  "cond_Qmax_unweighted": 0.996680828465215,
+  "reference": {
+    "E_per_N_meV": -36.11535858288738,
+    "E_per_N_meV_sd": 0.008741915531498667,
+    "Qmax": 0.9990375,
+    "Qmax_sd": 7.1004694680468e-05
+  },
+  "dE_per_N_meV": 0.04049756834725571,
+  "dQmax": 0.00036679868616618094
+}
