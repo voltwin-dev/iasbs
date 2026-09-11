@@ -1591,9 +1591,12 @@ corrector head entirely (`--inner-h 0`, half the parameters).
 | 1000 | exact_floor | 0.0002 | 0.0082 | 0.0630 | 0.0001 | 405.6946 | 14.4563 | 0 |
 | 1000 | learned | 0.0113 | 0.3473 | 1.7858 | 0.0018 | 412.8590 | 16.0715 | 0 |
 | 1000 | analytic | 0.0135 | 0.2917 | 1.8098 | 0.0018 | 415.2987 | 12.6245 | 0 |
+| 1000 | analytic s1 | 0.0077 | 0.2507 | 1.5810 | 0.0016 | 411.5978 | 12.8533 | 0 |
 
-Exact-target `E[max_i eta_i]`: 6.7480 (m = 32), 9.7659 (m = 128), 14.4692
-(m = 1000).  `json/results_weakness3_table.json`
+Exact-target `E[max_i eta_i]`: 6.7604 (m = 32), 9.7792 (m = 128), 14.4343
+(m = 1000).  `json/results_weakness3_table.json`, and
+`json/results_weakness3_table_m1000_analytic_s1.json` for the second m = 1000
+analytic seed (same exact draw, same 256 steps, 4000 samples).
 
 ## 9.3 Learned corrector vs analytic, held-out target states
 
