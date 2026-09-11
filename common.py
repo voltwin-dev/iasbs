@@ -170,6 +170,112 @@ def binary_orbit_kernel(n, k, Gamma):
     return kappa
 
 
+# ---- 4.5  radial Johnson kernel (arbitrary shell mixtures) ------------------
+#
+# The single-swap reference above is the j = 1 member of a family indexed by
+# Johnson shell.  For each j the shell averaging operator is
+#
+#     (K_j f)(S) = (1 / v_j) sum_{d(S,Y) = j} f(Y),      v_j = C(k,j) C(n-k,j),
+#
+# and the reference generator is any nonnegative mixture L = sum_j g_j (K_j - I).
+# Every K_j lies in the Bose-Mesner algebra of the Johnson scheme, so the K_j
+# commute with each other and with every coordinate permutation; the time
+# ordered exponential therefore collapses and the whole family is exactly
+# reducible to the (D+1)-state distance chain regardless of how large v_j is.
+
+
+def shell_size(n, k, j):
+    """``v_j = C(k,j) C(n-k,j)``, the number of states at Johnson distance j."""
+    if j < 0 or j > min(k, n - k):
+        return 0
+    return math.comb(k, j) * math.comb(n - k, j)
+
+
+def _comb0(n, r):
+    return math.comb(n, r) if 0 <= r <= n else 0
+
+
+def shell_orbit_matrix(n, k, j):
+    """``B_j``: one uniform distance-``j`` jump seen through ``d(S0, .)``.
+
+    With ``a = d(S0, Y)`` the coordinates split into ``S0 & Y`` (size ``k-a``),
+    ``Y \\ S0`` (``a``), ``S0 \\ Y`` (``a``) and the outside block (``n-k-a``).
+    A distance-``j`` move drops ``r`` occupied sites out of ``S0 & Y`` and
+    ``j-r`` out of ``Y \\ S0``, then fills ``s`` sites of ``S0 \\ Y`` and
+    ``j-s`` outside ones, so the new distance is ``b = a + r - s``.
+    """
+    D = min(k, n - k)
+    if not (1 <= j <= D):
+        raise ValueError(f"shell {j} outside 1..{D} for (n,k)=({n},{k})")
+    vj = shell_size(n, k, j)
+    B = np.zeros((D + 1, D + 1), dtype=np.float64)
+    for a in range(D + 1):
+        for r in range(j + 1):
+            c_rem = _comb0(k - a, r) * _comb0(a, j - r)
+            if c_rem == 0:
+                continue
+            for s in range(j + 1):
+                b = a + r - s
+                if 0 <= b <= D:
+                    B[a, b] += c_rem * _comb0(a, s) * _comb0(n - k - a, j - s) / vj
+    if not np.allclose(B.sum(axis=1), 1.0, atol=1e-12, rtol=0.0):
+        raise AssertionError(f"shell orbit matrix j={j} is not row stochastic")
+    return B
+
+
+_SHELL_ORBIT_CACHE = {}
+
+
+def shell_orbit_matrix_cached(n, k, j):
+    """Memoized :func:`shell_orbit_matrix`; the result must not be mutated."""
+    key = (int(n), int(k), int(j))
+    B = _SHELL_ORBIT_CACHE.get(key)
+    if B is None:
+        B = shell_orbit_matrix(*key)
+        B.flags.writeable = False
+        _SHELL_ORBIT_CACHE[key] = B
+    return B
+
+
+def radial_orbit_kernel(n, k, clocks):
+    """``(q, kappa)`` for ``L = sum_j gamma_j (K_j - I)`` over one interval.
+
+    ``clocks`` maps shell ``j`` to the *integrated* clock
+    ``Gamma_j = int gamma_j(u) du`` over the interval.  ``q[a]`` is the
+    probability that the endpoint lies in orbit ``a`` and ``kappa[a] = q[a]/v_a``
+    is the per-state reference kernel, which is what the terminal label ratios
+    and the bridge weights consume.
+
+    Passing ``{1: Gamma}`` reproduces :func:`binary_orbit_kernel` exactly;
+    ``tests_radial.py`` asserts this.
+    """
+    D = min(k, n - k)
+    G = np.zeros((D + 1, D + 1), dtype=np.float64)
+    eye = np.eye(D + 1)
+    for j, Gam in clocks.items():
+        Gam = float(Gam)
+        if Gam < 0.0:
+            raise ValueError(f"negative integrated clock for shell {j}: {Gam}")
+        if Gam == 0.0:
+            continue
+        G += Gam * (shell_orbit_matrix_cached(n, k, int(j)) - eye)
+
+    q = np.zeros(D + 1, dtype=np.float64)
+    q[0] = 1.0
+    q = q @ expm(G)
+
+    if q.min() < -1e-12:
+        raise FloatingPointError(f"negative orbit probability {q.min():.3e}")
+    q = np.maximum(q, 0.0)
+    tot = q.sum()
+    if not np.isfinite(tot) or tot <= 0.0:
+        raise FloatingPointError("radial orbit law did not normalize")
+    q = q / tot
+
+    v = np.array([shell_size(n, k, a) for a in range(D + 1)], dtype=np.float64)
+    return q, q / v
+
+
 def binary_orbit_distance(x0, x):
     k = int(np.sum(x0))
     overlap = int(np.sum(np.asarray(x0) * np.asarray(x)))
