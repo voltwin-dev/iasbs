@@ -25,6 +25,13 @@ import torch
 from scipy.linalg import expm
 from scipy.special import eval_legendre
 
+# ``np.trapz`` was renamed ``np.trapezoid`` in NumPy 2.0.  Several modules call
+# the new name; on a NumPy 1.x install that is an AttributeError raised only
+# when the code path is reached (``stiefel.py verify`` crashed this way).
+# Every module that uses it also imports this one, so aliasing here is enough.
+if not hasattr(np, "trapezoid"):                      # NumPy < 2.0
+    np.trapezoid = np.trapz
+
 # ----------------------------------------------------------------------------
 # 3.0  Repository layout
 # ----------------------------------------------------------------------------

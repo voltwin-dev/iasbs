@@ -1147,6 +1147,122 @@ Figures: `fig5_stiefel` (energy curves, step refinement), `fig7_stiefel_frames`
 (96 raw frames per sampler + second moment), `fig/table_stiefel.md` (generated
 comparison table).
 
+## 5.7 Full frame-law accuracy, beta = 1, 5 seeds per method
+
+Frame-sensitive statistics of `X` itself, against the 100,000-frame MCMC
+reference `ckpt/stiefel_frame_s5_b1_mcmc.pt`. Sections 5.6.1 / 5.6.2 score the
+energy law only; this section scores the law of the frame. Joint metric is
+unbiased MMD^2 on `vec(X)` in R^8 with kernel `exp(-|a-b|^2 / (2 sigma^2))`,
+`sigma^2 = 3.8249` (median heuristic on the reference), 4000 vs 4000 frames,
+8 draws per seed.
+
+R-ASBS checkpoints store `X` in the R-ASBS basis (`X_r = U X`); every R-ASBS row
+below is mapped back by `U^T` first.
+
+| method | steps | E[tr(C^T X)] mean +- sd | MMD^2 vs MCMC mean +- sd | max entry err of E[X] | \|Cov - Cov_ref\|_F |
+|---|---:|---:|---:|---:|---:|
+| MCMC ref | — | 0.495298 | — | — | — |
+| IASBS | 199 | 0.50720 +- 0.00432 | 4.00e-05 +- 6.86e-05 | 0.00767 | 0.0308 |
+| IASBS600 | 199 | 0.50548 +- 0.00546 | 3.77e-05 +- 4.39e-05 | 0.00773 | 0.0399 |
+| R-ASBS | 199 | 0.52744 +- 0.00631 | 4.594e-04 +- 1.75e-04 | 0.02245 | 0.0599 |
+| R-ASBS | 398 | 0.52735 +- 0.00736 | 4.626e-04 +- 2.38e-04 | 0.02292 | 0.0584 |
+| R-ASBS | 796 | 0.52886 +- 0.01003 | 5.014e-04 +- 2.28e-04 | 0.02503 | 0.0582 |
+
+Noise floor, disjoint halves of the MCMC reference, 16 draws:
+MMD^2 = 6.94e-06 +- 7.37e-05.
+
+`E[X]`, reference vs IASBS(199) vs R-ASBS(796), row-major 4x2:
+
+| entry | MCMC ref | IASBS | R-ASBS |
+|---|---:|---:|---:|
+| (0,0) | 0.27047 | 0.27815 | 0.29550 |
+| (0,1) | -0.07015 | -0.07328 | -0.07518 |
+| (1,1) | 0.28200 | 0.28845 | 0.29260 |
+| (2,0) | -0.06012 | -0.06112 | -0.06938 |
+| (3,0) | 0.01862 | 0.01660 | 0.02556 |
+
+Var of `vec(X)` coordinates 1, 5, 7 (diag of the 8x8 covariance):
+
+| coord | MCMC ref | IASBS | IASBS600 | R-ASBS 796 |
+|---|---:|---:|---:|---:|
+| 1 | 0.35457 | 0.34217 | 0.33848 | 0.32740 |
+| 5 | 0.15436 | 0.16053 | 0.16360 | 0.17314 |
+| 7 | 0.08390 | 0.09181 | 0.09491 | 0.09866 |
+
+```bash
+# json/results_frame_law_audit.json (per-seed values + full 8x8 covariances)
+```
+
+## 5.8 Reference-bridge audit
+
+`iasbs/_bridge_audit.py`. Production resolutions: `steps = 128`, fibre quadrature
+`nq = 64`, fibre sampling grid `nfib = 512`, S^3 table `ntheta = 16385`.
+
+Tangent-to-skew map `Omega_X(S) = S X^T - X S^T - X (X^T S) X^T` (`skew_lift`),
+512 random tangent vectors at random frames:
+
+| quantity | value |
+|---|---:|
+| tangency residual \|X^T S + S^T X\| | 4.89e-15 |
+| max \|Omega X - S\| | 3.55e-15 |
+| max \|Omega + Omega^T\| | 3.03e-15 |
+| control: max \|Omega X - D\|, D non-tangent | 5.646 |
+
+The same numbers appear in `iasbs/stiefel.py verify` (gate D0).
+
+Bridge correctness by the mixture identity: draw `Y` from the terminal law of
+the unconditioned reference process, run the bridge to `Y`, compare against the
+unconditioned marginal at intermediate times. 8000 paths, MMD^2 on 2000 vs 2000,
+8 draws, median-heuristic bandwidth per time.
+
+| manifold | t | MMD^2 | split-half floor | floor sd |
+|---|---:|---:|---:|---:|
+| S^2 | 0.25 | -1.91e-05 | -3.16e-05 | 1.99e-04 |
+| S^2 | 0.50 | -7.78e-05 | 2.05e-05 | 2.80e-04 |
+| S^2 | 0.75 | 1.39e-04 | -3.79e-05 | 3.11e-04 |
+| St(4,2) | 0.25 | 3.38e-05 | 4.03e-05 | 1.91e-04 |
+| St(4,2) | 0.50 | 5.38e-05 | 7.31e-05 | 1.74e-04 |
+| St(4,2) | 0.75 | -1.25e-05 | 1.33e-05 | 1.50e-04 |
+
+St(4,2) bridge endpoint: `max |bp[0] - E0| = 0.0`.
+
+Production bridge (128 steps) against an 8x finer bridge (1024 steps) on the
+same terminal points, t = 0.5: MMD^2 = -5.67e-05, floor 1.32e-05.
+
+Resolution sensitivity. Fibre quadrature order for `log p^St`, against
+`nq = 512`, 4000 frames:
+
+| nq | max \|dlog_pst\| | mean \|dlog_pst\| |
+|---:|---:|---:|
+| 16 | 1.97e-11 | 1.82e-12 |
+| 32 | 7.11e-15 | 2.38e-15 |
+| 64 | 6.66e-15 | 2.21e-15 |
+| 128 | 1.78e-14 | 6.18e-15 |
+| 256 | 7.11e-15 | 2.30e-15 |
+
+Fibre sampling grid, law of the lifted pair `(a, b)` against `nfib = 4096`,
+split-half floor -1.77e-05:
+
+| nfib | MMD^2 vs 4096 |
+|---:|---:|
+| 64 | -2.17e-04 |
+| 128 | 1.81e-04 |
+| 512 | -1.42e-05 |
+| 2048 | 2.02e-04 |
+
+S^3 table resolution against `ntheta = 65537`, 4001 points:
+
+| ntheta | max \|dlogp\| | max \|d dlogp/du\| |
+|---:|---:|---:|
+| 4097 | 7.09e-07 | 3.55e-06 |
+| 16385 | 4.15e-08 | 1.98e-07 |
+| 32769 | 1.14e-08 | 5.84e-08 |
+
+```bash
+# json/results_bridge_audit.json
+PYTHONPATH=.:iasbs python iasbs/stiefel.py verify
+```
+
 ---
 
 # 6. Earthquakes — S^2, real data
