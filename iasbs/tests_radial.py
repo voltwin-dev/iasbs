@@ -30,9 +30,11 @@ import common as C  # noqa: E402
 from iasbs.cuau import CuAuSpace  # noqa: E402
 from iasbs.cuau_radial import (PiecewiseShellSchedule, RadialController,  # noqa: E402
                                apply_masks, apply_pairs, esp_sample,
-                               log_esp_prefix, log_esp_select, named_schedule,
+                               log_esp_prefix, log_esp_select, log_q_shell,
+                               named_schedule,
                                occupied_empty, sample_uniform_shell,
-                               shell_logits, shell_move, simulate_radial)
+                               sel_mask, shell_logits, shell_move,
+                               simulate_radial)
 
 FAIL = []
 PASS = []
@@ -628,9 +630,96 @@ def test_N():
            f"{sum(ok)}/{len(ok)} checks; shell_move == apply_pairs")
 
 
+def test_O():
+    """The training code path itself, against the enumerated Bregman loss.
+
+    Test L validated the *formula*; this validates the *implementation* used by
+    ``cmd_train``: ``sel_mask`` -> ``log_q_shell`` -> ``log m = b + log v + log q``
+    and the sampled estimator assembled exactly as in the inner loop.
+    """
+    n, k = 8, 4
+    shells = (1, 2, 3, 4)
+    gtot = 2.3
+    sch = PiecewiseShellSchedule(shells, [0.0, 1.0],
+                                 [[0.4, 0.3, 0.2, 0.1]], gtot)
+    dev = "cpu"
+    torch.manual_seed(11)
+    net = RadialController(n, shells, hidden=32).to(dev)
+    with torch.no_grad():
+        for p in net.net[-1].parameters():
+            p.copy_(torch.randn_like(p) * 0.3)
+    t = 0.37
+    st = enumerate_fixed(n, k)
+    x = torch.as_tensor(st[9].astype(np.int64), device=dev)[None, :]
+    tt = torch.full((1,), t, dtype=torch.float64, device=dev)
+    gam = torch.as_tensor(sch.rates(t), dtype=torch.float64, device=dev)[None, :]
+    b, lw_rem, lw_add, occ, emp = shell_logits(net, tt, x)
+    lam = (gam * torch.exp(b)).squeeze(0)
+    logv = torch.as_tensor([math.log(C.shell_size(n, k, j)) for j in shells],
+                           dtype=torch.float64, device=dev)
+
+    # exact enumeration of q_j and of the loss
+    xs = x[0].numpy()
+    lab = {}
+    rng = np.random.default_rng(3)
+    exact = float(lam.sum())
+    qsum = {}
+    for si, j in enumerate(shells):
+        tot = 0.0
+        acc = 0.0
+        for y in st:
+            if int(k - (xs * y).sum()) != j:
+                continue
+            yt = torch.as_tensor(y.astype(np.int64), device=dev)[None, :]
+            R = torch.nonzero((x == 1) & (yt == 0))[:, 1][None, :]
+            A = torch.nonzero((x == 0) & (yt == 1))[:, 1][None, :]
+            v = torch.ones_like(R, dtype=torch.bool)
+            jr = torch.full((1,), j, dtype=torch.long, device=dev)
+            sr = sel_mask(R, v, occ, n)
+            sa = sel_mask(A, v, emp, n)
+            lq = float(log_q_shell(lw_rem, lw_add, sr, sa, jr,
+                                   torch.full((1,), si, dtype=torch.long)))
+            tot += math.exp(lq)
+            key = (j, tuple(y.tolist()))
+            lab[key] = float(np.exp(rng.normal(0.0, 0.3)))
+            log_m = float(b[0, si]) + float(logv[si]) + lq
+            r = float(gam[0, si]) / C.shell_size(n, k, j)
+            acc += r * lab[key] * log_m
+        qsum[j] = tot
+        exact -= acc
+    qerr = max(abs(v - 1.0) for v in qsum.values())
+
+    # sampled estimator, assembled as in cmd_train
+    NS = 300_000
+    pj = (gam[0] / gam[0].sum()).numpy()
+    sis = rng.choice(len(shells), NS, p=pj)
+    by_j = {j: [y for y in st if int(k - (xs * y).sum()) == j] for j in shells}
+    acc = 0.0
+    lam_sum = float(lam.sum())
+    for si in sis:
+        j = shells[si]
+        y = by_j[j][int(rng.integers(len(by_j[j])))]
+        yt = torch.as_tensor(y.astype(np.int64), device=dev)[None, :]
+        R = torch.nonzero((x == 1) & (yt == 0))[:, 1][None, :]
+        A = torch.nonzero((x == 0) & (yt == 1))[:, 1][None, :]
+        v = torch.ones_like(R, dtype=torch.bool)
+        jr = torch.full((1,), j, dtype=torch.long, device=dev)
+        lq = float(log_q_shell(lw_rem, lw_add, sel_mask(R, v, occ, n),
+                               sel_mask(A, v, emp, n), jr,
+                               torch.full((1,), si, dtype=torch.long)))
+        log_m = float(b[0, si]) + float(logv[si]) + lq
+        acc += lam_sum - gtot * lab[(j, tuple(y.tolist()))] * log_m
+    mc = acc / NS
+    rel = abs(mc - exact) / max(abs(exact), 1.0)
+    report("O train-path loss vs enumeration",
+           qerr < 1e-12 and rel < 5e-3,
+           f"sum_y q_j err {qerr:.3e}  exact {exact:.6f}  MC {mc:.6f}  "
+           f"rel {rel:.2e}")
+
+
 def main():
     for f in (test_A, test_B, test_C, test_D, test_E, test_F, test_G, test_G2,
-              test_H, test_I, test_J, test_K, test_L, test_M, test_N):
+              test_H, test_I, test_J, test_K, test_L, test_M, test_N, test_O):
         try:
             f()
         except Exception as exc:  # noqa: BLE001

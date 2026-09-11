@@ -50,6 +50,7 @@ from iasbs.cuau import (KB_EV_PER_K, CuAuSpace, TorchCuAuEnergy,  # noqa: E402
                         sampled_observables, symmetry_perms)
 
 NEG = float("-inf")
+LOG_ZERO = -1.0e30
 
 
 # ============================================================================
@@ -246,14 +247,21 @@ def log_esp_prefix(logw, jmax):
     B, m = logw.shape
     if jmax < 0 or jmax > m:
         raise ValueError(f"jmax={jmax} outside 0..{m}")
-    E = logw.new_full((B, m + 1, jmax + 1), NEG)
-    E[:, 0, 0] = 0.0
-    pad = logw.new_full((B, 1), NEG)
+    # written out-of-place: the same DP is differentiated through in training,
+    # where in-place slice writes would break autograd versioning.
+    # LOG_ZERO rather than -inf: cells with r > i are structurally zero and
+    # ``logaddexp(-inf, -inf)`` has a NaN derivative, which would poison the
+    # gradient of every site logit even though those cells carry no mass.
+    # exp(LOG_ZERO - anything finite) underflows to 0 in float64, so the
+    # forward values and the gradients of the reachable cells are unchanged.
+    rows = [torch.cat([logw.new_zeros(B, 1),
+                       logw.new_full((B, jmax), LOG_ZERO)], dim=1)]
+    pad = logw.new_full((B, 1), LOG_ZERO)
     for i in range(1, m + 1):
-        prev = E[:, i - 1, :]
+        prev = rows[-1]
         take = torch.cat([pad, prev[:, :-1]], dim=1) + logw[:, i - 1:i]
-        E[:, i, :] = torch.logaddexp(prev, take)
-    return E
+        rows.append(torch.logaddexp(prev, take))
+    return torch.stack(rows, dim=1)
 
 
 def log_esp_select(logw, sel, jrow, E=None):
@@ -814,6 +822,228 @@ def cmd_label_diag(args):
     return 0
 
 
+def sel_mask(sites, valid, cols, n):
+    """Boolean mask over ``cols`` marking the padded site set ``sites``."""
+    B = cols.shape[0]
+    ind = torch.zeros(B, n + 1, dtype=torch.bool, device=cols.device)
+    s = torch.where(valid, sites, torch.full_like(sites, n))
+    ind.scatter_(1, s, torch.ones_like(s, dtype=torch.bool))
+    return ind[:, :n].gather(1, cols)
+
+
+def cmd_train(args):
+    """Radial IASBS with the sampled Poisson-Bregman loss (playbook 23, 48).
+
+    Dirac AS at ``x0`` (playbook 13): the source is a point mass, so there is no
+    corrector network -- ``net_h`` and its optimizer disappear entirely and the
+    whole reference-side label is the ``log kappa`` ratio already carried by
+    :func:`terminal_log_label_shell`.
+
+    The loss is the one-edge unbiased estimator
+
+        L(x) = sum_j lambda_j(x,t) - gamma_tot * Lambda_J(Y,x) log m_J(Y,x),
+
+    with ``J ~ gamma_j(t)/gamma_tot`` and ``Y`` uniform on the reference shell
+    ``N_J(x)``.  The positive term is exact -- it never touches ``v_j`` -- and
+    only the label term is Monte Carlo, which is what makes ``j = 16`` (a shell
+    of 3.6e17 states) representable at all.
+    """
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    sp, tables = build_space(args)
+    n, k = sp.n, sp.k
+    shells = tuple(int(j) for j in args.shells)
+    steps = args.steps
+
+    ref = None
+    if args.ref_json and os.path.exists(args.ref_json):
+        with open(args.ref_json) as f:
+            ref = json.load(f)
+        if list(ref.get("size", [])) != list(sp.size):
+            raise RuntimeError(f"{args.ref_json} is for size {ref.get('size')}"
+                               f", not {list(sp.size)}")
+        print(f"  PT reference: <E>/N {ref['E_per_N_meV']:.4f} +/- "
+              f"{ref['E_per_N_meV_sd']:.4f} meV   Qmax {ref['Qmax']:.4f} "
+              f"+/- {ref['Qmax_sd']:.4f}")
+
+    if args.pairing == "ce":
+        if not args.pool:
+            raise RuntimeError("--pairing ce needs --pool for the cost table")
+        Xp, _ = load_pool(args.pool, k)
+        sp.ce_cost = ce_pair_cost(
+            sp, Xp, n_sub=args.ce_sub, seed=args.seed,
+            cache=f"data/cuau/pair_cost_{n}_{int(sp.temp_k)}K.npz")
+
+    net = RadialController(n, shells, hidden=args.hidden).to(sp.device)
+    n_par = sum(p.numel() for p in net.parameters())
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    sch = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=args.iters * args.inner, eta_min=args.lr * 0.05)
+    gen = torch.Generator(device=sp.device).manual_seed(args.seed + 1234)
+    log_kap0, log_kap1 = sp.bridge_kernels(steps)
+
+    dt = 1.0 / steps
+    gam_grid = torch.as_tensor(
+        np.array([sp.schedule.rates(s * dt) for s in range(steps)]),
+        dtype=torch.float64, device=sp.device)                 # (steps, S)
+    logv = torch.as_tensor([math.log(C.shell_size(n, k, j)) for j in shells],
+                           dtype=torch.float64, device=sp.device)
+    sh_t = torch.as_tensor(shells, device=sp.device)
+
+    print(f"CuAu radial train  N={n} k={k} T={sp.temp_k}K  "
+          f"schedule {args.schedule} gamma_tot={args.gamma_total} "
+          f"shells {shells}  steps={steps}  params={n_par}  "
+          f"source=Dirac(x0)  pairing={args.pairing}")
+
+    buf, hist = [], []
+    t_start = time.time()
+    loss = torch.zeros(())
+    n_skip = 0
+    for it in range(1, args.iters + 1):
+        sp.energy.tag = "train"
+        st = {}
+        X1n = simulate_radial(sp, net, args.batch, steps, generator=gen,
+                              stats=st)
+        with torch.no_grad():
+            E1n = sp.energy.energy_torch(X1n).to(torch.float64)
+        buf.append((X1n.detach(), E1n.detach()))
+        if len(buf) > args.buffer:
+            buf.pop(0)
+        pool1 = torch.cat([b[0] for b in buf], 0)
+        poole = torch.cat([b[1] for b in buf], 0)
+
+        for _ in range(args.inner):
+            sel = torch.randint(len(pool1), (args.mb,), device=sp.device,
+                                generator=gen)
+            X1, E1 = pool1[sel], poole[sel]
+            ti = torch.randint(steps, (args.mb,), device=sp.device,
+                               generator=gen)
+            tt = ti.to(torch.float64) * dt
+            with torch.no_grad():
+                Xt = sample_bridge_direct(sp, X1, ti, log_kap0, log_kap1,
+                                          generator=gen)
+            gam = gam_grid[ti]                                  # (B, S)
+            gtot = gam.sum(dim=1)
+            with torch.no_grad():
+                si = torch.multinomial(gam, 1, generator=gen).squeeze(1)
+                jrow = sh_t[si]
+                R, A, valid = sample_uniform_shell(Xt, jrow, generator=gen)
+                Ag = A
+                if args.pairing == "geometry":
+                    Ag = pair_geometry(R, A, valid, sp.dist2)
+                elif args.pairing == "ce":
+                    Ag = pair_geometry(R, A, valid, sp.ce_cost)
+                lab, _ = terminal_log_label_shell(sp, X1, E1, R, Ag, valid)
+                Lam = torch.exp(lab.clamp(-args.clamp, args.clamp))
+
+            b, lw_rem, lw_add, occ, emp = shell_logits(net, tt, Xt)
+            lam = gam * torch.exp(b)                            # (B, S)
+            sel_r = sel_mask(R, valid, occ, n)
+            sel_a = sel_mask(A, valid, emp, n)
+            if not bool((sel_r.sum(1) == jrow).all()
+                        and (sel_a.sum(1) == jrow).all()):
+                raise RuntimeError("shell selection mask lost cardinality")
+            ar = torch.arange(args.mb, device=sp.device)
+            log_m = (b[ar, si] + logv[si]
+                     + log_q_shell(lw_rem, lw_add, sel_r, sel_a, jrow, si))
+            loss = (lam.sum(dim=1) - gtot * Lam * log_m).mean()
+            opt.zero_grad(set_to_none=True)
+            if not bool(torch.isfinite(loss)):
+                n_skip += 1
+                continue
+            loss.backward()
+            gn = torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+            if not bool(torch.isfinite(gn)):
+                # numerical guard only: a non-finite gradient is discarded and
+                # counted, never silently rescaled into a different objective.
+                opt.zero_grad(set_to_none=True)
+                n_skip += 1
+                continue
+            opt.step()
+            sch.step()
+
+        if it % args.eval_every == 0 or it == args.iters:
+            sp.energy.tag = "eval"
+            se = {}
+            with torch.no_grad():
+                Xe = simulate_radial(sp, net, args.n_eval, steps,
+                                     generator=gen, stats=se)
+                obs = sampled_observables(sp, Xe, sp.temp_k)
+            obs["iter"] = it
+            obs["loss"] = float(loss)
+            obs["secs"] = round(time.time() - t_start, 1)
+            obs["violations"] = int((Xe.sum(1) != k).sum())
+            obs["events_per_path"] = se["events"] / args.n_eval
+            obs["max_two_event_prob"] = se["max_two_event_prob"]
+            obs["train_events_per_path"] = st["events"] / args.batch
+            obs["skipped_steps"] = n_skip
+            if ref is not None:
+                obs["dE_per_N_meV"] = abs(obs["E_per_N_meV"]
+                                          - ref["E_per_N_meV"])
+                obs["dQmax"] = abs(obs["Qmax"] - ref["Qmax"])
+            hist.append(obs)
+            msg = (f"  it {it:5d}  loss {float(loss):12.4f}  "
+                   f"<E>/N {obs['E_per_N_meV']:9.4f} meV  "
+                   f"Qmax {obs['Qmax']:.4f}  "
+                   f"ev/path {obs['events_per_path']:.1f}")
+            if ref is not None:
+                msg += (f"  dE {obs['dE_per_N_meV']:7.4f}  "
+                        f"dQ {obs['dQmax']:.4f}")
+            print(msg + f"  {obs['secs']:.0f}s", flush=True)
+            sp.energy.tag = "train"
+
+    sp.energy.tag = "final"
+    sf = {}
+    with torch.no_grad():
+        Xs = simulate_radial(sp, net, args.n_samples, steps, generator=gen,
+                             stats=sf)
+        fin = sampled_observables(sp, Xs, sp.temp_k)
+    viol = int((Xs.sum(1) != k).sum())
+    res = {"provenance": provenance(), "config": arg_config(args),
+           "params": n_par, "history": hist, "final": fin,
+           "violations": viol, "reference": ref,
+           "schedule_describe": sp.schedule.describe(),
+           "schedule": sp.schedule.as_dict(),
+           "events_per_path": sf["events"] / args.n_samples,
+           "max_two_event_prob": sf["max_two_event_prob"],
+           "skipped_steps": n_skip,
+           "total_steps": args.iters * args.inner,
+           "energy_calls": sp.energy.report()}
+    if ref is not None:
+        res["dE_per_N_meV"] = abs(fin["E_per_N_meV"] - ref["E_per_N_meV"])
+        res["dQmax"] = abs(fin["Qmax"] - ref["Qmax"])
+    os.makedirs("json", exist_ok=True)
+    out = args.out or (f"json/results_cuau_radial_{n}_{int(sp.temp_k)}K_"
+                       f"{args.schedule}_g{int(args.gamma_total)}_"
+                       f"s{args.seed}.json")
+    with open(out, "w") as f:
+        json.dump(res, f, indent=2, default=str)
+    print(f"\n  final <E>/N {fin['E_per_N_meV']:.4f} +/- "
+          f"{fin['E_per_N_meV_sem']:.4f} meV/atom   "
+          f"Qmax {fin['Qmax']:.4f} +/- {fin['Qmax_sem']:.4f}")
+    print(f"  wrote {out}")
+    if args.ckpt_dir:
+        pth = C.save_ckpt(args.ckpt_dir,
+                          args.tag or f"cuaurad{n}_{args.schedule}_s{args.seed}",
+                          nets={"net": net},
+                          samples=Xs[:65536].to(torch.int8),
+                          extra={"config": arg_config(args)})
+        print(f"  ckpt -> {pth}")
+    print("\n=== GATES ===")
+    print(f"M1  constraint violations 0 : {'PASS' if viol == 0 else 'FAIL'} "
+          f"({viol})")
+    ok = viol == 0
+    if ref is not None:
+        e_ok = res["dE_per_N_meV"] <= args.e_gate
+        q_ok = res["dQmax"] <= args.q_gate
+        print(f"M2  |d<E>/N| <= {args.e_gate} meV : "
+              f"{'PASS' if e_ok else 'FAIL'} ({res['dE_per_N_meV']:.4f})")
+        print(f"M3  |dQmax|   <= {args.q_gate}   : "
+              f"{'PASS' if q_ok else 'FAIL'} ({res['dQmax']:.4f})")
+        ok = ok and e_ok and q_ok
+    return 0 if ok else 1
+
+
 def main(argv=None):
     p = argparse.ArgumentParser("iasbs.cuau_radial")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -851,6 +1081,32 @@ def main(argv=None):
     d.add_argument("--ce-sub", type=int, default=4096,
                    help="pool subsample for the CE pair-cost table")
     d.set_defaults(func=cmd_label_diag)
+
+    t = sub.add_parser("train", help="playbook 23/48 radial IASBS training")
+    common_args(t)
+    t.add_argument("--steps", type=int, default=512)
+    t.add_argument("--iters", type=int, default=8000)
+    t.add_argument("--batch", type=int, default=256)
+    t.add_argument("--mb", type=int, default=512)
+    t.add_argument("--inner", type=int, default=5)
+    t.add_argument("--buffer", type=int, default=20)
+    t.add_argument("--hidden", type=int, default=512)
+    t.add_argument("--lr", type=float, default=1e-3)
+    t.add_argument("--clamp", type=float, default=20.0)
+    t.add_argument("--pairing", choices=["random", "index", "geometry", "ce"],
+                   default="ce")
+    t.add_argument("--pool", type=str, default="",
+                   help="npz PT pool used only to build the CE pair-cost table")
+    t.add_argument("--ce-sub", type=int, default=4096)
+    t.add_argument("--eval-every", type=int, default=100)
+    t.add_argument("--n-eval", type=int, default=8192)
+    t.add_argument("--n-samples", type=int, default=200000)
+    t.add_argument("--ref-json", type=str, default="")
+    t.add_argument("--e-gate", type=float, default=0.5)
+    t.add_argument("--q-gate", type=float, default=0.02)
+    t.add_argument("--ckpt-dir", type=str, default="ckpt")
+    t.add_argument("--tag", type=str, default="")
+    t.set_defaults(func=cmd_train)
 
     a = p.parse_args(argv)
     return a.func(a)
