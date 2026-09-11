@@ -121,7 +121,7 @@ class TinySpace:
 
 def test_A():
     worst = 0
-    for n, k in ((6, 3), (8, 4), (7, 3)):
+    for n, k in ((6, 3), (8, 4), (7, 3), (10, 5)):
         st = enumerate_fixed(n, k)
         D = min(k, n - k)
         for x in st:
@@ -135,7 +135,7 @@ def test_A():
 
 def test_B():
     worst = 0.0
-    for n, k in ((6, 3), (8, 4), (7, 3)):
+    for n, k in ((6, 3), (8, 4), (7, 3), (10, 5)):
         st = enumerate_fixed(n, k)
         D = min(k, n - k)
         S0 = st[0]
@@ -159,7 +159,7 @@ def test_B():
 def test_C():
     rng = np.random.default_rng(0)
     worst_full, worst_red = 0.0, 0.0
-    for n, k in ((6, 3), (8, 4)):
+    for n, k in ((6, 3), (8, 4), (10, 5)):
         st = enumerate_fixed(n, k)
         idx = {tuple(x.tolist()): i for i, x in enumerate(st)}
         D = min(k, n - k)

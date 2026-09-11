@@ -172,6 +172,7 @@ def run_pt(args):
     bflat = beta.repeat(C)                                    # (C*R,)
     wid = torch.arange(R, device=dev).repeat(C)               # walker at slot
     slot_hist = []
+    x_pool = []
     e_series, q_series = [], []
     acc_move = torch.zeros((), dtype=torch.float64, device=dev)
     n_move = 0
@@ -245,6 +246,8 @@ def run_pt(args):
             for c in range(C):
                 sl[c, wcpu[c]] = np.arange(R)
             slot_hist.append(sl)
+            if getattr(args, "save_samples", ""):
+                x_pool.append(xt.to(torch.int8).cpu().numpy().copy())
 
         if step % args.log_every == 0:
             em = float(E.view(C, R)[:, 0].mean()) / n * 1000.0
@@ -349,6 +352,14 @@ def run_pt(args):
     for kk, vv in gates.items():
         print(f"{kk} : {'PASS' if vv else 'FAIL'}")
 
+    if getattr(args, "save_samples", ""):
+        os.makedirs(os.path.dirname(args.save_samples) or ".", exist_ok=True)
+        X = np.concatenate(x_pool, axis=0)             # (T*C, N) target rung
+        np.savez_compressed(args.save_samples, X=X, E=e_arr.reshape(-1),
+                            temp_K=float(temps[0]), size=np.array(size),
+                            record_every=int(args.record_every))
+        print(f"\n  wrote {args.save_samples}  pool {X.shape}")
+
     if args.out:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
         with open(args.out, "w") as f:
@@ -374,6 +385,8 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--out", default="")
+    p.add_argument("--save-samples", default="",
+                   help="npz pool of target-rung configurations (playbook 31)")
     a = p.parse_args(argv)
     if not a.out:
         sz = "x".join(str(v) for v in a.size)

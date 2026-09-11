@@ -46,8 +46,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import common as C  # noqa: E402
 from iasbs.cuau import (KB_EV_PER_K, CuAuSpace, TorchCuAuEnergy,  # noqa: E402
                         arg_config, build_ce_tables, check_states,
-                        provenance, random_sector_batch, sampled_observables,
-                        symmetry_perms)
+                        provenance, random_sector_batch, sample_bridge_direct,
+                        sampled_observables, symmetry_perms)
 
 NEG = float("-inf")
 
@@ -325,6 +325,38 @@ def sample_uniform_shell(x, jrow, generator=None):
     return occ, emp, valid
 
 
+def pbc_dist2(positions, cell):
+    """``(n, n)`` minimum-image squared distances under the supercell."""
+    P = np.asarray(positions, dtype=np.float64)
+    H = np.asarray(cell, dtype=np.float64)
+    frac = P @ np.linalg.inv(H)
+    df = frac[:, None, :] - frac[None, :, :]
+    df -= np.round(df)
+    d = df @ H
+    return (d * d).sum(-1)
+
+
+def pair_geometry(R, A, valid, dist2):
+    """Reorder ``A`` so that ``sum_m d_PBC(R_m, A_m)^2`` is minimal (playbook 12.2).
+
+    The assignment reads only the edge ``(R, A)`` and the fixed lattice, never
+    ``X_1``, so every pairing has the same exact conditional mean label and the
+    choice is a pure variance lever.
+    """
+    from scipy.optimize import linear_sum_assignment
+    Rc, Ac, vc = R.cpu().numpy(), A.cpu().numpy(), valid.cpu().numpy()
+    out = Ac.copy()
+    for b in range(Rc.shape[0]):
+        m = vc[b]
+        j = int(m.sum())
+        if j < 2:
+            continue
+        r, a = Rc[b, m], Ac[b, m]
+        _, col = linear_sum_assignment(dist2[np.ix_(r, a)])
+        out[b, m] = a[col]
+    return torch.as_tensor(out, device=A.device, dtype=A.dtype)
+
+
 def apply_pairs(z, R, A, valid):
     """``g z`` for ``g = prod_m (R_m A_m)``, a product of disjoint transpositions.
 
@@ -547,7 +579,35 @@ def build_space(args, energy=None, tables=None):
     sched = named_schedule(args.schedule, args.gamma_total, args.shells)
     sp = RadialCuAuSpace(size=size, temp_k=args.temp, schedule=sched,
                          device=args.device, energy=energy, verbose=True)
+    sp.dist2 = pbc_dist2(sp.positions, tables["cell"])
     return sp, tables
+
+
+def spectral_gap(n, k, weights, gamma_total):
+    """Gap of the time-homogeneous reduced generator ``sum_j w_j gtot (B_j-I)``.
+
+    The orbit chain is reversible with respect to the uniform canonical law, so
+    every eigenvalue is real; the gap is ``-max Re lambda`` over the non-trivial
+    spectrum and sets the reference mixing time on the distance coordinate.
+    """
+    D = min(k, n - k)
+    G = np.zeros((D + 1, D + 1), dtype=np.float64)
+    for j, w in weights.items():
+        if w > 0.0:
+            G += gamma_total * float(w) * (
+                C.shell_orbit_matrix_cached(n, k, int(j)) - np.eye(D + 1))
+    ev = np.sort(np.linalg.eigvals(G).real)[::-1]
+    return float(-ev[1]), ev[:4].tolist()
+
+
+def load_pool(path, k):
+    """PT configuration pool; every row must sit in the exact ``k`` sector."""
+    z = np.load(path)
+    X = z["X"].astype(np.int64)
+    bad = int((X.sum(1) != k).sum())
+    if bad:
+        raise RuntimeError(f"{bad} pool states leave the k={k} sector")
+    return X, z["E"].astype(np.float64)
 
 
 def cmd_ref_diag(args):
@@ -559,27 +619,150 @@ def cmd_ref_diag(args):
     unif = v / v.sum()
 
     out = {"size": list(sp.size), "N": sp.n, "k": sp.k,
-           "temperature_K": sp.temp_k, "schedule": args.schedule,
-           "schedule_detail": sp.schedule.as_dict(), "rows": []}
+           "temperature_K": sp.temp_k, "gamma_total": args.gamma_total,
+           "shells": list(args.shells), "rows": []}
     print(f"CuAu radial ref-diagnostics  N={sp.n} k={sp.k}  "
-          f"gamma_total={sp.schedule.gamma_total}")
-    print(f"  schedule {args.schedule}: {sp.schedule.describe()}")
+          f"gamma_total={args.gamma_total}")
+
+    # 5. where the PT target actually lives, as seen from the source
+    if args.pool:
+        X, _ = load_pool(args.pool, sp.k)
+        Xt = torch.as_tensor(X, device=sp.device)
+        d = sp.distance(sp.x0.unsqueeze(0), Xt).cpu().numpy()
+        hist = np.bincount(d, minlength=D + 1) / len(d)
+        out["pt_source_distance"] = {
+            "pool": args.pool, "n_samples": int(len(d)),
+            "hist": hist.tolist(), "mean": float(d.mean()),
+            "min": int(d.min()), "max": int(d.max())}
+        print(f"  PT source distance  <d> {d.mean():.3f}  "
+              f"range [{d.min()},{d.max()}]  ({len(d)} samples)")
+
     for name in args.compare:
         sch = named_schedule(name, args.gamma_total, args.shells)
         sp.schedule = sch
-        q, kap = sp.radial_kappa(0.0, 1.0)
+        q, _ = sp.radial_kappa(0.0, 1.0)
         tv = 0.5 * float(np.abs(q - unif).sum())
         nz = q > 0
         kl = float((q[nz] * np.log(q[nz] / unif[nz])).sum())
+        wbar = sch.integrated(0.0, 1.0)
+        tot = sum(wbar.values())
+        gap, ev = spectral_gap(sp.n, sp.k, {j: w / tot for j, w in wbar.items()},
+                               args.gamma_total)
         row = {"schedule": name, "TV_to_uniform": tv, "KL_to_uniform": kl,
                "orbit_law": q.tolist(),
                "mean_distance": float((np.arange(D + 1) * q).sum()),
-               "support_frac": float((q > 1e-12).mean())}
+               "support_frac": float((q > 1e-12).mean()),
+               "spectral_gap": gap, "top_eigs": ev,
+               "time_avg_mixture": {str(j): w / tot for j, w in wbar.items()},
+               "describe": sch.describe()}
+        if "pt_source_distance" in out:
+            h = np.asarray(out["pt_source_distance"]["hist"])
+            row["TV_to_PT_source"] = 0.5 * float(np.abs(q - h).sum())
+            m = q > 1e-300
+            row["log_cover_PT"] = float(np.log(q[m & (h > 0)]).min()) \
+                if bool((m & (h > 0)).any()) else float("-inf")
         out["rows"].append(row)
-        print(f"  {name:6s}  TV(q,unif) {tv:.6f}   KL {kl:.6f}   "
-              f"<d> {row['mean_distance']:.3f}")
+        print(f"  {name:6s}  TV(q,unif) {tv:.6f}  KL {kl:.6f}  "
+              f"<d> {row['mean_distance']:.3f}  gap {gap:.4f}"
+              + (f"  TV(q,PT) {row['TV_to_PT_source']:.4f}"
+                 if "TV_to_PT_source" in row else ""))
+    if args.gamma_sweep:
+        out["gamma_sweep"] = []
+        print("  gamma_tot sweep (coverage vs reference event budget)")
+        print(f"    {'sched':>6s} {'gtot':>6s} {'<j>':>5s} {'activity':>8s} "
+              f"{'<d>':>7s} {'TV_unif':>8s} {'TV_PT':>7s}")
+        for name in args.compare:
+            sch0 = named_schedule(name, 1.0, args.shells)
+            wbar = sch0.integrated(0.0, 1.0)
+            jbar = sum(j * w for j, w in wbar.items()) / sum(wbar.values())
+            for g in args.gamma_sweep:
+                sp.schedule = named_schedule(name, float(g), args.shells)
+                q, _ = sp.radial_kappa(0.0, 1.0)
+                row = {"schedule": name, "gamma_total": float(g),
+                       "mean_shell": float(jbar), "activity": float(g * jbar),
+                       "mean_distance": float((np.arange(D + 1) * q).sum()),
+                       "TV_to_uniform": 0.5 * float(np.abs(q - unif).sum())}
+                if "pt_source_distance" in out:
+                    h = np.asarray(out["pt_source_distance"]["hist"])
+                    row["TV_to_PT_source"] = 0.5 * float(np.abs(q - h).sum())
+                out["gamma_sweep"].append(row)
+                print(f"    {name:>6s} {g:6.1f} {jbar:5.2f} {g*jbar:8.1f} "
+                      f"{row['mean_distance']:7.3f} {row['TV_to_uniform']:8.5f} "
+                      + (f"{row['TV_to_PT_source']:7.4f}"
+                         if 'TV_to_PT_source' in row else ""))
+
     os.makedirs("json", exist_ok=True)
     path = args.out or f"json/results_cuau_radial_refdiag_{sp.n}.json"
+    with open(path, "w") as f:
+        json.dump(out, f, indent=2)
+    print(f"  wrote {path}")
+    return 0
+
+
+def cmd_label_diag(args):
+    """Terminal-label distribution by shell and time (playbook 31)."""
+    sp, _ = build_space(args)
+    X, Epool = load_pool(args.pool, sp.k)
+    Xt = torch.as_tensor(X, device=sp.device)
+    Et = torch.as_tensor(Epool, device=sp.device)
+    gen = torch.Generator(device=sp.device).manual_seed(args.seed)
+    steps = args.steps
+    log_kap0, log_kap1 = sp.bridge_kernels(steps)
+
+    out = {"size": list(sp.size), "N": sp.n, "k": sp.k,
+           "temperature_K": sp.temp_k, "schedule": args.schedule,
+           "gamma_total": args.gamma_total, "pool": args.pool,
+           "pairing": args.pairing,
+           "n_draws": args.draws, "clamp": args.clamp, "rows": []}
+    print(f"CuAu radial label-diagnostics  N={sp.n}  schedule {args.schedule}  "
+          f"gamma_total={args.gamma_total}  draws={args.draws}")
+    print(f"  {'j':>3s} {'t':>5s} {'mean':>9s} {'sd':>9s} {'p01':>9s} "
+          f"{'p50':>9s} {'p99':>9s} {'|clamp|':>8s} {'sd_E':>8s} {'sd_K':>8s}")
+    for j in args.shells:
+        for t in args.times:
+            t_idx = torch.full((args.draws,), min(int(t * steps), steps - 1),
+                               dtype=torch.long, device=sp.device)
+            sel = torch.randint(len(X), (args.draws,), generator=gen,
+                                device=sp.device)
+            X1, E1 = Xt[sel], Et[sel]
+            Xb = sample_bridge_direct(sp, X1, t_idx, log_kap0, log_kap1,
+                                      generator=gen)
+            check_states(Xb, sp.k, "label-diag bridge")
+            jrow = torch.full((args.draws,), int(j), dtype=torch.long,
+                              device=sp.device)
+            R, A, valid = sample_uniform_shell(Xb, jrow, generator=gen)
+            if args.pairing == "geometry":
+                A = pair_geometry(R, A, valid, sp.dist2)
+            elif args.pairing == "index":
+                R = torch.where(valid, R, torch.full_like(R, sp.n)).sort(1).values
+                A = torch.where(valid, A, torch.full_like(A, sp.n)).sort(1).values
+                R = torch.where(valid, R, torch.zeros_like(R))
+                A = torch.where(valid, A, torch.zeros_like(A))
+            lab, Xg = terminal_log_label_shell(sp, X1, E1, R, A, valid)
+            Eg = sp.energy.energy_torch(Xg).to(torch.float64)
+            e_term = (-(Eg - E1.to(torch.float64)) / sp.tau)
+            k_term = lab - e_term
+            a = lab.cpu().numpy()
+            qs = np.quantile(a, [0.01, 0.5, 0.99])
+            row = {"j": int(j), "t": float(t), "mean": float(a.mean()),
+                   "sd": float(a.std(ddof=1)),
+                   "p01": float(qs[0]), "p50": float(qs[1]), "p99": float(qs[2]),
+                   "min": float(a.min()), "max": float(a.max()),
+                   "frac_clamped": float((np.abs(a) > args.clamp).mean()),
+                   "sd_energy_term": float(e_term.cpu().numpy().std(ddof=1)),
+                   "sd_kernel_term": float(k_term.cpu().numpy().std(ddof=1)),
+                   "ess_frac": float(np.exp(
+                       2 * torch.logsumexp(torch.as_tensor(a), 0).item()
+                       - torch.logsumexp(torch.as_tensor(2 * a), 0).item()
+                       - math.log(len(a))))}
+            out["rows"].append(row)
+            print(f"  {j:3d} {t:5.2f} {row['mean']:9.3f} {row['sd']:9.3f} "
+                  f"{row['p01']:9.3f} {row['p50']:9.3f} {row['p99']:9.3f} "
+                  f"{row['frac_clamped']:8.4f} {row['sd_energy_term']:8.3f} "
+                  f"{row['sd_kernel_term']:8.3f}")
+    os.makedirs("json", exist_ok=True)
+    path = args.out or (f"json/results_cuau_radial_labeldiag_{sp.n}_"
+                        f"{args.schedule}_{args.pairing}.json")
     with open(path, "w") as f:
         json.dump(out, f, indent=2)
     print(f"  wrote {path}")
@@ -604,7 +787,23 @@ def main(argv=None):
     common_args(r)
     r.add_argument("--compare", type=str, nargs="+",
                    default=["S0", "S1", "S2", "S3-8", "S3-4"])
+    r.add_argument("--pool", type=str, default="",
+                   help="npz PT pool for the source-distance law")
+    r.add_argument("--gamma-sweep", type=float, nargs="*", default=[],
+                   help="reference event budgets to sweep (playbook 29)")
     r.set_defaults(func=cmd_ref_diag)
+
+    d = sub.add_parser("label-diagnostics", help="playbook 31 label study")
+    common_args(d)
+    d.add_argument("--pool", type=str, required=True)
+    d.add_argument("--draws", type=int, default=50000)
+    d.add_argument("--steps", type=int, default=512)
+    d.add_argument("--clamp", type=float, default=20.0)
+    d.add_argument("--times", type=float, nargs="+",
+                   default=[0.1, 0.3, 0.5, 0.7, 0.9])
+    d.add_argument("--pairing", choices=["random", "index", "geometry"],
+                   default="random")
+    d.set_defaults(func=cmd_label_diag)
 
     a = p.parse_args(argv)
     return a.func(a)
