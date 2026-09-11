@@ -1,0 +1,22 @@
+{
+  "jump_audit": {
+    "m": 32,
+    "N": 32,
+    "steps": 128,
+    "paths": 2000,
+    "transfers_per_path_mean": 127.5025,
+    "transfers_per_path_min": 94.0,
+    "transfers_per_path_max": 168.0,
+    "one_jump_per_bin_budget": 128,
+    "max_particles_moved_in_one_bin": 7.0,
+    "max_occ_mean": 6.6215,
+    "max_occ_min": 3.0,
+    "max_occ_max": 17.0,
+    "one_jump_per_bin_max_occ_floor": -96,
+    "paths_below_that_floor": 0,
+    "peak_departure_prob": 0.1346834787743929,
+    "departure_clamp_hits": 0,
+    "occupied_mode_steps": 4165558,
+    "violations": 0
+  }
+}

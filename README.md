@@ -357,6 +357,31 @@ Same network (136,450 parameters) and code at every size.
 The three rows are not budget-matched: m = 32 and 128 use 3000 iterations,
 128 steps, batch 512; m = 1000 uses 1500 iterations, 256 steps, batch 128.
 
+These rows use a different simulator from §2.1/§2.2. The enumerated simulator
+(`simulate`) moves at most one particle per grid interval. The large-m
+simulator (`scale_step`) is a tau-leap: departures from mode i are
+`Binomial(eta_i, p_i)` and all arrivals are one `Multinomial(K, softmax beta)`,
+so one bin moves many particles. `steps` counts leap bins here, not jumps.
+
+Jump audit, 2000 paths per row:
+
+| m = N | steps | transfers/path mean (min–max) | max particles in one bin | max_i eta_i at t=1 mean (min–max) | peak departure prob | clamp hits |
+|---:|---:|---|---:|---|---:|---:|
+| 32 | 128 | 127.5 (94–168) | 7 | 6.62 (3–17) | — | 0 |
+| 128 | 128 | 513.1 (442–584) | 15 | 9.30 (4–24) | — | 0 |
+| 1000 | 256 | 4103.8 (3868–4341) | 36 | 13.03 (8–26) | 1.6993e-01 | 0 / 2.50e8 |
+
+`scale_step` clamps the per-particle departure probability to `[0, 0.9]`; the
+clamp is inactive at every setting reported here.
+
+```bash
+python iasbs/occupation.py scale-jumps --m 1000 --N 1000 --steps 256 \
+    --batch 2000 --hidden 256 --ckpt-dir ckpt --tag occ_s1000 \
+    --out json/results_occ_jumps_s1000.json
+```
+
+Artifacts: `json/results_occ_jumps_s{32,128,1000}.json`.
+
 ```bash
 bash iasbs/scripts/run_scale.sh
 # or, per leg:
@@ -378,7 +403,8 @@ Artifacts: `json/results_occ_s{32,128,1000}.json`,
 
 ## 2.4 IASBS, non-Dirac source, scaling in m
 
-Gates B2a / B2b / B2c.
+Gates B2a / B2b / B2c. Same tau-leap simulator and same `steps` semantics as
+§2.3, not the one-jump-per-bin simulator of §2.1/§2.2.
 
 | m | KS(occ) | W1(max)/N | violations | uncontrolled KS(occ) | improvement | verdict |
 |---|---:|---:|---:|---:|---:|---|

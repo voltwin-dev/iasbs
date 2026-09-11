@@ -1639,12 +1639,108 @@ def run_scalevar(args):
     return 0 if ok else 1
 
 
+def run_scale_jumps(args):
+    """Jump-count audit of the large-m simulator.
+
+    The enumerated simulator :func:`simulate` moves at most one particle per
+    grid interval; the large-m simulator :func:`scale_step` does not -- it is a
+    tau-leap whose departures from mode i are Binomial(eta_i, p_i), so a bin
+    can move many particles at once.  The two are different algorithms and the
+    step count means a different thing in each, which is exactly the point this
+    audit exists to make checkable.  It reports, for a trained checkpoint:
+
+      * transfers per path, against the one-jump-per-bin budget of ``steps``,
+      * the largest number of particles moved in any single bin,
+      * max_i eta_i at t = 1, against the ``N - steps`` floor that a
+        one-jump-per-bin chain started from ``N e_c`` would be forced to obey,
+      * the peak per-particle departure probability and the number of times it
+        hit the 0.9 clamp inside ``scale_step``, which is the bias term of the
+        leap and is only negligible while the clamp stays inactive.
+    """
+    torch.manual_seed(args.seed)
+    sp = ScaleOccupation(m=args.m, N=args.N, d=args.d, tau=args.tau,
+                         gamma=args.gamma)
+    ck = torch.load(f"{args.ckpt_dir}/{args.tag}.pt", map_location=sp.device,
+                    weights_only=False)
+    net = ScaleController(sp.m, sp.N, hidden=args.hidden).to(sp.device)
+    net.load_state_dict(ck["state_dict"])
+    net.eval()
+    steps, B, dt = args.steps, args.batch, 1.0 / args.steps
+    gen = torch.Generator(device=sp.device)
+    gen.manual_seed(args.seed)
+    eta = torch.zeros(B, sp.m, device=sp.device, dtype=torch.float64)
+    eta[:, sp.source] = sp.N
+    moves = torch.zeros(B, device=sp.device, dtype=torch.float64)
+    step_max, p_max, n_clamp, n_live = 0.0, 0.0, 0, 0
+    with torch.no_grad():
+        for s in range(steps):
+            t = torch.full((B,), s / steps, device=sp.device,
+                           dtype=torch.float64)
+            al, be = net(t, eta, sp.source)
+            # replay the rate that scale_step will use, to audit the clamp
+            a = al.clamp(-10.0, 10.0).to(torch.float64)
+            b = be.clamp(-10.0, 10.0).to(torch.float64)
+            bmax = b.max(dim=1, keepdim=True).values
+            eb = torch.exp(b - bmax)
+            p = ((sp.gamma / (sp.m - 1.0))
+                 * torch.exp((a + bmax).clamp(max=20.0))
+                 * eb.sum(dim=1, keepdim=True) * dt)
+            live = eta > 0
+            p_max = max(p_max, float(p[live].max()))
+            n_clamp += int((p[live] > 0.9).sum())
+            n_live += int(live.sum())
+            prev = eta
+            eta = scale_step(sp, eta, al, be, dt, generator=gen)
+            mv = (eta - prev).clamp(min=0).sum(dim=1)
+            moves += mv
+            step_max = max(step_max, float(mv.max()))
+    mx = eta.max(dim=1).values
+    floor = sp.N - steps
+    out = {
+        "m": sp.m, "N": sp.N, "steps": steps, "paths": B,
+        "transfers_per_path_mean": float(moves.mean()),
+        "transfers_per_path_min": float(moves.min()),
+        "transfers_per_path_max": float(moves.max()),
+        "one_jump_per_bin_budget": steps,
+        "max_particles_moved_in_one_bin": step_max,
+        "max_occ_mean": float(mx.mean()),
+        "max_occ_min": float(mx.min()),
+        "max_occ_max": float(mx.max()),
+        "one_jump_per_bin_max_occ_floor": floor,
+        "paths_below_that_floor": int((mx < floor).sum()),
+        "peak_departure_prob": p_max,
+        "departure_clamp_hits": n_clamp,
+        "occupied_mode_steps": n_live,
+        "violations": int((eta.sum(dim=1).round().long() != sp.N).sum()),
+    }
+    print(f"m={sp.m} N={sp.N} steps={steps} paths={B}")
+    print(f"  transfers/path       mean {out['transfers_per_path_mean']:.1f}"
+          f"  min {out['transfers_per_path_min']:.0f}"
+          f"  max {out['transfers_per_path_max']:.0f}"
+          f"   (one-jump-per-bin budget {steps})")
+    print(f"  particles per bin    max {step_max:.0f}"
+          f"   (one-jump-per-bin would force 1)")
+    print(f"  max_i eta_i at t=1   mean {out['max_occ_mean']:.2f}"
+          f"  min {out['max_occ_min']:.0f}  max {out['max_occ_max']:.0f}"
+          f"   (one-jump-per-bin floor N-steps = {floor};"
+          f" paths below it {out['paths_below_that_floor']}/{B})")
+    print(f"  departure prob       peak {p_max:.4e}"
+          f"  clamp hits {n_clamp}/{n_live}")
+    print(f"  constraint violations {out['violations']}/{B}")
+    with open(args.out, "w") as f:
+        json.dump({"jump_audit": out}, f,
+                  indent=2, default=str)
+    print(f"  wrote {args.out}")
+    return 0
+
+
 def main():
     C.use_repo_root()
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["verify", "exact", "var", "train",
                                     "train-nondirac", "scale",
-                                    "scale-nondirac", "scalevar"])
+                                    "scale-nondirac", "scalevar",
+                                    "scale-jumps"])
     ap.add_argument("--m", type=int, default=4)
     ap.add_argument("--N", type=int, default=0, help="0 means N = m")
     ap.add_argument("--d", type=float, default=0.5)
@@ -1684,7 +1780,8 @@ def main():
             "var": run_var, "train": run_train,
             "train-nondirac": run_train_nondirac,
             "scale": run_scale, "scale-nondirac": run_scale_nondirac,
-            "scalevar": run_scalevar}[args.cmd](args)
+            "scalevar": run_scalevar,
+            "scale-jumps": run_scale_jumps}[args.cmd](args)
 
 
 if __name__ == "__main__":
