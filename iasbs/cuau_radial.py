@@ -542,7 +542,8 @@ class RadialController(torch.nn.Module):
     subset logits, hence ``q_j = 1/v_j`` and ``u = r`` exactly at the reference.
     """
 
-    def __init__(self, n, shells, hidden=512, n_freq=4, comps=1):
+    def __init__(self, n, shells, hidden=512, n_freq=4, comps=1,
+                 b_clamp=10.0):
         super().__init__()
         self.n = int(n)
         self.shells = tuple(int(j) for j in shells)
@@ -551,6 +552,9 @@ class RadialController(torch.nn.Module):
         self.comps = int(comps)
         if self.comps < 1:
             raise ValueError(f"comps={comps} must be >= 1")
+        # bound on the shell tilt b_j; see shell_logits.  10.0 is the generic
+        # logit clamp, i.e. "no extra bound" and the published behaviour.
+        self.b_clamp = float(b_clamp)
         self.per = 1 + self.comps * (1 + 2 * self.n)
         self.net = torch.nn.Sequential(
             torch.nn.Linear(n + 2 + 2 * n_freq, hidden), torch.nn.SiLU(),
@@ -584,11 +588,20 @@ def shell_logits(net, t, x, clamp=10.0):
     ``(B,S,C,k)`` and ``(B,S,C,n-k)``.  ``C = 1`` is the plain product
     controller of playbook 18-20 and reproduces it exactly, since a one-term
     ``logsumexp`` with ``log alpha = 0`` is the identity.
+
+    ``net.b_clamp``, when set, bounds the shell tilt ``b_j`` more tightly than
+    the generic logit clamp, i.e. it bounds the controlled escape rate by
+    ``gamma_tot * exp(b_clamp)``.  This is the documented parameter bound of
+    playbook 53 failure mode 3.  It lives on the module rather than on the call
+    so that training, :func:`simulate_radial` and
+    :func:`propagate_exact_radial` are guaranteed to describe the same chain;
+    a bound applied in only some of them would change the measured law.
     """
     b, a, sm, sp = net(t, x)
     occ, emp = occupied_empty(x)
     S_, Cc = len(net.shells), net.comps
-    b = b.to(torch.float64).clamp(-clamp, clamp)
+    bc = float(getattr(net, "b_clamp", clamp))
+    b = b.to(torch.float64).clamp(-bc, bc)
     la = torch.log_softmax(a.to(torch.float64).clamp(-clamp, clamp), dim=-1)
     lw_rem = sm.to(torch.float64).clamp(-clamp, clamp).gather(
         3, occ[:, None, None, :].expand(-1, S_, Cc, -1))
@@ -1141,7 +1154,8 @@ def cmd_train(args):
             cache=f"data/cuau/pair_cost_{n}_{int(sp.temp_k)}K.npz")
 
     net = RadialController(n, shells, hidden=args.hidden,
-                           comps=args.components).to(sp.device)
+                           comps=args.components,
+                           b_clamp=args.b_clamp).to(sp.device)
     n_par = sum(p.numel() for p in net.parameters())
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     sch = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -1356,7 +1370,8 @@ def cmd_train_nd(args):
         sp.ce_cost = build_pair_cost(sp, args, gen)
 
     net = RadialController(n, shells, hidden=args.hidden,
-                           comps=args.components).to(sp.device)
+                           comps=args.components,
+                           b_clamp=args.b_clamp).to(sp.device)
     net_h = ShellCorrector(n, shells, hidden=args.hidden).to(sp.device)
     n_par = sum(p.numel() for p in net.parameters())
     n_par_h = sum(p.numel() for p in net_h.parameters())
@@ -1649,6 +1664,8 @@ def main(argv=None):
     t.add_argument("--buffer", type=int, default=20)
     t.add_argument("--hidden", type=int, default=512)
     t.add_argument("--components", type=int, default=1)
+    t.add_argument("--b-clamp", type=float, default=10.0,
+                   help="bound on the shell tilt b_j (playbook 53 mode 3)")
     t.add_argument("--lr", type=float, default=1e-3)
     t.add_argument("--clamp", type=float, default=20.0)
     t.add_argument("--pairing", choices=["random", "index", "geometry", "ce"],
@@ -1678,6 +1695,8 @@ def main(argv=None):
     q.add_argument("--buffer", type=int, default=20)
     q.add_argument("--hidden", type=int, default=512)
     q.add_argument("--components", type=int, default=1)
+    q.add_argument("--b-clamp", type=float, default=10.0,
+                   help="bound on the shell tilt b_j (playbook 53 mode 3)")
     q.add_argument("--lr", type=float, default=1e-3)
     q.add_argument("--lr-h", type=float, default=1e-3)
     q.add_argument("--clamp", type=float, default=20.0)
