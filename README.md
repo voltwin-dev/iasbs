@@ -514,8 +514,12 @@ Per-sample `y`, 200,000 draws of the training pipeline per row:
 
 | m | pool | min y | max y | mean y | frac. y < 0 |
 |---|---|---|---|---|---|
-| 3 (N=1) | exact grid | +0.9927 | +1.0073 | — | 0 / 768 |
-| 4 | exact grid | +0.5956 | +7.0606 | — | 0 / 30,720 |
+| 3 (N=1) | exact grid, same state | +0.9927 | +1.0073 | — | 0 / 768 |
+| 4 | exact grid, same state | +0.5956 | +7.0606 | — | 0 / 30,720 |
+| 3 (N=1) | bridge pairing, `pi` | +0.9927 | +1.0073 | — | 0 / 400,000 |
+| 3 (N=1) | bridge pairing, uniform | +0.9927 | +1.0073 | — | 0 / 400,000 |
+| 4 | bridge pairing, `pi` | -2.3707 | +9.2472 | — | 10.78% |
+| 4 | bridge pairing, uniform | -2.2863 | +9.2677 | — | 8.67% |
 | 32 | uncontrolled | -5.5435 | +44.135 | +6.357 | 4.43% |
 | 32 | Bregman ckpt | -10.115 | +58.070 | +5.619 | 7.53% |
 | 128 | uncontrolled | -4.9345 | +151.69 | +18.797 | 4.65% |
@@ -525,9 +529,17 @@ Per-sample `y`, 200,000 draws of the training pipeline per row:
 | 1000 | Bregman ckpt | -11.747 | +1458.79 | +127.91 | 7.31% |
 | 1000 | MSE ckpt | -6.4291 | +1262.27 | +130.39 | 4.03% |
 
+"same state" rows evaluate `eta_i` and `Lambda` at the same state (`X_1 = X_t`);
+"bridge pairing" rows reproduce the trainer exactly (`eta_i` from `X_t`,
+`Lambda` from `X_1`, `X_t ~ bridge(X_1, t)`), 400,000 draws, active edges only.
+
 At m = 3, N = 1 the exact label gives `y = (1 - c_t) R_kj + c_t R_kk` (verified
 against `labels_full` to 2.22e-16), a convex combination of nonnegative rate
-ratios.
+ratios, so `Lambda = (1 - c_t)(R_kj - 1) >= -(1 - c_t) > -1` for every state,
+time and edge, under both pairings. Sweeping `d` in {0.05, 0.1, 0.5, 1, 2, 10}
+x `gamma` in {0.25, 1, 4, 16, 64} with the exact label and both stochastic
+estimators (128 time steps, 200 x 512 draws each), the worst value anywhere is
+`Lambda = -0.868309` (`min y = 0.13211`) at `d = 0.05, gamma = 0.25`.
 
 m = 4, exact-law TV, 20,000 samples, gate B1 is TV <= 0.05, iid floor 0.0167:
 

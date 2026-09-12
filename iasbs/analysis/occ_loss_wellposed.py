@@ -59,6 +59,41 @@ def enumerated_y(m, N, d=0.5, gamma=4.0, steps=128):
     return sp, ym
 
 
+def enumerated_y_bridge(m, N, d=0.5, gamma=4.0, steps=128, mb=200000,
+                        pool="pi", seed=0):
+    """y exactly as `run_train` builds it: occ from X_t, Lambda from X_1.
+
+    The grid scan above pairs both at the same state, which is the diagonal
+    X_1 = X_t and not what training sees.  This draws X_1 from the pool, X_t
+    from the reference bridge, and reads Lambda at X_1 -- the same two lines as
+    the trainer, `lam = lam_tab[ti, X1]` and `occ = sp.eocc[Xt]`.
+    """
+    from occupation import sample_bridge
+
+    sp = OccupationSpace(m=m, N=N, d=d, tau=1.0, gamma=gamma, device="cpu")
+    ts = np.arange(steps) / steps
+    K0 = torch.tensor(np.log(np.maximum(np.stack(
+        [sp.semigroup(sp.gamma * t)[sp.i0] for t in ts]), 1e-300)))
+    K1 = torch.tensor(np.log(np.maximum(np.stack(
+        [sp.semigroup(sp.gamma * (1 - t)) for t in ts]), 1e-300)))
+    cts = [c_of_t(sp, float(t)) for t in ts]
+    lam_tab = torch.stack([sp.labels_full(float(c)) for c in cts])
+    w = sp.pi.to(DT) if pool == "pi" else torch.full((sp.M,), 1.0 / sp.M,
+                                                     dtype=DT)
+    g = torch.Generator().manual_seed(seed)
+    out = []
+    got = 0
+    while got < mb:
+        b = min(65536, mb - got)
+        X1 = torch.multinomial(w, b, replacement=True, generator=g)
+        ti = torch.randint(steps, (b,), generator=g)
+        Xt = sample_bridge(sp, X1, ti, K0, K1, generator=g)
+        y = sp.eocc[Xt].to(DT) + lam_tab[ti, X1]
+        out.append(y[sp.emask[Xt]])
+        got += b
+    return torch.cat(out)
+
+
 def scale_y(m, N, ckpt=None, mb=200000, d=0.5, gamma=4.0, steps=128,
             batch=4096, seed=0):
     """Replicate the label pipeline of run_scale and return y."""
@@ -210,6 +245,18 @@ def main():
     res["y_ranges"].append(s)
     print(f"\nm=4 N=4  y in [{s['min']:+.4f}, {s['max']:+.4f}]  "
           f"neg {s['n_neg']}/{s['n']}")
+
+    # same-state pairing above is the diagonal; this is the trainer's pairing
+    for mm, NN in ((3, 1), (4, 4)):
+        for pool in ("pi", "uniform"):
+            yb = enumerated_y_bridge(mm, NN, pool=pool)
+            s = stats(yb)
+            s.update(case=f"m={mm} N={NN} enumerated, bridge pairing, "
+                          f"pool={pool}")
+            res["y_ranges"].append(s)
+            print(f"m={mm} N={NN} bridge pairing, pool {pool:7s} "
+                  f"y in [{s['min']:+.4f}, {s['max']:+.4f}]  "
+                  f"neg {s['n_neg']}/{s['n']}")
 
     for m in (32, 128, 1000):
         steps = 256 if m == 1000 else 128

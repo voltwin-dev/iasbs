@@ -115,6 +115,42 @@
       "case": "m=4 N=4 enumerated, exact full label"
     },
     {
+      "n": 400000,
+      "min": 0.9927133772603584,
+      "max": 1.007340942580996,
+      "mean": 1.0000329630243978,
+      "n_neg": 0,
+      "frac_neg": 0.0,
+      "case": "m=3 N=1 enumerated, bridge pairing, pool=pi"
+    },
+    {
+      "n": 400000,
+      "min": 0.9927133772603584,
+      "max": 1.007340942580996,
+      "mean": 1.0000329630243978,
+      "n_neg": 0,
+      "frac_neg": 0.0,
+      "case": "m=3 N=1 enumerated, bridge pairing, pool=uniform"
+    },
+    {
+      "n": 1488402,
+      "min": -2.3706983976103437,
+      "max": 9.247200065577648,
+      "mean": 1.6118402214391077,
+      "n_neg": 160442,
+      "frac_neg": 0.10779480274818228,
+      "case": "m=4 N=4 enumerated, bridge pairing, pool=pi"
+    },
+    {
+      "n": 1503210,
+      "min": -2.286321070239951,
+      "max": 9.267707983082191,
+      "mean": 1.849130619283792,
+      "n_neg": 130275,
+      "frac_neg": 0.08666453788891772,
+      "case": "m=4 N=4 enumerated, bridge pairing, pool=uniform"
+    },
+    {
       "n": 200000,
       "min": -5.543517758560905,
       "max": 44.134951151019976,
