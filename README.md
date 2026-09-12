@@ -1252,9 +1252,9 @@ same — and neither differs from the other by more than the floor's own sd.
 
 | method | oracle calls | \|dE\| | KS(E) | MMD^2 vs MCMC | \|X^T X - I\| | wall/seed | seeds |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| IASBS600 | 600,000 | **0.1888 +- 0.0102** | **0.0458 +- 0.0032** | **1.77e-05** | **3.2e-14** | 1,117 s | 5 |
-| R-ASBS | 600,000 | 0.3222 +- 0.0097 | 0.0820 +- 0.0025 | 4.28e-04 | 4.3e-07 | 310 s | 5 |
-| IASBS native (unmatched) | 5,120,000 | 0.1264 +- 0.0065 | 0.0307 +- 0.0019 | 1.43e-05 | 3.3e-14 | 1,889 s | 5 |
+| IASBS600 | 600,000 | **0.1888 +- 0.0102** | **0.0458 +- 0.0032** | **1.77e-05 +- 1.8e-05** | **3.2e-14** | 1,117 s | 5 |
+| R-ASBS | 600,000 | 0.3222 +- 0.0097 | 0.0820 +- 0.0025 | 4.28e-04 +- 1.8e-04 | 4.3e-07 | 310 s | 5 |
+| IASBS native (unmatched) | 5,120,000 | 0.1264 +- 0.0065 | 0.0307 +- 0.0019 | 1.43e-05 +- 3.2e-05 | 3.3e-14 | 1,889 s | 5 |
 | MMD^2 split-half floor | — | — | — | 6.94e-06 +- 7.37e-05 | — | — | — |
 
 **Equal wall time (~310 s), 199 steps:**
@@ -1267,6 +1267,20 @@ same — and neither differs from the other by more than the floor's own sd.
 `IASBS wall310` is `--iters 415 --batch 400`, i.e. `run_fair_stiefel.sh frame600`
 truncated to R-ASBS's wall clock; every other flag is the `frame600` leg's.
 
+**Training-budget ladder for R-ASBS, 199 steps.** Same script and flags as the
+600k row, `--epochs` raised from 1000 to 6100 so the oracle budget is 6.1x and
+the wall clock matches `IASBS native`; 3 seeds.
+
+| method | oracle calls | \|dE\| | KS(E) | MMD^2 vs MCMC | \|X^T X - I\| | wall/seed | seeds |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| R-ASBS | 600,000 | 0.3222 +- 0.0097 | 0.0820 +- 0.0025 | 4.28e-04 +- 1.8e-04 | 4.3e-07 | 310 s | 5 |
+| R-ASBS 6.1x | 3,660,000 | 0.1461 +- 0.0426 | 0.0367 +- 0.0080 | 4.67e-04 +- 1.5e-04 | 4.1e-07 | 1,846 s | 3 |
+| IASBS native | 5,120,000 | 0.1264 +- 0.0065 | 0.0307 +- 0.0019 | 1.43e-05 +- 3.2e-05 | 3.3e-14 | 1,889 s | 5 |
+
+Per-seed `|dE|` for `R-ASBS 6.1x`: 0.1737 / 0.1676 / 0.0971; KS(E) 0.0410 /
+0.0415 / 0.0275; `E[tr(C^T X)]` 0.4793 / 0.4995 / 0.5458 against the MCMC
+reference 0.4977.
+
 **Step-refinement ladder, `|dE|` at 199 / 398 / 796 steps:**
 
 | method | 199 | 398 | 796 | change |
@@ -1274,14 +1288,22 @@ truncated to R-ASBS's wall clock; every other flag is the `frame600` leg's.
 | IASBS native | 0.1264 | 0.0779 | 0.0564 | -55% |
 | IASBS600 | 0.1888 | 0.1458 | 0.1263 | -33% |
 | R-ASBS | 0.3222 | 0.3078 | 0.3018 | -6% |
+| R-ASBS 6.1x | 0.1461 | 0.1256 | 0.1151 | -21% |
 
 ```bash
+# the 6.1x budget ladder
+python rasbs/rasbs_port.py --frame --lam 1.0 --betas 1.0 --epochs 6100 \
+    --seeds 3 --refine 2,4 --n-samples 100000 --ref-stem stiefel_frame \
+    --verbose --tag rasbs_w2_big --out json/results_w2_rasbs_frame_big.json
+# the table above
 python iasbs/analysis/weakness2_stiefel.py
 ```
 
 Artifacts: `json/results_weakness2_stiefel.json`,
-`json/results_w2_stiefel_wall310.json` +
-`ckpt/stiefel_w2_wall310_b1_seed{0..4}.pt`. All other rows reuse the §5.6.1
+`json/results_w2_stiefel_wall310.json`,
+`json/results_w2_rasbs_frame_big.json` +
+`ckpt/stiefel_w2_wall310_b1_seed{0..4}.pt`,
+`ckpt/rasbs_w2_big_b1_seed{0,1,2}.pt`. All other rows reuse the §5.6.1
 checkpoints.
 
 ## 5.7 Full frame-law accuracy, beta = 1, 5 seeds per method
