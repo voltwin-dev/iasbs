@@ -26,8 +26,8 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import _paths                                    # noqa: F401
 
 import common as C                                               # noqa: E402
 import remeasure as R                                            # noqa: E402

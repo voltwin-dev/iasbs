@@ -5,24 +5,23 @@ R-ASBS leg that exists on disk.
 Aggregator only -- it trains nothing.  Energy-law numbers are read back out of
 the training JSONs (they were produced by the same evaluation path on both
 sides); MMD^2 is recomputed here from `ckpt/` so that every leg, including ones
-that post-date `_frame_law_audit.py`, is scored against the same MCMC reference
+that post-date `frame_law_audit.py`, is scored against the same MCMC reference
 with the same bandwidth, the same 4000-vs-4000 draw and the same generator seed.
 
 Rows are grouped into `equal oracle budget` and `equal wall time`, which are
 different controls and must not be read as one ranking.
 
-  python iasbs/_weakness2_stiefel.py
+  python iasbs/analysis/weakness2_stiefel.py
 """
 import json, os, sys
 import numpy as np
 import torch
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(ROOT, "rasbs"))
+import _paths                                    # noqa: F401
 
-import _bridge_audit as A            # noqa: E402
+ROOT = _paths.ROOT
+
+import bridge_audit as A            # noqa: E402
 import rasbs_port as RP              # noqa: E402
 
 DEV = "cuda:0"
@@ -59,7 +58,7 @@ LEGS = [
 ]
 
 # step-refinement ladder, energy law only (no extra MMD draws needed beyond
-# what `_frame_law_audit.py` already reports for R-ASBS)
+# what `frame_law_audit.py` already reports for R-ASBS)
 LADDER = [
     ("IASBS native",  "json/results_stiefel_frame_s5.json"),
     ("IASBS600",      "json/results_stiefel_frame600.json"),

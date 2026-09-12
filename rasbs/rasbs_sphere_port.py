@@ -464,7 +464,7 @@ def train(args, target, device=DEV):
                           gen, args.max_drift)
         xt, tv, at, sig_t = adjoint_targets(x0, x1, hnet, rff_h, sched,
                                             target, kap, gen)
-        if args.antithetic:
+        if getattr(args, "antithetic", False):
             xt, at = reflect_z(gen, xt, at)
         inp = torch.cat([xt, tv], 1)
         up = unet(rff_u(inp) if rff_u is not None else inp).to(DT)
@@ -478,7 +478,7 @@ def train(args, target, device=DEV):
         x0n, x1n = simulate(unet, rff_u, sched, args.steps, args.batch, device,
                             gen, args.max_drift)
         b = corrector(x0n, x1n, sched)
-        if args.antithetic:
+        if getattr(args, "antithetic", False):
             x1n, b = reflect_z(gen, x1n, b)
         hp = hnet(rff_h(x1n) if rff_h is not None else x1n).to(DT)
         lossH = ((proj(x1n, hp) - b) ** 2).sum(-1).mean()

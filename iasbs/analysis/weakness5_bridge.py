@@ -1,6 +1,6 @@
 """Reviewer weakness 5, part 1: fixed-endpoint bridge validation.
 
-The shipped audit (`_bridge_audit.py`) checks the bridge through the *mixture*
+The shipped audit (`bridge_audit.py`) checks the bridge through the *mixture*
 identity: draw Y from the unconditioned terminal law, run the bridge to Y, and
 compare the intermediate marginal to the unconditioned marginal.  That test is
 averaged over the terminal endpoint, so a bridge error that is odd in the
@@ -54,13 +54,13 @@ import time
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import _paths                                    # noqa: F401
 
 import common as C                                              # noqa: E402
 import sphere as SPH                                            # noqa: E402
 import stiefel as ST                                            # noqa: E402
-import _bridge_audit as A                                       # noqa: E402
+import bridge_audit as A                                       # noqa: E402
 
 DEV = "cuda:0"
 DT = torch.float64
@@ -409,7 +409,7 @@ def main():
     print("St(4,2) fixed-endpoint bridge validation", flush=True)
     run_stiefel(res, gen)
     res["wall_s"] = time.time() - t0
-    out = "/home/RESEARCH/iasbs/json/results_weakness5_bridge.json"
+    out = os.path.join(_paths.ROOT, "json", "results_weakness5_bridge.json")
     with open(out, "w") as f:
         json.dump(res, f, indent=1)
     print("wrote", out, f"({res['wall_s']:.1f} s)", flush=True)

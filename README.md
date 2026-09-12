@@ -9,6 +9,9 @@ comparison and interpretation belong to the paper, not here.
 ```
 LICENSE                   MIT for our code; see its scope note about rasbs/
 requirements.txt          pinned versions every number below was produced with
+MULTISEED_RESULTS.md      per-seed tables + the original seed-request table
+APPENDIX_OCCUPATION_SIMULATORS.md
+                          the two occupation simulators; what `steps` counts
 common.py                 shared kernels, quadrature, Stiefel/S^3 helpers, ckpt IO
 json/  ckpt/  fig/        artifacts, shared by both methods
 
@@ -23,9 +26,11 @@ iasbs/          OUR method (IASBS)
   figures.py              all paper figures + the comparison table
   gallery.py              sample gallery
   remeasure.py            re-derives the Ising and sphere tables from ckpt/
-  _stiefel_extra.py       KS(E) and E_err for the Stiefel sweep, from ckpt/
-  _rasbs_extra.py         KS(phi) and second-moment error for R-ASBS, from ckpt/
+  _a2_tests.py            A.2 deterministic tests, imported by tests_math.py
   scripts/                the shell scripts that produced our json/ entries
+  analysis/               read-only diagnostics -- they load ckpt/ + json/,
+                          train nothing, and each writes one json/ artifact.
+                          Indexed in §10.
 
 dam/                      BASELINE 1 -- Discrete Adjoint Matching
   core.py                 gKL loss, adjoint estimator, control box
@@ -47,7 +52,7 @@ NumPy 2.4.6, conda env `SML_env` (Python 3.11). Manifold state and all metrics
 are `float64`; networks are `float32`. `requirements.txt` pins exact versions.
 `PY` defaults to whatever `python` is first on `PATH`.
 
-`ckpt/` is gitignored (~3.8 GB, regenerable). `rasbs_ref/` (the frozen R-ASBS
+`ckpt/` is gitignored (~10 GB, regenerable). `rasbs_ref/` (the frozen R-ASBS
 clone, source of the earthquake `query.csv`) and `data/gb1/*.xlsx` (Olson et al.
 supplements) are also gitignored; download instructions for the latter are in
 `data/gb1/README.md`.
@@ -346,7 +351,10 @@ Artifacts: `json/results_occ_nd_m4.json`, `json/results_occ_nd_m4_skew.json`,
 
 ## 2.3 IASBS, Dirac source, scaling in m
 
-Same network (136,450 parameters) and code at every size.
+Same network (136,450 parameters) and code at every size. The `m = N = 4` rows
+above and the `m = N = 32, 128, 1000` rows here use **different simulators** --
+one jump per bin vs. tau-leap -- so the `steps` column does not mean the same
+thing in both. `APPENDIX_OCCUPATION_SIMULATORS.md` spells that out.
 
 | m = N | `\|X\|` | source KS(occ) | KS(occ) | KS(max) | W1(max)/m | E ours | E exact | violations |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|
@@ -789,7 +797,7 @@ python rasbs/rasbs_sphere_port.py --check                      # port self-check
 python rasbs/rasbs_sphere_port.py --problem bimodal --seed 0 \
     --tag rasbs_sphere_bimodal --out json/results_rasbs_sphere_bimodal.json
 bash rasbs/run_fidelity_audit.sh                               # --init matlab, 5 seeds
-python iasbs/_rasbs_extra.py                         # KS(phi), 2nd moment, from ckpt/
+python iasbs/analysis/rasbs_extra.py                         # KS(phi), 2nd moment, from ckpt/
 python rasbs/rasbs_sphere_audit.py --test vmf                  # closed-form audit
 ```
 
@@ -942,7 +950,7 @@ python rasbs/rasbs_sphere_port.py --bimodal --steps 500 --epochs 600 \
     --out json/results_w2_rasbs_anti_s$s.json
 
 # aggregate
-python iasbs/_weakness2_sphere.py
+python iasbs/analysis/weakness2_sphere.py
 ```
 
 Artifacts: `json/results_weakness2_sphere.json`,
@@ -1034,7 +1042,7 @@ Artifacts: `json/results_stiefel_{grid,fill,scalefix,ref,sweep}.json`,
 
 ## 5.2 Beyond the mean energy — KS(E), dispersion, constraint
 
-Recovered from the stored samples by `_stiefel_extra.py` (no retraining).
+Recovered from the stored samples by `analysis/stiefel_extra.py` (no retraining).
 IASBS_600 is the budget-matched run (`--batch 400 --iters 1500`, exactly 600,000
 terminal-oracle calls, matching R-ASBS).
 
@@ -1067,7 +1075,7 @@ Wall clock, single A100: IASBS ~1130 s per beta at 199 steps, ~2180 s at 398,
 `results_*.json` records `train_s` (IASBS) or `wall_s` (R-ASBS).
 
 ```bash
-python iasbs/_stiefel_extra.py    # no training; reads ckpt/
+python iasbs/analysis/stiefel_extra.py    # no training; reads ckpt/
 ```
 
 Artifacts: `json/results_stiefel_extra.json`,
@@ -1268,7 +1276,7 @@ truncated to R-ASBS's wall clock; every other flag is the `frame600` leg's.
 | R-ASBS | 0.3222 | 0.3078 | 0.3018 | -6% |
 
 ```bash
-python iasbs/_weakness2_stiefel.py
+python iasbs/analysis/weakness2_stiefel.py
 ```
 
 Artifacts: `json/results_weakness2_stiefel.json`,
@@ -1324,7 +1332,7 @@ Var of `vec(X)` coordinates 1, 5, 7 (diag of the 8x8 covariance):
 
 ## 5.8 Reference-bridge audit
 
-`iasbs/_bridge_audit.py`. Production resolutions: `steps = 128`, fibre quadrature
+`iasbs/analysis/bridge_audit.py`. Production resolutions: `steps = 128`, fibre quadrature
 `nq = 64`, fibre sampling grid `nfib = 512`, S^3 table `ntheta = 16385`.
 
 Tangent-to-skew map `Omega_X(S) = S X^T - X S^T - X (X^T S) X^T` (`skew_lift`),
@@ -1810,49 +1818,118 @@ $P -m iasbs.occupation scale-nondirac --m 32 --N 32 --d 0.5 --tau 1.0 \
   --tag occ_nd_s32_analytic --out json/results_occ_nd_s32_analytic.json
 
 # the five diagnostics
-$P iasbs/_weakness3_corrector.py   # symmetry proof + corrector error
-$P iasbs/_weakness3_table.py       # comparison table
-$P iasbs/_weakness3_labelerr.py    # label-error propagation
-$P iasbs/_weakness3_tauleap.py     # step refinement
-$P iasbs/_weakness3_rank1.py       # non-rank-1 ANOVA residual
+$P iasbs/analysis/weakness3_corrector.py   # symmetry proof + corrector error
+$P iasbs/analysis/weakness3_table.py       # comparison table
+$P iasbs/analysis/weakness3_labelerr.py    # label-error propagation
+$P iasbs/analysis/weakness3_tauleap.py     # step refinement
+$P iasbs/analysis/weakness3_rank1.py       # non-rank-1 ANOVA residual
 ```
 
 ---
 
 # 10. Reproduction index
 
-| script | produces | checkpoints |
+Everything here runs from the repository root. `$P` is any Python with
+`requirements.txt` installed.
+
+## 10.1 Gates first
+
+```bash
+$P iasbs/tests_math.py        # 27 mathematical unit tests (imports _a2_tests.py)
+$P -m dam.tests_math          # 11 gates for the DAM baseline
+$P rasbs/rasbs_sphere_audit.py  # closed-form falsification tests for the R-ASBS port
+```
+
+## 10.2 Training entry points
+
+One script per experiment; the exact flags for every published row are in that
+row's section, and every `json/results_*.json` also carries its own `config`
+block.
+
+| experiment | script | sections |
 |---|---|---|
-| `iasbs/scripts/rerun_ckpt.sh` | `results_ising_poisson256`, `results_occ_{full,uniform,occupancy,mse}`, `results_occ_s{32,128,1000}` | `ising_poisson256.pt`, `occ4_*.pt`, `occ_s*.pt` |
-| `iasbs/scripts/run_scale.sh` | `results_occ_s{32,128,1000}`, `results_occ_var{128,1000}` | — |
-| `iasbs/scripts/run_occ.sh` | `results_occ_{full,mse}` | — |
-| `iasbs/scripts/rerun_sphere.sh` | `results_sphere_exact`, `results_sphere_train_{plain,anti,sym}` | `sphere_{plain,anti,sym}_seed{0..4}.pt` |
-| `iasbs/scripts/run_scalefix.sh` | `results_stiefel_{scalefix,fill}` | `stiefel_{scalefix,fill}_b*_seed0.pt` (+ `_mcmc.pt`) |
-| `iasbs/scripts/run_anneal*.sh` | `results_stiefel_anneal_b{50,100,100_fine}`, `results_chain_b{65,80,100}` | `stiefel_anneal*_b*_seed0.pt`, `chain_b*_seed0.pt` |
-| `iasbs/scripts/run_gb1_anneal.sh` | `results_fs_gb1_k3_{dirac,nd}_{A,B,C}` | `fs_gb1_k3_{dirac,nd}_{A,B,C}.pt` |
-| `iasbs/scripts/multiseed.sh` | per-seed replicas `results_<base>_s<S>` | `<base>_s<S>.pt` |
-| `iasbs/scripts/aggregate_seeds.py` | across-seed mean +- std | reads only |
-| `iasbs/remeasure.py {ising,ising5,sphere}` | re-derives those tables | reads only |
-| `iasbs/_stiefel_extra.py` | `results_stiefel_extra` | reads only |
-| `iasbs/_rasbs_extra.py` | KS(phi) + second moment for §4.3 | reads only |
-| `iasbs/figures.py`, `gallery.py` | everything in `fig/` | reads only |
-| `rasbs/rasbs_steps.sh`, `rasbs_steps_highbeta.sh` | `results_rasbs_steps_*`, `results_rasbs_highbeta_steps_*` | `rasbs_*.pt` |
-| `rasbs/run_fidelity_audit.sh` | `results_rasbs_sphere_matlabinit_s{0..4}`, `results_rasbs_audit_{uniform,vmf}_mi` | matching `.pt` |
-| `rasbs/regen_f64.sh` | `results_{rasbs_b2,stiefel_b2}_f64` | float64 `rasbs_b2.pt`, `stiefel_grid_b2_seed0.pt` |
-| `dam/run_dam.sh` | the eight §1.5 / §2.5 legs: `results_dam_*` | `ckpt/dam_*.pt`, same names |
-| `dam/run_occs128_K64.sh` | `results_dam_occs128_K64_500` | `ckpt/dam_occs128_K64_500.pt` |
-| `dam/run_dam_a2.sh` | `results_dam_fs_*` | `ckpt/dam_fs_*.pt`, same names |
+| A, fixed-magnetisation Ising | `iasbs/fixed_ising.py` | §1.1–1.4 |
+| B, occupation process | `iasbs/occupation.py` | §2.1–2.4, §9 |
+| C, sphere S^2 | `iasbs/sphere.py` | §4.1–4.6 |
+| D, Stiefel St(4,2) | `iasbs/stiefel.py` | §5.1–5.7 |
+| E, earthquakes | `iasbs/earthquake.py` | §6 |
+| A.2, fixed-support + GB1 | `iasbs/fixed_support.py` | §3 |
+| baseline 1, DAM | `dam/discrete.py` | §1.5, §2.5, §3.3 |
+| baseline 2, R-ASBS Stiefel | `rasbs/rasbs_port.py` | §5.6, §5.7 |
+| baseline 2, R-ASBS sphere | `rasbs/rasbs_sphere_port.py` | §4.3, §4.5, §4.6 |
 
-Runs with no wrapper script are the single commands given in each section above.
+## 10.3 Shell wrappers
 
-Multi-seed replication: `bash iasbs/scripts/multiseed.sh <row|group:X|all>
-[seeds] [drop|keep]` re-issues each row's recorded flags with `--seed S --tag
-<base>_sS --out json/results_<base>_sS.json`. `multiseed.sh list` prints the row
-names. The third argument defaults to `drop`, which appends
-`--eval-every 1000000000` so only the final evaluation runs. Collapse the
-per-seed files with `python iasbs/scripts/aggregate_seeds.py <base>
-[...]` (add `--stage C` for the GB1 chain). The request table is
-`multiseed_requests.md`.
+| script | produces |
+|---|---|
+| `iasbs/scripts/rerun_ckpt.sh` | `results_ising_poisson256`, `results_occ_{full,uniform,occupancy,mse}`, `results_occ_s{32,128,1000}` |
+| `iasbs/scripts/run_occ.sh` | `results_occ_{full,mse}` |
+| `iasbs/scripts/run_scale.sh` | `results_occ_s{32,128,1000}`, `results_occ_var{128,1000}` |
+| `iasbs/scripts/rerun_sphere.sh` | `results_sphere_exact`, `results_sphere_train_{plain,anti,sym}` |
+| `iasbs/scripts/run_scalefix.sh` | `results_stiefel_{scalefix,fill}` |
+| `iasbs/scripts/run_anneal*.sh` | `results_stiefel_anneal_b{50,100,100_fine}`, `results_chain_b{65,80,100}` |
+| `iasbs/scripts/run_gb1_anneal.sh` | `results_fs_gb1_k3_{dirac,nd}_{A,B,C}` |
+| `iasbs/scripts/run_fair_stiefel.sh` | §5.6 IASBS legs (`frame`, `frame600`, `trace`) |
+| `rasbs/run_fair.sh` | §5.6 R-ASBS legs |
+| `rasbs/rasbs_steps.sh`, `rasbs_steps_highbeta.sh` | `results_rasbs_steps_*`, `results_rasbs_highbeta_steps_*` |
+| `rasbs/run_fidelity_audit.sh` | `results_rasbs_sphere_matlabinit_s{0..4}`, `results_rasbs_audit_{uniform,vmf}_mi` |
+| `rasbs/regen_f64.sh` | `results_{rasbs_b2,stiefel_b2}_f64` |
+| `dam/run_dam.sh` | the eight §1.5 / §2.5 legs, `results_dam_*` |
+| `dam/run_occs128_K64.sh` | `results_dam_occs128_K64_500` |
+| `dam/run_dam_a2.sh` | `results_dam_fs_*` |
+
+## 10.4 Read-only diagnostics — `iasbs/analysis/`
+
+None of these train. Each loads `ckpt/` + `json/`, writes one artifact, and is
+safe to re-run at any time.
+
+| script | writes `json/` | feeds |
+|---|---|---|
+| `remeasure.py {ising,ising5,sphere}` | — (prints) | §1, §4 |
+| `analysis/stiefel_extra.py` | `results_stiefel_extra` | §5.2 |
+| `analysis/rasbs_extra.py` | — (prints) | §4.3 |
+| `analysis/bridge_audit.py` | `results_bridge_audit` | §5.8 |
+| `analysis/frame_law_audit.py` | `results_frame_law_audit` | §5.7 |
+| `analysis/weakness2_sphere.py` | `results_weakness2_sphere` | §4.6 |
+| `analysis/weakness2_stiefel.py` | `results_weakness2_stiefel` | §5.6.3 |
+| `analysis/weakness3_corrector.py` | `results_weakness3_corrector` | §9.1, §9.3 |
+| `analysis/weakness3_table.py` | `results_weakness3_table` | §9.2 |
+| `analysis/weakness3_labelerr.py` | `results_weakness3_labelerr` | §9.3 |
+| `analysis/weakness3_tauleap.py` | `results_weakness3_tauleap` | §9.4 |
+| `analysis/weakness3_rank1.py` | `results_weakness3_rank1` | §9.5 |
+| `analysis/weakness5_bridge.py` | `results_weakness5_bridge` | not published |
+| `analysis/weakness5_verify.py` | `results_weakness5_verify` | not published |
+| `analysis/weakness5_ref.py <refB\|refC>` | — (writes `ckpt/`) | not published |
+| `analysis/weakness5_refaudit.py` | `results_weakness5_refaudit` | not published |
+
+The four `weakness5_*` scripts are a fixed-endpoint bridge validation and an
+independent-reference audit for the frame target. They run and write artifacts,
+but no README section quotes them yet.
+
+`analysis/_paths.py` only puts `iasbs/`, the repository root and `rasbs/` on
+`sys.path`; it is imported by the others and is not an entry point.
+
+## 10.5 Multi-seed replication
+
+```bash
+bash iasbs/scripts/multiseed.sh list              # row names
+bash iasbs/scripts/multiseed.sh <row|group:X|all> [seeds] [drop|keep]
+$P iasbs/scripts/aggregate_seeds.py <base> [...]  # collapse to mean +- sd
+$P iasbs/scripts/verify_multiseed.py              # re-check the recorded rows
+```
+
+`multiseed.sh` re-issues each row's recorded flags with `--seed S --tag
+<base>_sS --out json/results_<base>_sS.json`. The third argument defaults to
+`drop`, which appends `--eval-every 1000000000` so only the final evaluation
+runs. Add `--stage C` to `aggregate_seeds.py` for the GB1 chain. Results and the
+request table are in `MULTISEED_RESULTS.md`.
+
+## 10.6 Figures
+
+```bash
+$P iasbs/figures.py     # all paper figures + fig/table_stiefel.md
+$P iasbs/gallery.py     # sample gallery
+```
 
 ---
 

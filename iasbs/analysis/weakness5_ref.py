@@ -18,7 +18,7 @@ matters:
         refA/refB vs refC is the diagnostic for residual MCMC bias rather
         than sampling noise.
 
-Usage:  python iasbs/_weakness5_ref.py <refB|refC>
+Usage:  python iasbs/analysis/weakness5_ref.py <refB|refC>
 """
 
 import os
@@ -27,8 +27,8 @@ import time
 
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import _paths                                    # noqa: F401
 
 import common as C                                              # noqa: E402
 import stiefel as ST                                            # noqa: E402

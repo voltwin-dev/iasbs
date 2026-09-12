@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Seed replication for every single-seed headline number in multiseed_requests.md.
+# Seed replication for every single-seed headline number in MULTISEED_RESULTS.md (appendix).
 #
 # Nothing in the four discrete mains (fixed_ising.py, occupation.py,
 # fixed_support.py, dam/discrete.py) loops over seeds: they take a single
@@ -80,7 +80,7 @@ ROWS
 }
 
 # The five DAM rows that dominate the budget: 63 h of the 100 h serial estimate,
-# occupation m=128 alone 36.5 h.  Marked LAST in multiseed_requests.md and
+# occupation m=128 alone 36.5 h.  Marked LAST in MULTISEED_RESULTS.md (appendix) and
 # selectable as group:last, with everything else as group:main.
 LAST_ROWS="ising_L4_dam ising_L5_dam occ4_dam occs32_dam occs128_dam"
 

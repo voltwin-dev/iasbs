@@ -25,11 +25,10 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, "/home/RESEARCH/iasbs/rasbs")
 
-import _bridge_audit as A                                       # noqa: E402
+import _paths                                    # noqa: F401
+
+import bridge_audit as A                                       # noqa: E402
 import rasbs_port as RP                                         # noqa: E402
 
 DEV = "cuda:0"
@@ -146,7 +145,7 @@ def main():
               f"EXerr={agg['EX_err_vs_refA']:.4f} "
               f"covF={agg['cov_frob_err_vs_refA']:.4f}", flush=True)
 
-    out = "/home/RESEARCH/iasbs/json/results_weakness5_refaudit.json"
+    out = os.path.join(_paths.ROOT, "json", "results_weakness5_refaudit.json")
     with open(out, "w") as f:
         json.dump(res, f, indent=1)
     print("floors", {k: v["mean"] for k, v in res["ref_floor"].items()})

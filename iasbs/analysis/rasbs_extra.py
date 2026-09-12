@@ -12,7 +12,8 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _paths                                    # noqa: F401
+
 import remeasure as R
 
 grid, cdf, _ = R.z_grid()

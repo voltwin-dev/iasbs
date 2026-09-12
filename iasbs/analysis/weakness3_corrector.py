@@ -51,8 +51,8 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import _paths                                    # noqa: F401
 
 import common as C                                               # noqa: E402
 import occupation as O                                           # noqa: E402
@@ -267,7 +267,7 @@ def main():
     print("[D] learned corrector vs analytic, held-out target states",
           flush=True)
     corrector_error(out)
-    p = "/home/RESEARCH/iasbs/json/results_weakness3_corrector.json"
+    p = os.path.join(_paths.ROOT, "json", "results_weakness3_corrector.json")
     with open(p, "w") as f:
         json.dump(out, f, indent=1)
     print("wrote", p)

@@ -30,12 +30,12 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import _paths                                    # noqa: F401
 
 import common as C                                              # noqa: E402
 import sphere as SPH                                            # noqa: E402
-import _weakness5_bridge as W                                   # noqa: E402
+import weakness5_bridge as W                                   # noqa: E402
 
 DEV = W.DEV
 DT = torch.float64
@@ -166,7 +166,7 @@ def main():
             print(f"  St {pn:28s} t={t}  p01={p01:.6f}  CK={ck:.6f}  "
                   f"ratio={ck / p01:.5f}  acc={acc:.4f}", flush=True)
 
-    with open("/home/RESEARCH/iasbs/json/results_weakness5_verify.json", "w") as f:
+    with open(os.path.join(_paths.ROOT, "json", "results_weakness5_verify.json"), "w") as f:
         json.dump(out, f, indent=1)
     print("wrote json/results_weakness5_verify.json")
 

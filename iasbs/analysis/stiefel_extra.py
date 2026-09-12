@@ -21,7 +21,8 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths                                    # noqa: F401
+
 import common as C
 
 BETAS = ["1.3", "2", "5"]
@@ -39,12 +40,7 @@ def energy_of(X, beta, H):
 
 
 def main():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "stiefel", os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "stiefel.py"))
-    S = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(S)
+    import stiefel as S          # on sys.path via _paths
 
     matched = json.load(open("json/results_stiefel_matched.json"))
     grid = json.load(open("json/results_stiefel_grid.json"))

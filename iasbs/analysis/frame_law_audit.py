@@ -1,9 +1,12 @@
 import json, torch, numpy as np, itertools
-import _bridge_audit as A
+import os
+
+import _paths                                    # noqa: F401
+
+import bridge_audit as A
 dev="cuda:0"
 Cmat = torch.tensor([[0.7,-0.2],[0.1,0.8],[-0.4,0.3],[0.2,-0.5]],dtype=torch.float64,device=dev)
 
-import sys; sys.path.insert(0,'/home/RESEARCH/iasbs/rasbs')
 import rasbs_port as RP
 U,_ = RP.basis_rotation(dev)
 U = U.to(torch.float64)
@@ -72,6 +75,6 @@ for name,fs in sets.items():
     agg['EX_max_abs_err']=float(np.abs(EX.mean(0)-np.array(o_ref['EX'])).max())
     res['methods'][name]={'per_seed':per,'agg':agg}
     print(name, json.dumps(agg['E_trCX']), 'MMD2', agg['MMD2'], 'EXerr', agg['EX_max_abs_err'], 'covF', agg['cov_frob_err'], flush=True)
-json.dump(res, open('/home/RESEARCH/iasbs/json/results_frame_law_audit.json','w'), indent=1)
+json.dump(res, open(os.path.join(_paths.ROOT, "json", "results_frame_law_audit.json"),'w'), indent=1)
 print('floor', floor_m, floor_sd, 'cross', cross)
 print('ref trCX', o_ref['E_trCX'], o_ref6['E_trCX'])

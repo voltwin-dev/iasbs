@@ -21,9 +21,8 @@ import math
 import numpy as np
 import torch
 
-import os as _os
-import sys as _sys
-_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+
+import _paths                                    # noqa: F401
 
 import common as C                                             # noqa: E402
 import sphere as SPH                                           # noqa: E402

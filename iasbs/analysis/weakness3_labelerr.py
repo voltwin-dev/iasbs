@@ -34,8 +34,8 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import _paths                                    # noqa: F401
 
 import common as C                                               # noqa: E402
 import occupation as O                                           # noqa: E402
@@ -119,7 +119,7 @@ def main():
         out[name] = {"m": m, "by_t": rec}
         del net_h, blob
         torch.cuda.empty_cache()
-    p = "/home/RESEARCH/iasbs/json/results_weakness3_labelerr.json"
+    p = os.path.join(_paths.ROOT, "json", "results_weakness3_labelerr.json")
     with open(p, "w") as f:
         json.dump(out, f, indent=1)
     print("wrote", p)
