@@ -1231,6 +1231,51 @@ Figures: `fig5_stiefel` (energy curves, step refinement), `fig7_stiefel_frames`
 (96 raw frames per sampler + second moment), `fig/table_stiefel.md` (generated
 comparison table).
 
+### 5.6.3 Consolidated table, frame target, beta = 1
+
+Energy law, frame law, feasibility, oracle calls and wall time in one place.
+Energy-law columns are read back from the training JSONs; MMD^2 is recomputed
+for every row in a single pass so that legs added after §5.7 share one
+bandwidth, one 4000-vs-4000 draw and one generator seed. MMD^2 values therefore
+differ from §5.7's in the third significant figure — the draw order is not the
+same — and neither differs from the other by more than the floor's own sd.
+
+**Equal oracle budget (600,000 terminal calls), 199 steps:**
+
+| method | oracle calls | \|dE\| | KS(E) | MMD^2 vs MCMC | \|X^T X - I\| | wall/seed | seeds |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| IASBS600 | 600,000 | **0.1888 +- 0.0102** | **0.0458 +- 0.0032** | **1.77e-05** | **3.2e-14** | 1,117 s | 5 |
+| R-ASBS | 600,000 | 0.3222 +- 0.0097 | 0.0820 +- 0.0025 | 4.28e-04 | 4.3e-07 | 310 s | 5 |
+| IASBS native (unmatched) | 5,120,000 | 0.1264 +- 0.0065 | 0.0307 +- 0.0019 | 1.43e-05 | 3.3e-14 | 1,889 s | 5 |
+| MMD^2 split-half floor | — | — | — | 6.94e-06 +- 7.37e-05 | — | — | — |
+
+**Equal wall time (~310 s), 199 steps:**
+
+| method | oracle calls | \|dE\| | KS(E) | MMD^2 vs MCMC | \|X^T X - I\| | wall/seed | seeds |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| IASBS wall310 | 166,000 | 1.4509 +- 0.0329 | 0.3290 +- 0.0071 | 1.75e-03 | 3.2e-14 | 309 s | 5 |
+| R-ASBS | 600,000 | 0.3222 +- 0.0097 | 0.0820 +- 0.0025 | 4.28e-04 | 4.3e-07 | 310 s | 5 |
+
+`IASBS wall310` is `--iters 415 --batch 400`, i.e. `run_fair_stiefel.sh frame600`
+truncated to R-ASBS's wall clock; every other flag is the `frame600` leg's.
+
+**Step-refinement ladder, `|dE|` at 199 / 398 / 796 steps:**
+
+| method | 199 | 398 | 796 | change |
+|---|---:|---:|---:|---:|
+| IASBS native | 0.1264 | 0.0779 | 0.0564 | -55% |
+| IASBS600 | 0.1888 | 0.1458 | 0.1263 | -33% |
+| R-ASBS | 0.3222 | 0.3078 | 0.3018 | -6% |
+
+```bash
+python iasbs/_weakness2_stiefel.py
+```
+
+Artifacts: `json/results_weakness2_stiefel.json`,
+`json/results_w2_stiefel_wall310.json` +
+`ckpt/stiefel_w2_wall310_b1_seed{0..4}.pt`. All other rows reuse the §5.6.1
+checkpoints.
+
 ## 5.7 Full frame-law accuracy, beta = 1, 5 seeds per method
 
 Frame-sensitive statistics of `X` itself, against the 100,000-frame MCMC
