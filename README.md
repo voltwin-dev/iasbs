@@ -494,6 +494,102 @@ Artifacts: `json/results_dam_occupation_m4_K16.json` (400 it),
 `json/results_dam_occ4_K64.json`, `json/results_dam_occs32_K64_1000.json`,
 `json/results_dam_occs128_K64_500.json` + identically-named `ckpt/*.pt`.
 
+## 2.6 Regression loss — Bregman vs bounded-below MSE
+
+The shipped objective is the Bregman form `l(a) = eta_i exp(a) - a y` with
+`y = eta_i + Lambda_ji`; the alternative is `l(a) = (eta_i exp(a) - y)^2`.
+Both have the same stationary point `eta_i exp(a*) = E[y | X_t]`. Everything
+else — model, source, simulator, bridge, label estimator, optimiser, schedule,
+iteration count, batch sizes, evaluation — is identical; only `--loss` changes.
+
+Population coefficient at m = 4, exact enumeration over the whole
+`(t, state, edge)` grid, `E[y | X_t] = eta_i + sum_xi p(xi | X_t) Lambda_t(xi)`:
+
+| pool for `X_1` | min `E[y | X_t]` | max rel. err. vs `eta_i exp(a*)` |
+|---|---|---|
+| `pi` (on-policy) | +0.816547 | 1.24e-14 |
+| uniform (off-policy) | +0.906279 | — |
+
+Per-sample `y`, 200,000 draws of the training pipeline per row:
+
+| m | pool | min y | max y | mean y | frac. y < 0 |
+|---|---|---|---|---|---|
+| 3 (N=1) | exact grid | +0.9927 | +1.0073 | — | 0 / 768 |
+| 4 | exact grid | +0.5956 | +7.0606 | — | 0 / 30,720 |
+| 32 | uncontrolled | -5.5435 | +44.135 | +6.357 | 4.43% |
+| 32 | Bregman ckpt | -10.115 | +58.070 | +5.619 | 7.53% |
+| 128 | uncontrolled | -4.9345 | +151.69 | +18.797 | 4.65% |
+| 128 | Bregman ckpt | -10.269 | +199.63 | +17.697 | 7.46% |
+| 128 | MSE ckpt | -10.381 | +246.97 | +17.726 | 7.68% |
+| 1000 | uncontrolled | -5.4643 | +1094.96 | +130.05 | 4.78% |
+| 1000 | Bregman ckpt | -11.747 | +1458.79 | +127.91 | 7.31% |
+| 1000 | MSE ckpt | -6.4291 | +1262.27 | +130.39 | 4.03% |
+
+At m = 3, N = 1 the exact label gives `y = (1 - c_t) R_kj + c_t R_kk` (verified
+against `labels_full` to 2.22e-16), a convex combination of nonnegative rate
+ratios.
+
+m = 4, exact-law TV, 20,000 samples, gate B1 is TV <= 0.05, iid floor 0.0167:
+
+| loss | TV | violations | wall |
+|---|---|---|---|
+| Bregman | 0.01273 | 0 | — |
+| MSE | 0.01305 | 0 | 207 s |
+
+tau-leap sweeps, mean +- sd over seeds 0, 1, 2:
+
+| m | loss | KS(occ) | KS(max) | W1(max)/N | \|dE\| | violations | wall/seed |
+|---|---|---|---|---|---|---|---|
+| 128 | Bregman | 0.0086 +- 0.0010 | 0.0781 +- 0.0114 | 0.0041 +- 0.0005 | 0.791 +- 0.087 | 0 | — |
+| 128 | MSE | 0.0057 +- 0.0023 | 0.0418 +- 0.0308 | 0.0022 +- 0.0016 | 0.377 +- 0.349 | 0 | 1,305 s |
+| 1000 | Bregman | 0.0132 +- 0.0054 | 0.1887 +- 0.0380 | 0.0013 +- 0.0002 | 8.435 +- 3.161 | 0 | — |
+| 1000 | MSE | 0.1718 +- 0.0029 | 0.9913 +- 0.0023 | 0.0080 +- 0.0001 | 106.04 +- 1.59 | 0 | 2,271 s |
+
+Per seed (0 / 1 / 2):
+
+| m | loss | KS(occ) | \|dE\| |
+|---|---|---|---|
+| 128 | Bregman | 0.0083 / 0.0078 / 0.0097 | 0.763 / 0.722 / 0.889 |
+| 128 | MSE | 0.0057 / 0.0080 / 0.0035 | 0.362 / 0.734 / 0.036 |
+| 1000 | Bregman | 0.0102 / 0.0100 / 0.0194 | 6.75 / 6.47 / 12.08 |
+| 1000 | MSE | 0.1749 / 0.1692 / 0.1711 | 107.8 / 104.7 / 105.7 |
+
+m = 1000 MSE gate B2a (`KS(occ) <= 0.05`) FAILS on all three seeds; the
+uncontrolled reference at that size is `KS_occ = 0.2035`, and the MSE run
+descends 0.2044 -> 0.1749 over 1500 iterations. Gates B2b and B2c pass.
+
+Clamps and safeguards, unchanged between the two losses: `a` is clamped to
+`[-20, 20]` on the enumerated path and to `[-15, 15]` on the tau-leap path
+(`leaky_clamp` on the non-Dirac tau-leap path), non-finite labels are replaced
+by `y = eta_i` and counted as `bad_labels`, non-finite losses skip the step and
+are counted as `n_skip`, and gradients are norm-clipped at 10.0.
+
+```bash
+python iasbs/occupation.py train --m 4 --iters 1500 --eval-every 250 \
+    --n-samples 20000 --estimator full --loss mse \
+    --ckpt-dir ckpt --tag occ4_mse --out json/results_occ_mse.json
+for s in 0 1 2; do
+python iasbs/occupation.py scale --m 128 --N 128 --iters 3000 \
+    --eval-every 500 --n-samples 10000 --loss mse --seed $s \
+    --ckpt-dir ckpt --tag occ_s128_mse_s$s \
+    --out json/results_occ_s128_mse_s$s.json
+python iasbs/occupation.py scale --m 1000 --N 1000 --steps 256 --batch 128 \
+    --mb 512 --iters 1500 --eval-every 250 --n-samples 4000 --loss mse \
+    --seed $s --ckpt-dir ckpt --tag occ_s1000_mse_s$s \
+    --out json/results_occ_s1000_mse_s$s.json
+done
+python iasbs/analysis/occ_loss_wellposed.py   # y ranges + population coefficient
+python iasbs/analysis/occ_loss_table.py       # the tables above
+```
+
+(Seed 0 was written without the `_s0` suffix: tags `occ_s128_mse`,
+`occ_s1000_mse`.)
+
+Artifacts: `json/results_occ_mse.json`,
+`json/results_occ_s{128,1000}_mse{,_s1,_s2}.json`,
+`json/results_occ_loss_wellposed.json`, `json/results_occ_loss_table.json`
++ identically-named `ckpt/*.pt`.
+
 ---
 
 # 3. Fixed-support space (Appendix A.2)
