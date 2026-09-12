@@ -867,6 +867,90 @@ Artifacts: `json/results_sphere_matched300.json`,
 `json/results_sphere_matched300_h48.json` +
 `ckpt/sphere_m300{,h48}_seed{0..4}.pt`.
 
+## 4.6 Controlled ablation — every nuisance factor matched
+
+§4.5 matches the oracle budget only. This section matches source law,
+diffusion coefficient, integrator resolution, precision, training budget,
+evaluation draw, metric code, and reflection augmentation, and leaves only the
+supervision/control formulation different.
+
+Matched: Haar source on both sides (IASBS runs `train-nondirac`); `sigma = 1.0`
+on both (IASBS's default is `sqrt(2)`; the terminal law is `pi` for any
+`sigma`); 500 integrator steps; float64 end to end; 300,000 terminal oracle
+calls; 100,000 evaluation samples; 5 seeds; `iasbs/remeasure.py` scores both;
+reflection augmentation `R = diag(1,1,-1)` applied to both arms or to neither
+(a `--antithetic` flag was added to `rasbs/rasbs_sphere_port.py` for this, off
+by default).
+
+Not matched, by construction: learning rate (1e-3 IASBS / 2e-3 R-ASBS, each
+its own tuned value for a different loss), parameter count (136,963 /
+7,366 — see §4.5 for the parameter-matched cut), and gradient steps per
+oracle batch.
+
+| leg | north_err | KS(x_3) | W1(x_3) | KS(E) | KS(phi) | `<E>` | wall/seed |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| IASBS Haar, aug | **0.00171 +- 0.00124** | **0.01435 +- 0.00123** | **0.00878 +- 0.00073** | **0.02597 +- 0.00176** | 0.00385 +- 0.00109 | **1.22349 +- 0.00389** | 478 s |
+| IASBS Haar, no aug | 0.02553 +- 0.02405 | 0.03531 +- 0.01845 | 0.04825 +- 0.03918 | 0.03193 +- 0.00204 | 0.00290 +- 0.00078 | 1.24430 +- 0.00711 | 473 s |
+| R-ASBS, no aug | 0.03189 +- 0.03158 | 0.08914 +- 0.02699 | 0.08365 +- 0.04100 | 0.13489 +- 0.02138 | 0.01094 +- 0.00322 | 1.60549 +- 0.08190 | 257 s |
+| R-ASBS, aug | 0.01337 +- 0.01138 | 0.07786 +- 0.01762 | 0.06101 +- 0.01653 | 0.13638 +- 0.02140 | 0.01360 +- 0.00700 | 1.61276 +- 0.08121 | 250 s |
+| iid floor (n = 100,000) | 0.00087 +- 0.00049 | 0.00268 +- 0.00076 | 0.00178 +- 0.00083 | 0.00253 +- 0.00075 | 0.00259 +- 0.00064 | 1.15076 +- 0.00338 | — |
+
+Exact `<E> = 1.15375`. Constraint residual `max ||x| - 1|`: 2.2e-16 (IASBS),
+3.3e-16 (R-ASBS).
+
+Per-seed:
+
+| leg | north_err | KS(x_3) | KS(E) | `<E>` |
+|---|---|---|---|---|
+| IASBS, aug | 0.00340 / 0.00204 / 0.00021 / 0.00251 / 0.00037 | 0.01244 / 0.01585 / 0.01437 / 0.01366 / 0.01541 | 0.02269 / 0.02730 / 0.02701 / 0.02558 / 0.02727 | 1.21682 / 1.22692 / 1.22416 / 1.22197 / 1.22757 |
+| IASBS, no aug | 0.00050 / 0.01383 / 0.05393 / 0.00434 / 0.05506 | 0.01621 / 0.02719 / 0.05669 / 0.01826 / 0.05818 | 0.03162 / 0.03548 / 0.02998 / 0.02996 / 0.03261 | 1.24308 / 1.25568 / 1.24220 / 1.23376 / 1.24677 |
+| R-ASBS, no aug | 0.00272 / 0.01026 / 0.00606 / 0.07580 / 0.06463 | 0.08040 / 0.06319 / 0.06080 / 0.12787 / 0.11342 | 0.15996 / 0.10487 / 0.11529 / 0.15311 / 0.14121 | 1.69640 / 1.48640 / 1.53103 / 1.66849 / 1.64515 |
+| R-ASBS, aug | 0.03431 / 0.00002 / 0.00822 / 0.01123 / 0.01305 | 0.10579 / 0.06452 / 0.05539 / 0.07643 / 0.08719 | 0.15907 / 0.12580 / 0.10030 / 0.14227 / 0.15446 | 1.68953 / 1.54967 / 1.48949 / 1.63667 / 1.69842 |
+
+Equal-optimizer-step leg, `--inner 1 --inner-h 1 --mb 500 --mb-h 500`, same
+matched config otherwise, 5 seeds:
+
+| leg | north_err | KS(x_3) | KS(E) | `<E>` | wall/seed |
+|---|---:|---:|---:|---:|---:|
+| IASBS Haar, aug, inner 1 | 0.00308 +- 0.00207 | 0.31953 +- 0.00089 | 0.63650 +- 0.00147 | 3.94837 +- 0.00475 | 440 s |
+
+IASBS's construction emits `batch x steps = 500 x 500 = 250,000` regression
+pairs per oracle batch and R-ASBS draws one time per trajectory, 500 pairs per
+epoch; at `--inner 1 --mb 500` IASBS consumes 0.2% of the pairs it generated.
+
+Caveat on §4.2: the antithetic collapse quoted there (`north_err 0.4398`,
+`KS 0.0649`, one seed, `ckpt/sphere_nd_plain_seed0.pt`) is specific to that
+configuration (128 steps, `sigma = sqrt(2)`, batch 8192, 4000 iters). At the
+§4.6 configuration the no-augmentation leg gives 0.02553 +- 0.02405 /
+0.03531 +- 0.01845 over 5 seeds — degraded, not collapsed.
+
+```bash
+# IASBS, augmentation on / off
+python iasbs/sphere.py train-nondirac --steps 500 --sigma 1.0 --iters 600 \
+    --batch 500 --inner 16 --inner-h 4 --mb 16384 --mb-h 4096 --hidden 256 \
+    --lr 1e-3 --ema 0.9995 --antithetic --seeds 5 --eval-every 1000 \
+    --n-samples 100000 --ckpt-dir ckpt --tag sphere_w2_nd_anti \
+    --out json/results_w2_iasbs_nd_anti.json
+# (drop --antithetic, --tag sphere_w2_nd_plain for the no-aug leg;
+#  add --inner 1 --inner-h 1 --mb 500 --mb-h 500, --tag sphere_w2_nd_inner1
+#  for the equal-optimizer-step leg)
+
+# R-ASBS, augmentation on (seed s = 0..4); drop --antithetic for the no-aug leg
+python rasbs/rasbs_sphere_port.py --bimodal --steps 500 --epochs 600 \
+    --batch 500 --init matlab --antithetic --seed $s --n-samples 100000 \
+    --ckpt-dir ckpt --tag rasbs_sphere_w2anti_s$s \
+    --out json/results_w2_rasbs_anti_s$s.json
+
+# aggregate
+python iasbs/_weakness2_sphere.py
+```
+
+Artifacts: `json/results_weakness2_sphere.json`,
+`json/results_w2_iasbs_nd_{anti,plain,inner1}.json`,
+`json/results_w2_rasbs_anti_s{0..4}.json`,
+`json/results_rasbs_sphere_matlabinit_s{0..4}.json` (the no-aug R-ASBS leg,
+reused from §4.5) + `ckpt/sphere_w2_nd_{anti,plain,inner1}_seed{0..4}.pt`.
+
 ---
 
 # 5. Stiefel manifold St(4,2)

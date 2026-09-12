@@ -391,6 +391,35 @@ def corrector_targets_quake(x0, x1, sched):
     return torch.where(valid, b, torch.zeros_like(b))
 
 
+def reflect_z(gen, *tensors):
+    """R = diag(1,1,-1) applied to a random half of the rows, jointly.
+
+    NOT part of the R-ASBS algorithm.  Added only so that the reflection
+    augmentation our sphere runs use (`iasbs/sphere.py --antithetic`) can be
+    given to this baseline as well, which is what the controlled ablation in
+    README 4.6 needs.  Off by default, so every pre-existing number is
+    unchanged.
+
+    Validity is the same argument as on our side: R is an isometry of S^2,
+    the bimodal energy E = 6 (1 - x_3^2) satisfies E(Rx) = E(x), Haar is
+    R-invariant, and every map used to build the training pair (proj,
+    grad_riem, retract, parallel_transport, the geodesic bridge) is
+    O(3)-equivariant.  So (R xt, R at) is an exact sample from the law of
+    (xt, at), and likewise for (R x1, R b) -- pure data augmentation, no
+    constraint imposed on either network.
+    """
+    n = tensors[0].shape[0]
+    f = torch.rand(n, 1, device=tensors[0].device, dtype=tensors[0].dtype,
+                   generator=gen) < 0.5
+    s = torch.where(f, -1.0, 1.0)
+    out = []
+    for T in tensors:
+        T = T.clone()
+        T[:, 2:3] = T[:, 2:3] * s
+        out.append(T)
+    return out
+
+
 def train(args, target, device=DEV):
     """Their training loop: adjoint update, then corrector update, per epoch."""
     torch.manual_seed(args.seed)
@@ -435,6 +464,8 @@ def train(args, target, device=DEV):
                           gen, args.max_drift)
         xt, tv, at, sig_t = adjoint_targets(x0, x1, hnet, rff_h, sched,
                                             target, kap, gen)
+        if args.antithetic:
+            xt, at = reflect_z(gen, xt, at)
         inp = torch.cat([xt, tv], 1)
         up = unet(rff_u(inp) if rff_u is not None else inp).to(DT)
         err = proj(xt, up) + sig_t * at
@@ -447,6 +478,8 @@ def train(args, target, device=DEV):
         x0n, x1n = simulate(unet, rff_u, sched, args.steps, args.batch, device,
                             gen, args.max_drift)
         b = corrector(x0n, x1n, sched)
+        if args.antithetic:
+            x1n, b = reflect_z(gen, x1n, b)
         hp = hnet(rff_h(x1n) if rff_h is not None else x1n).to(DT)
         lossH = ((proj(x1n, hp) - b) ** 2).sum(-1).mean()
         optH.zero_grad(set_to_none=True)
@@ -647,6 +680,9 @@ def main():
     # nn.Linear default that every results_rasbs_sphere_* JSON predating the
     # fidelity audit was produced with, kept so those runs stay reproducible.
     ap.add_argument("--init", choices=["matlab", "torch"], default="matlab")
+    # Not theirs.  See reflect_z: matched reflection augmentation, so the
+    # controlled ablation can give the same augmentation to both samplers.
+    ap.add_argument("--antithetic", action="store_true")
     args = ap.parse_args()
 
     global INIT
